@@ -1,8 +1,41 @@
 # Invariant Protocol
 
-Write a gRPC service once. Get MCP tools, CLI commands, HTTP endpoints, and gRPC servers — from the same code.
+Comment your protobuf. Get AI-ready tools for free.
 
-## How it works
+```protobuf
+// Manages user accounts.
+service UserService {
+  // Create a new user account. Returns the created user with a generated ID.
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+}
+
+message CreateUserRequest {
+  // Display name shown in the UI, e.g. "Alice Smith".
+  string display_name = 1;
+
+  // Email address. Must be unique across all accounts.
+  string email = 2;
+
+  // Account role. Determines permissions.
+  Role role = 3;
+
+  // Optional tags for organizing users, e.g. ["engineering", "london"].
+  repeated string tags = 4;
+}
+
+// Account permission levels.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  // Read-only access to dashboards and reports.
+  ROLE_VIEWER = 1;
+  // Can create and modify resources.
+  ROLE_EDITOR = 2;
+  // Full access including user management.
+  ROLE_ADMIN = 3;
+}
+```
+
+Those comments — the ones you'd write anyway for good documentation — are all an AI agent needs to discover, understand, and call your service. The types, enums, and descriptions flow directly into JSON Schema that any LLM can read. Invariant projects your services into MCP tools, CLI commands, HTTP endpoints, and gRPC servers. Same comments, same types, same code. Zero glue.
 
 ```
 .proto                    descriptor.binpb                your code
@@ -16,7 +49,59 @@ Write a gRPC service once. Get MCP tools, CLI commands, HTTP endpoints, and gRPC
                           MCP    CLI   HTTP   gRPC
 ```
 
-The proto descriptor already contains every service name, method signature, field type, enum value, and source comment. Invariant reads it and projects your services into whatever interface you need.
+## Your proto comments become everything
+
+**What the AI reads** (MCP tool — auto-generated from the proto above):
+```json
+{
+  "name": "UserService.CreateUser",
+  "description": "Create a new user account. Returns the created user with a generated ID.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "display_name": {
+        "type": "string",
+        "description": "Display name shown in the UI, e.g. \"Alice Smith\"."
+      },
+      "email": {
+        "type": "string",
+        "description": "Email address. Must be unique across all accounts."
+      },
+      "role": {
+        "type": "string",
+        "enum": ["ROLE_UNSPECIFIED", "ROLE_VIEWER", "ROLE_EDITOR", "ROLE_ADMIN"],
+        "description": "Account role. Determines permissions."
+      },
+      "tags": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Optional tags for organizing users, e.g. [\"engineering\", \"london\"]."
+      }
+    },
+    "required": ["display_name", "email", "role"],
+    "additionalProperties": false
+  }
+}
+```
+
+**What the human reads** (CLI `--help`):
+```
+  UserService CreateUser
+    Create a new user account. Returns the created user with a generated ID.
+    Fields:
+      display_name         string                          (required)  — Display name shown in the UI, e.g. "Alice Smith".
+      email                string                          (required)  — Email address. Must be unique across all accounts.
+      role                 ROLE_VIEWER|ROLE_EDITOR|ROLE_ADMIN (required)  — Account role. Determines permissions.
+      tags                 array<string>                               — Optional tags for organizing users, e.g. ["engineering", "london"].
+```
+
+**What the browser calls** (HTTP):
+```
+POST /user.v1.UserService/CreateUser
+{"display_name": "Alice Smith", "email": "alice@example.com", "role": "ROLE_EDITOR", "tags": ["engineering"]}
+```
+
+Write the comment once. It appears everywhere — typed, validated, with enums, required fields, and descriptions.
 
 ## The API
 
@@ -35,79 +120,25 @@ stop()                                # cleanup
 
 Seven methods. Everything else is convention.
 
-## Example
-
-Define your service in proto:
-
-```protobuf
-syntax = "proto3";
-package greet.v1;
-
-// A greeting service.
-service GreetService {
-  // Greet a person by name.
-  rpc Greet(GreetRequest) returns (GreetResponse);
-}
-
-message GreetRequest {
-  // Name of the person to greet.
-  string name = 1;
-}
-
-message GreetResponse {
-  string message = 1;
-}
-```
-
-Build the descriptor:
-
-```bash
-buf build --include-source-info -o descriptor.binpb
-```
-
-### Go
+## Go
 
 ```go
-package main
+srv, _ := invariant.ServerFromDescriptor("descriptor.binpb")
+srv.Register(&GreetServicer{})
 
-import (
-    "context"
-    invariant "github.com/jim-technologies/invariantprotocol/go"
-    greetpb "path/to/gen/greet/v1"
-)
-
-type GreetServicer struct{}
-
-func (s *GreetServicer) Greet(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
-    return &greetpb.GreetResponse{Message: "Hello, " + req.Name}, nil
-}
-
-func main() {
-    srv, _ := invariant.ServerFromDescriptor("descriptor.binpb")
-    srv.Register(&GreetServicer{})
-
-    // Pick one, or combine:
-    srv.Serve(invariant.MCP())                              // MCP over stdio
-    srv.Serve(invariant.CLI())                              // CLI from os.Args
-    srv.Serve(invariant.HTTP(8080))                         // HTTP server
-    srv.Serve(invariant.GRPC(50051))                        // gRPC server
-    srv.Serve(invariant.HTTP(8080), invariant.GRPC(50051))  // multiple at once
-}
+srv.Serve(invariant.MCP())                              // MCP over stdio
+srv.Serve(invariant.CLI())                              // CLI from os.Args
+srv.Serve(invariant.HTTP(8080))                         // HTTP server
+srv.Serve(invariant.GRPC(50051))                        // gRPC server
+srv.Serve(invariant.HTTP(8080), invariant.GRPC(50051))  // multiple at once
 ```
 
-### Python
+## Python
 
 ```python
-from invariant import Server
-
-class GreetServicer:
-    def Greet(self, request, context):
-        return greet_pb2.GreetResponse(message=f"Hello, {request.name}")
-
 server = Server.from_descriptor("descriptor.binpb")
 server.register(GreetServicer())
 
-# Pick one, or combine:
 server.serve(mcp=True)                            # MCP over stdio
 server.serve(cli=True)                            # CLI from sys.argv
 server.serve(http=8080)                           # HTTP server
@@ -115,17 +146,15 @@ server.serve(grpc=50051)                          # gRPC server
 server.serve(http=8080, grpc=50051)               # multiple at once
 ```
 
-### Remote proxy (zero code)
+## Remote proxy (zero implementation)
 
 Don't have the source? Point at a running gRPC server:
 
 ```go
 srv, _ := invariant.ServerFromDescriptor("descriptor.binpb")
-srv.Connect("localhost:50051")       // proxy all methods
-srv.Serve(invariant.HTTP(9090))      // expose as HTTP
+srv.Connect("localhost:50051")
+srv.Serve(invariant.MCP())  // your gRPC server is now an MCP tool
 ```
-
-Your existing gRPC server is now an HTTP API. Or an MCP tool. Or a CLI.
 
 ## Middleware
 
@@ -152,33 +181,14 @@ server.use(logging_interceptor)
 
 First registered = outermost. Existing gRPC ecosystem interceptors plug in directly (Go).
 
-## What each projection does
+## Projections
 
 | Projection | What happens |
 |------------|-------------|
 | **MCP** | Each unary RPC becomes a tool. JSON Schema from proto types. Descriptions from proto comments. Served over stdio. |
-| **CLI** | `<binary> ServiceName Method -r '{"name":"Alice"}'` or `-r request.yaml`. `--help` shows all methods with field types and descriptions. |
+| **CLI** | `ServiceName Method -r request.yaml`. `--help` shows all methods with field types and descriptions. |
 | **HTTP** | `POST /{package.ServiceName}/{Method}` with JSON body. ConnectRPC-compatible routing. |
 | **gRPC** | Standard gRPC server. Dynamic dispatch from descriptor — no generated server stubs needed. |
-
-## Proto comments flow everywhere
-
-```protobuf
-// Run a backtest with a given strategy and time range.
-rpc RunBacktest(RunBacktestRequest) returns (RunBacktestResponse);
-
-message RunBacktestRequest {
-  // Trading symbols to test, e.g. BTCUSDT.
-  repeated string symbols = 1;
-}
-```
-
-These comments automatically appear in:
-- MCP tool descriptions (what the LLM reads)
-- CLI `--help` output (what the human reads)
-- JSON Schema `description` fields
-
-Write once, appear everywhere.
 
 ## Install
 
@@ -194,8 +204,8 @@ pip install "invariant-protocol @ git+https://github.com/jim-technologies/invari
 
 ## Requirements
 
-- Proto descriptor: `buf build --include-source-info -o descriptor.binpb`
-- Generated stubs for your language (the ones you already have from `buf generate`)
+- `buf build --include-source-info -o descriptor.binpb`
+- Generated stubs for your language (`buf generate`)
 - That's it
 
 ## License
