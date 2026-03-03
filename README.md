@@ -186,7 +186,7 @@ First registered = outermost. Existing gRPC ecosystem interceptors plug in direc
 | Projection | What happens |
 |------------|-------------|
 | **MCP** | Each unary RPC becomes a tool. JSON Schema from proto types. Descriptions from proto comments. Served over stdio. |
-| **CLI** | `ServiceName Method -r request.yaml`. `--help` shows all methods with field types and descriptions. |
+| **CLI** | `ServiceName Method -r request.yaml`. AI agents that prefer shell over MCP can call it directly. Humans get `--help` with field types and descriptions. |
 | **HTTP** | `POST /{package.ServiceName}/{Method}` with JSON body. ConnectRPC-compatible routing. |
 | **gRPC** | Standard gRPC server. Dynamic dispatch from descriptor — no generated server stubs needed. |
 
