@@ -1,0 +1,55 @@
+[project]
+name = "invariant-protocol"
+version = "0.1.0"
+description = "Project gRPC services into MCP, CLI, and HTTP interfaces from proto descriptors"
+requires-python = ">=3.10"
+dependencies = [
+    "protobuf>=4.25.0",
+    "grpcio>=1.60.0",
+    "fire>=0.7.1",
+    "grpcio-tools>=1.78.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/invariant"]
+
+[tool.ruff]
+line-length = 120
+exclude = ["gen/", "*_pb2.py", "*_pb2_grpc.py"]
+
+[tool.ruff.lint]
+select = [
+    "F",    # Pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "A",    # flake8-builtins
+    "SIM",  # flake8-simplify
+    "S",    # flake8-bandit
+    "RUF",  # ruff-specific
+    "C4",   # flake8-comprehensions
+    "PT",   # flake8-pytest-style
+    "RET",  # flake8-return
+]
+ignore = [
+    "E501",    # line length (formatter handles it)
+    "N802",    # do_GET/do_POST required by BaseHTTPRequestHandler
+    "A002",    # log_message `format` arg required by BaseHTTPRequestHandler
+    "SIM105",  # contextlib.suppress not always clearer than try/except/pass
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S310", "S603", "PT015", "PT017", "B011"]

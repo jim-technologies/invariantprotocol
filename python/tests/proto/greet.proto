@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package greet.v1;
+
+// Mood of a greeting.
+enum Mood {
+  // Unspecified mood.
+  MOOD_UNSPECIFIED = 0;
+  // A happy mood.
+  MOOD_HAPPY = 1;
+  // A sad mood.
+  MOOD_SAD = 2;
+}
+
+// A simple greeting service.
+service GreetService {
+  // Greet a person by name.
+  rpc Greet(GreetRequest) returns (GreetResponse);
+
+  // Greet multiple people at once.
+  rpc GreetGroup(GreetGroupRequest) returns (GreetGroupResponse);
+}
+
+// Request for the Greet RPC.
+message GreetRequest {
+  // Name of the person to greet.
+  string name = 1;
+  // Optional mood for the greeting.
+  optional Mood mood = 2;
+  // Optional metadata tags.
+  map<string, string> tags = 3;
+}
+
+// Response from the Greet RPC.
+message GreetResponse {
+  // The greeting message.
+  string message = 1;
+  // Mood used in the greeting.
+  Mood mood = 2;
+  // Tags echoed back.
+  map<string, string> tags = 3;
+}
+
+// A person in a group.
+message Person {
+  // Name of the person.
+  string name = 1;
+  // Their mood.
+  Mood mood = 2;
+}
+
+// Request to greet a group of people.
+message GreetGroupRequest {
+  // People to greet.
+  repeated Person people = 1;
+}
+
+// Response with greetings for the group.
+message GreetGroupResponse {
+  // Individual greetings.
+  repeated string messages = 1;
+  // Number of people greeted.
+  int32 count = 2;
+}

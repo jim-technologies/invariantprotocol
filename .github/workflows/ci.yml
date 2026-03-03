@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: /nix/store
+          key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
+          restore-keys: nix-${{ runner.os }}-
+
+      - uses: flox/install-flox-action@v2
+      - uses: flox/activate-action@v1
+        with:
+          command: make lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: /nix/store
+          key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
+          restore-keys: nix-${{ runner.os }}-
+
+      - uses: flox/install-flox-action@v2
+      - uses: flox/activate-action@v1
+        with:
+          command: make test

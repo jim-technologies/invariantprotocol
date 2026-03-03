@@ -1,0 +1,173 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - dogsled
+    - dupl
+    - errorlint
+    - gocritic
+    - godot
+    - gosec
+    - intrange
+    - misspell
+    - modernize
+    - nakedret
+    - nilerr
+    - nolintlint
+    - perfsprint
+    - revive
+    - testifylint
+    - unconvert
+    - unparam
+    - usetesting
+    - whitespace
+  settings:
+    errorlint:
+      errorf: false
+      asserts: true
+      comparison: true
+    gocritic:
+      disable-all: true
+      enabled-checks:
+        - commentedOutCode
+        - commentFormatting
+        - deprecatedComment
+        - paramTypeCombine
+    gosec:
+      excludes:
+        - G104
+        - G115
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+        - shadow
+    misspell:
+      locale: US
+      extra-words:
+        - typo: marshall
+          correction: marshal
+        - typo: marshalled
+          correction: marshaled
+        - typo: marshalling
+          correction: marshaling
+        - typo: unmarshall
+          correction: unmarshal
+        - typo: unmarshalling
+          correction: unmarshaling
+        - typo: unmarshalled
+          correction: unmarshaled
+    nakedret:
+      max-func-lines: 30
+    nolintlint:
+      allow-unused: true
+      require-specific: true
+    perfsprint:
+      errorf: true
+      strconcat: false
+    revive:
+      confidence: 0.6
+      rules:
+        - name: blank-imports
+        - name: bool-literal-in-expr
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: early-return
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+          arguments:
+            - disableChecksOnConstants
+            - disableChecksOnVariables
+            - disableStutteringCheck
+        - name: filename-format
+          arguments:
+            - ^[_a-z][_a-z0-9]*.go$
+        - name: forbidden-call-in-wg-go
+        - name: identical-branches
+        - name: identical-ifelseif-branches
+        - name: identical-ifelseif-conditions
+        - name: identical-switch-branches
+        - name: identical-switch-conditions
+        - name: if-return
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: inefficient-map-lookup
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-equal
+        - name: time-naming
+        - name: unexported-naming
+        - name: unexported-return
+        - name: unnecessary-format
+        - name: unnecessary-if
+        - name: unnecessary-stmt
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: use-any
+        - name: use-errors-new
+        - name: use-fmt-print
+        - name: use-slices-sort
+        - name: use-waitgroup-go
+        - name: var-declaration
+        - name: var-naming
+    staticcheck:
+      checks:
+        - "all"
+        - "-QF1008"
+    unparam:
+      check-exported: true
+    usetesting:
+      context-background: true
+      context-todo: true
+      os-chdir: true
+      os-mkdir-temp: true
+      os-setenv: true
+      os-create-temp: true
+      os-temp-dir: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - linters:
+          - dogsled
+          - dupl
+          - gosec
+          - unparam
+        path: _test\.go
+      - linters: [errcheck]
+        text: Error return value of .(.*Close|fmt\.Fprint.*|fmt\.Scanf|os\.Remove(All)?). is not checked
+      - linters: [perfsprint]
+        text: fmt.Sprint.* can be replaced with faster strconv.FormatInt
+    paths:
+      - "gen/"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      extra-rules: true

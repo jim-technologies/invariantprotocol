@@ -1,0 +1,7 @@
+version: v2
+plugins:
+  - protoc_builtin: python
+    out: ../python/src/invariant/gen
+  - protoc_builtin: go
+    out: ../go/gen
+    opt: paths=source_relative

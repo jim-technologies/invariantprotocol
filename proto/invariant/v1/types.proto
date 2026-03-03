@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package invariant.v1;
+
+option go_package = "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1;invariantpb";
+
+// Parsed representation of a FileDescriptorSet with extracted comments.
+message ParsedDescriptor {
+  map<string, ServiceInfo> services = 1;
+  map<string, MessageInfo> messages = 2;
+  map<string, EnumInfo> enums = 3;
+}
+
+// Information about a gRPC service.
+message ServiceInfo {
+  string name = 1;
+  string full_name = 2;
+  map<string, MethodInfo> methods = 3;
+  string comment = 4;
+}
+
+// Information about an RPC method.
+message MethodInfo {
+  string name = 1;
+  string input_type = 2;
+  string output_type = 3;
+  string comment = 4;
+  bool client_streaming = 5;
+  bool server_streaming = 6;
+}
+
+// Information about a protobuf message.
+message MessageInfo {
+  string name = 1;
+  string full_name = 2;
+  repeated FieldInfo fields = 3;
+  repeated OneofInfo oneofs = 4;
+  string comment = 5;
+  bool is_map_entry = 6;
+}
+
+// Information about a message field.
+message FieldInfo {
+  string name = 1;
+  int32 number = 2;
+  int32 type = 3;
+  string type_name = 4;
+  int32 label = 5;
+  string comment = 6;
+  optional int32 oneof_index = 7;
+  bool optional = 8;
+}
+
+// Information about a oneof group.
+message OneofInfo {
+  string name = 1;
+  string comment = 2;
+  repeated string field_names = 3;
+}
+
+// Information about a protobuf enum.
+message EnumInfo {
+  string name = 1;
+  string full_name = 2;
+  repeated EnumValueInfo values = 3;
+  string comment = 4;
+}
+
+// Information about an enum value.
+message EnumValueInfo {
+  string name = 1;
+  int32 number = 2;
+  string comment = 3;
+}
