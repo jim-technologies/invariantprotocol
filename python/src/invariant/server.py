@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -14,12 +13,24 @@ from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from invariant.descriptor import ParsedDescriptor
 from invariant.schema import SchemaGenerator
 
+# --- Interceptor types (mirrors gRPC pattern, zero coupling to grpc package) ---
+
+#: Handler is the function called at the end of the interceptor chain.
+#: Equivalent to Go's UnaryHandler.
+Handler = Callable[[Any, Any], Any]  # (request, context) -> response
+
+#: Interceptor intercepts unary RPCs across all projections (MCP, HTTP, gRPC, CLI).
+#: Same shape as grpc.UnaryServerInterceptor but framework-native.
+#: Equivalent to Go's UnaryServerInterceptor.
+Interceptor = Callable[[Any, Any, "ServerCallInfo", Handler], Any]
+
 
 @dataclass
 class ServerCallInfo:
-    """Mirrors grpc.UnaryServerInfo — metadata passed to interceptors."""
+    """Metadata about the RPC being invoked, passed to interceptors.
+    Equivalent to Go's ServerCallInfo."""
 
-    full_method: str
+    full_method: str  # e.g. "/greet.v1.GreetService/Greet"
 
 
 class Tool:
@@ -60,32 +71,41 @@ class Tool:
 class Server:
     """Holds parsed descriptors and registered tools, projects into MCP/CLI/HTTP/gRPC."""
 
-    def __init__(self, parsed: ParsedDescriptor, *, name: str = "invariant-protocol", version: str = "0.1.0"):
+    def __init__(
+        self,
+        parsed: ParsedDescriptor,
+        *,
+        name: str = "invariant-protocol",
+        version: str = "0.1.0",
+        fds: descriptor_pb2.FileDescriptorSet | None = None,
+    ):
         self.parsed = parsed
         self.schema_gen = SchemaGenerator(parsed)
         self.tools: dict[str, Tool] = {}
         self.name = name
         self.version = version
+        self._fds = fds
         self._grpc_server = None
         self._http_server = None
         self._channels: list[grpc.Channel] = []
-        self._interceptors: list[Callable] = []
+        self._interceptors: list[Interceptor] = []
 
-    def use(self, interceptor: Callable) -> None:
-        """Register an interceptor. Signature: (request, context, info, handler) -> response.
+    def use(self, interceptor: Interceptor) -> None:
+        """Register an interceptor. Interceptors run in registration order
+        (first registered = outermost) on every tool invocation across all projections.
 
-        Interceptors run in registration order (first registered = outermost).
-        The ``info`` argument is a :class:`ServerCallInfo` with ``full_method``.
-        The ``handler`` is a callable ``(request, context) -> response``.
+        Equivalent to Go's Server.Use().
         """
         self._interceptors.append(interceptor)
 
     def _invoke(self, tool: Tool, request: Any, context: Any) -> Any:
-        """Central dispatch — runs interceptor chain then calls tool.handler.
+        """Core proto-in/proto-out dispatch — the equivalent of Go's invoke().
+        Runs the interceptor chain then calls tool.handler.
 
-        Unlike the Go implementation which is JSON-in/JSON-out (centralizing
-        serialization), this method is proto-in/proto-out. Each projection
-        handles its own JSON ↔ proto conversion before/after calling _invoke().
+        Each projection converts at its boundary:
+          - MCP, HTTP: JSON → proto → _invoke → proto → JSON
+          - CLI:       input → proto → _invoke → proto (JSON at terminal edge)
+          - gRPC:      bytes → proto → _invoke → proto → bytes
         """
         info = ServerCallInfo(full_method=f"/{tool.service_full_name}/{tool.method_name}")
 
@@ -123,8 +143,9 @@ class Server:
     @classmethod
     def from_descriptor(cls, path: str, *, name: str = "invariant-protocol", version: str = "0.1.0") -> Server:
         """Read a descriptor file and return a configured Server."""
-        parsed = ParsedDescriptor.from_file(path)
-        return cls(parsed, name=name, version=version)
+        with open(path, "rb") as f:
+            data = f.read()
+        return cls.from_bytes(data, name=name, version=version)
 
     @classmethod
     def from_bytes(cls, data: bytes, *, name: str = "invariant-protocol", version: str = "0.1.0") -> Server:
@@ -132,7 +153,7 @@ class Server:
         fds = descriptor_pb2.FileDescriptorSet()
         fds.ParseFromString(data)
         parsed = ParsedDescriptor(fds)
-        return cls(parsed, name=name, version=version)
+        return cls(parsed, name=name, version=version, fds=fds)
 
     def register(self, servicer: Any, service_name: str | None = None) -> None:
         """Discover methods on servicer that match RPC definitions and register as tools."""
@@ -191,11 +212,14 @@ class Server:
 
         pool = descriptor_pool.Default()
 
-        services = (
-            {service_name: self.parsed.services[service_name]}
-            if service_name
-            else self.parsed.services
-        )
+        if service_name:
+            svc_info = self.parsed.services.get(service_name)
+            if svc_info is None:
+                available = list(self.parsed.services.keys())
+                raise ValueError(f"Service '{service_name}' not found in descriptor. Available: {available}")
+            services = {service_name: svc_info}
+        else:
+            services = self.parsed.services
 
         for svc_full_name, svc_info in services.items():
             for method_name, method_info in svc_info.methods.items():
@@ -232,11 +256,70 @@ class Server:
                     method_name=method_name,
                 )
 
+    def connect_http(self, base_url: str, service_name: str | None = None, *, timeout: float = 10.0) -> None:
+        """Connect to a remote HTTP service and register its methods as tools.
+
+        Routes are derived from google.api.http annotations when present, otherwise
+        fallback to canonical RPC route: POST /{serviceFullName}/{method}.
+        """
+        if self._fds is None:
+            raise ValueError("connect_http requires Server.from_descriptor() or Server.from_bytes().")
+
+        from invariant.http_client import (
+            HTTPDynamicHandler,
+            client_binding_for_method,
+            http_rules_by_method_path,
+        )
+
+        if service_name:
+            svc_info = self.parsed.services.get(service_name)
+            if svc_info is None:
+                available = list(self.parsed.services.keys())
+                raise ValueError(f"Service '{service_name}' not found in descriptor. Available: {available}")
+            services = {service_name: svc_info}
+        else:
+            services = self.parsed.services
+        rules = http_rules_by_method_path(self._fds)
+
+        for svc_full_name, svc_info in services.items():
+            for method_name, method_info in svc_info.methods.items():
+                if method_info.client_streaming or method_info.server_streaming:
+                    continue
+
+                method_path = f"/{svc_full_name}/{method_name}"
+                binding = client_binding_for_method(rules.get(method_path), svc_full_name, method_name)
+                handler = HTTPDynamicHandler(
+                    base_url=base_url,
+                    binding=binding,
+                    output_type=method_info.output_type,
+                    timeout=timeout,
+                )
+
+                tool_name = f"{svc_info.name}.{method_name}"
+                description = method_info.comment or tool_name
+
+                self.tools[tool_name] = Tool(
+                    name=tool_name,
+                    description=description,
+                    input_schema=self.schema_gen.message_to_schema(method_info.input_type),
+                    handler=handler,
+                    input_type=method_info.input_type,
+                    output_type=method_info.output_type,
+                    service_full_name=svc_full_name,
+                    method_name=method_name,
+                )
+
     # -- Public API: single serve method --
 
     def serve(self, *, mcp: bool = False, cli: bool = False,
-              http: int | None = None, grpc: int | None = None) -> None:
+              http: int | None = None, grpc: int | None = None,
+              grpc_options: list | None = None) -> None:
         """Start the specified projections and block.
+
+        Args:
+            grpc_options: Optional list of gRPC server options
+                (e.g. ``[("grpc.max_receive_message_length", 1024)]``),
+                passed to ``grpc.server()``.
 
         Examples::
 
@@ -244,7 +327,9 @@ class Server:
             server.serve(cli=True)
             server.serve(http=8080)
             server.serve(http=8080, grpc=50051)
+            server.serve(grpc=50051, grpc_options=[("grpc.max_receive_message_length", 1024)])
         """
+        self._grpc_options = grpc_options
         projections: list[tuple[str, int | None]] = []
         if mcp:
             projections.append(("mcp", None))
@@ -285,14 +370,19 @@ class Server:
         elif kind == "cli":
             from invariant.projections.cli import run_cli
             result = run_cli(self, sys.argv[1:])
-            print(json.dumps(result, indent=2))
+            if isinstance(result, str):
+                print(result)
+            else:
+                # Boundary: proto → JSON (terminal output).
+                from google.protobuf import json_format as _jf
+                print(_jf.MessageToJson(result, preserving_proto_field_name=True, indent=2))
         elif kind == "http":
             from invariant.projections.http import start_http
             httpd, _ = start_http(self, port)
             httpd.serve_forever()
         elif kind == "grpc":
             from invariant.projections.grpc import start_grpc
-            grpc_server, _ = start_grpc(self, port)
+            grpc_server, _ = start_grpc(self, port, options=getattr(self, "_grpc_options", None))
             grpc_server.wait_for_termination()
 
     # -- Non-blocking start/stop (internal, used by tests) --
@@ -308,10 +398,10 @@ class Server:
             self._http_server.shutdown()
             self._http_server = None
 
-    def _start_grpc(self, port: int = 50051) -> int:
+    def _start_grpc(self, port: int = 50051, *, options: list | None = None) -> int:
         from invariant.projections.grpc import start_grpc
 
-        self._grpc_server, actual_port = start_grpc(self, port)
+        self._grpc_server, actual_port = start_grpc(self, port, options=options)
         return actual_port
 
     def _stop_grpc(self) -> None:
@@ -319,10 +409,16 @@ class Server:
             self._grpc_server.stop(grace=0)
             self._grpc_server = None
 
-    def _cli(self, args: list[str]) -> dict:
+    def _cli(self, args: list[str]) -> dict | str:
+        """Run CLI and convert proto result to dict at the boundary (for tests)."""
         from invariant.projections.cli import run_cli
 
-        return run_cli(self, args)
+        result = run_cli(self, args)
+        if isinstance(result, str):
+            return result
+        # Boundary: proto → dict.
+        from google.protobuf import json_format as _jf
+        return _jf.MessageToDict(result, preserving_proto_field_name=True)
 
     def stop(self) -> None:
         """Close all gRPC channels and stop background servers."""

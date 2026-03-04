@@ -10,33 +10,27 @@ import (
 	"net/http"
 	"testing"
 
+	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
+	grpcpkg "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// interceptorTestServicer is a simple servicer for interceptor tests.
+// interceptorTestServicer implements GreetService RPCs using generated proto types.
 type interceptorTestServicer struct{}
 
-func (s *interceptorTestServicer) Greet(_ context.Context, req *structpb.Struct) (*structpb.Struct, error) {
-	name := ""
-	if v, ok := req.GetFields()["name"]; ok {
-		name = v.GetStringValue()
-	}
-	result, _ := structpb.NewStruct(map[string]any{"message": "Hello, " + name})
-	return result, nil
+func (s *interceptorTestServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	return &greetpb.GreetResponse{Message: "Hello, " + req.Name}, nil
 }
 
-func (s *interceptorTestServicer) GreetGroup(_ context.Context, _ *structpb.Struct) (*structpb.Struct, error) {
-	result, _ := structpb.NewStruct(map[string]any{"messages": []any{"hello"}, "count": float64(1)})
-	return result, nil
+func (s *interceptorTestServicer) GreetGroup(_ context.Context, _ *greetpb.GreetGroupRequest) (*greetpb.GreetGroupResponse, error) {
+	return &greetpb.GreetGroupResponse{Messages: []string{"hello"}, Count: 1}, nil
 }
 
 // trackingInterceptor appends a label to the log before and after calling handler.
-func trackingInterceptor(label string, log *[]string) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+func trackingInterceptor(label string, log *[]string) UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *ServerCallInfo, handler UnaryHandler) (any, error) {
 		*log = append(*log, label+"-before")
 		resp, err := handler(ctx, req)
 		*log = append(*log, label+"-after")
@@ -44,7 +38,7 @@ func trackingInterceptor(label string, log *[]string) grpc.UnaryServerIntercepto
 	}
 }
 
-func interceptorServer(t *testing.T, interceptors ...grpc.UnaryServerInterceptor) *Server {
+func interceptorServer(t *testing.T, interceptors ...UnaryServerInterceptor) *Server {
 	t.Helper()
 	srv := newServer(mustParse(t))
 	require.NoError(t, srv.Register(&interceptorTestServicer{}))
@@ -77,18 +71,22 @@ func TestInterceptorFiresOnHTTP(t *testing.T) {
 	var log []string
 	srv := interceptorServer(t, trackingInterceptor("A", &log))
 
+	bindings, err := srv.buildHTTPBindings()
+	require.NoError(t, err)
+
 	mux := http.NewServeMux()
-	for _, tool := range srv.tools {
-		route := "/" + tool.ServiceFullName + "/" + tool.MethodName
-		tl := tool
-		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		binding, pathParams, methodMismatch := findHTTPBinding(bindings, r.Method, r.URL.Path)
+		if binding == nil {
+			if methodMismatch {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
-			srv.handleHTTP(w, r, tl)
-		})
-	}
+			http.NotFound(w, r)
+			return
+		}
+		srv.handleHTTP(w, r, binding, pathParams)
+	})
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
@@ -139,8 +137,8 @@ func TestInterceptorFiresOnGRPC(t *testing.T) {
 
 	files, err := srv.buildProtoFiles()
 	require.NoError(t, err)
-	gs := grpc.NewServer()
-	type svcEntry struct{ methods []grpc.MethodDesc }
+	gs := grpcpkg.NewServer()
+	type svcEntry struct{ methods []grpcpkg.MethodDesc }
 	svcMap := make(map[string]*svcEntry)
 	for _, tool := range srv.tools {
 		entry, ok := svcMap[tool.ServiceFullName]
@@ -152,14 +150,14 @@ func TestInterceptorFiresOnGRPC(t *testing.T) {
 		require.NoError(t, err)
 		respMD, err := findMessageDescriptor(files, tool.OutputType)
 		require.NoError(t, err)
-		entry.methods = append(entry.methods, grpc.MethodDesc{
+		entry.methods = append(entry.methods, grpcpkg.MethodDesc{
 			MethodName: tool.MethodName,
 			Handler:    srv.grpcMethodHandler(tool, reqMD, respMD),
 		})
 	}
 	type grpcServicer any
 	for svcName, entry := range svcMap {
-		gs.RegisterService(&grpc.ServiceDesc{
+		gs.RegisterService(&grpcpkg.ServiceDesc{
 			ServiceName: svcName,
 			HandlerType: (*grpcServicer)(nil),
 			Methods:     entry.methods,
@@ -169,7 +167,7 @@ func TestInterceptorFiresOnGRPC(t *testing.T) {
 	defer gs.Stop()
 
 	// Call via dynamic handler
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpcpkg.NewClient(addr, grpcpkg.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	defer conn.Close()
 
@@ -211,7 +209,7 @@ func TestInterceptorShortCircuit(t *testing.T) {
 	srv := newServer(mustParse(t))
 	require.NoError(t, srv.Register(&interceptorTestServicer{}))
 
-	srv.Use(func(_ context.Context, _ any, _ *grpc.UnaryServerInfo, _ grpc.UnaryHandler) (any, error) {
+	srv.Use(func(_ context.Context, _ any, _ *ServerCallInfo, _ UnaryHandler) (any, error) {
 		return nil, errors.New("blocked by interceptor")
 	})
 
@@ -234,7 +232,7 @@ func TestInterceptorShortCircuit(t *testing.T) {
 
 func TestInterceptorFullMethod(t *testing.T) {
 	var capturedMethod string
-	srv := interceptorServer(t, func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	srv := interceptorServer(t, func(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error) {
 		capturedMethod = info.FullMethod
 		return handler(ctx, req)
 	})

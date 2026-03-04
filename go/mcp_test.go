@@ -7,44 +7,34 @@ import (
 	"encoding/json"
 	"testing"
 
+	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// mcpTestServicer has methods matching the greet.v1.GreetService RPC names
-// but uses structpb.Struct so arguments work as plain JSON objects.
+// mcpTestServicer implements GreetService RPCs using generated proto types.
 type mcpTestServicer struct{}
 
-func (s *mcpTestServicer) Greet(_ context.Context, req *structpb.Struct) (*structpb.Struct, error) {
-	fields := req.GetFields()
-	out := map[string]any{"message": "Hello, " + fields["name"].GetStringValue()}
-	if v, ok := fields["mood"]; ok {
-		out["mood"] = v.GetStringValue()
+func (s *mcpTestServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	resp := &greetpb.GreetResponse{
+		Message: "Hello, " + req.Name,
+		Tags:    req.Tags,
 	}
-	if v, ok := fields["tags"]; ok && v.GetStructValue() != nil {
-		tags := make(map[string]any)
-		for k, val := range v.GetStructValue().GetFields() {
-			tags[k] = val.GetStringValue()
-		}
-		out["tags"] = tags
+	if req.Mood != nil {
+		resp.Mood = *req.Mood
 	}
-	result, _ := structpb.NewStruct(out)
-	return result, nil
+	return resp, nil
 }
 
-func (s *mcpTestServicer) GreetGroup(_ context.Context, req *structpb.Struct) (*structpb.Struct, error) {
-	people := req.GetFields()["people"].GetListValue().GetValues()
-	var messages []any
-	for _, p := range people {
-		name := p.GetStructValue().GetFields()["name"].GetStringValue()
-		messages = append(messages, "Hello, "+name)
+func (s *mcpTestServicer) GreetGroup(_ context.Context, req *greetpb.GreetGroupRequest) (*greetpb.GreetGroupResponse, error) {
+	var messages []string
+	for _, p := range req.People {
+		messages = append(messages, "Hello, "+p.Name)
 	}
-	result, _ := structpb.NewStruct(map[string]any{
-		"messages": messages,
-		"count":    float64(len(people)),
-	})
-	return result, nil
+	return &greetpb.GreetGroupResponse{
+		Messages: messages,
+		Count:    int32(len(req.People)),
+	}, nil
 }
 
 func mcpServer(t *testing.T) *Server {
@@ -156,6 +146,35 @@ func TestMCPToolCall(t *testing.T) {
 	assert.Equal(t, "text", block["type"])
 	assert.Contains(t, block["text"], "Hello, Alice")
 	assert.Nil(t, result["isError"])
+}
+
+func TestMCPToolCallRejectsUnknownField(t *testing.T) {
+	resp := sendMCP(t, mcpServer(t), map[string]any{
+		"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "GreetService.Greet",
+			"arguments": map[string]any{"name": "Alice", "extra": "x"},
+		},
+	})
+	result := resp["result"].(map[string]any)
+	assert.Equal(t, true, result["isError"])
+
+	content := result["content"].([]any)
+	require.Len(t, content, 1)
+	block := content[0].(map[string]any)
+	assert.Contains(t, block["text"], "unknown field")
+
+	errObj := result["error"].(map[string]any)
+	assert.Equal(t, "INVALID_ARGUMENT", errObj["code"])
+	assert.Contains(t, errObj["message"], "unknown field")
+
+	details := errObj["details"].([]any)
+	require.NotEmpty(t, details)
+	first := details[0].(map[string]any)
+	violations := first["fieldViolations"].([]any)
+	require.NotEmpty(t, violations)
+	v := violations[0].(map[string]any)
+	assert.Equal(t, "extra", v["field"])
 }
 
 func TestMCPToolCallWithEnumAndTags(t *testing.T) {

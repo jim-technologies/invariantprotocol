@@ -22,35 +22,41 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from google.api import annotations_pb2 as google_dot_api_dot_annotations__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0bgreet.proto\x12\x08greet.v1\"\xc3\x01\n\x0cGreetRequest\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\'\n\x04mood\x18\x02 \x01(\x0e\x32\x0e.greet.v1.MoodH\x00R\x04mood\x88\x01\x01\x12\x34\n\x04tags\x18\x03 \x03(\x0b\x32 .greet.v1.GreetRequest.TagsEntryR\x04tags\x1a\x37\n\tTagsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x42\x07\n\x05_mood\"\xbd\x01\n\rGreetResponse\x12\x18\n\x07message\x18\x01 \x01(\tR\x07message\x12\"\n\x04mood\x18\x02 \x01(\x0e\x32\x0e.greet.v1.MoodR\x04mood\x12\x35\n\x04tags\x18\x03 \x03(\x0b\x32!.greet.v1.GreetResponse.TagsEntryR\x04tags\x1a\x37\n\tTagsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"@\n\x06Person\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\"\n\x04mood\x18\x02 \x01(\x0e\x32\x0e.greet.v1.MoodR\x04mood\"=\n\x11GreetGroupRequest\x12(\n\x06people\x18\x01 \x03(\x0b\x32\x10.greet.v1.PersonR\x06people\"F\n\x12GreetGroupResponse\x12\x1a\n\x08messages\x18\x01 \x03(\tR\x08messages\x12\x14\n\x05\x63ount\x18\x02 \x01(\x05R\x05\x63ount*:\n\x04Mood\x12\x14\n\x10MOOD_UNSPECIFIED\x10\x00\x12\x0e\n\nMOOD_HAPPY\x10\x01\x12\x0c\n\x08MOOD_SAD\x10\x02\x32\x91\x01\n\x0cGreetService\x12\x38\n\x05Greet\x12\x16.greet.v1.GreetRequest\x1a\x17.greet.v1.GreetResponse\x12G\n\nGreetGroup\x12\x1b.greet.v1.GreetGroupRequest\x1a\x1c.greet.v1.GreetGroupResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0bgreet.proto\x12\x08greet.v1\x1a\x1cgoogle/api/annotations.proto\"\xc3\x01\n\x0cGreetRequest\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\'\n\x04mood\x18\x02 \x01(\x0e\x32\x0e.greet.v1.MoodH\x00R\x04mood\x88\x01\x01\x12\x34\n\x04tags\x18\x03 \x03(\x0b\x32 .greet.v1.GreetRequest.TagsEntryR\x04tags\x1a\x37\n\tTagsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x42\x07\n\x05_mood\"\xbd\x01\n\rGreetResponse\x12\x18\n\x07message\x18\x01 \x01(\tR\x07message\x12\"\n\x04mood\x18\x02 \x01(\x0e\x32\x0e.greet.v1.MoodR\x04mood\x12\x35\n\x04tags\x18\x03 \x03(\x0b\x32!.greet.v1.GreetResponse.TagsEntryR\x04tags\x1a\x37\n\tTagsEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"@\n\x06Person\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\"\n\x04mood\x18\x02 \x01(\x0e\x32\x0e.greet.v1.MoodR\x04mood\"=\n\x11GreetGroupRequest\x12(\n\x06people\x18\x01 \x03(\x0b\x32\x10.greet.v1.PersonR\x06people\"F\n\x12GreetGroupResponse\x12\x1a\n\x08messages\x18\x01 \x03(\tR\x08messages\x12\x14\n\x05\x63ount\x18\x02 \x01(\x05R\x05\x63ount*:\n\x04Mood\x12\x14\n\x10MOOD_UNSPECIFIED\x10\x00\x12\x0e\n\nMOOD_HAPPY\x10\x01\x12\x0c\n\x08MOOD_SAD\x10\x02\x32\xdd\x01\n\x0cGreetService\x12R\n\x05Greet\x12\x16.greet.v1.GreetRequest\x1a\x17.greet.v1.GreetResponse\"\x18\x82\xd3\xe4\x93\x02\x12\x12\x10/v1/greet/{name}\x12y\n\nGreetGroup\x12\x1b.greet.v1.GreetGroupRequest\x1a\x1c.greet.v1.GreetGroupResponse\"0\x82\xd3\xe4\x93\x02*\"\x0f/v1/greet:group:\x01*Z\x14\"\x0f/v1/group:greet:\x01*BDZBgithub.com/jim-technologies/invariantprotocol/go/tests/gen;greetpbb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'greet_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
+  _globals['DESCRIPTOR']._loaded_options = None
+  _globals['DESCRIPTOR']._serialized_options = b'ZBgithub.com/jim-technologies/invariantprotocol/go/tests/gen;greetpb'
   _globals['_GREETREQUEST_TAGSENTRY']._loaded_options = None
   _globals['_GREETREQUEST_TAGSENTRY']._serialized_options = b'8\001'
   _globals['_GREETRESPONSE_TAGSENTRY']._loaded_options = None
   _globals['_GREETRESPONSE_TAGSENTRY']._serialized_options = b'8\001'
-  _globals['_MOOD']._serialized_start=616
-  _globals['_MOOD']._serialized_end=674
-  _globals['_GREETREQUEST']._serialized_start=26
-  _globals['_GREETREQUEST']._serialized_end=221
-  _globals['_GREETREQUEST_TAGSENTRY']._serialized_start=157
-  _globals['_GREETREQUEST_TAGSENTRY']._serialized_end=212
-  _globals['_GREETRESPONSE']._serialized_start=224
-  _globals['_GREETRESPONSE']._serialized_end=413
-  _globals['_GREETRESPONSE_TAGSENTRY']._serialized_start=157
-  _globals['_GREETRESPONSE_TAGSENTRY']._serialized_end=212
-  _globals['_PERSON']._serialized_start=415
-  _globals['_PERSON']._serialized_end=479
-  _globals['_GREETGROUPREQUEST']._serialized_start=481
-  _globals['_GREETGROUPREQUEST']._serialized_end=542
-  _globals['_GREETGROUPRESPONSE']._serialized_start=544
-  _globals['_GREETGROUPRESPONSE']._serialized_end=614
-  _globals['_GREETSERVICE']._serialized_start=677
-  _globals['_GREETSERVICE']._serialized_end=822
+  _globals['_GREETSERVICE'].methods_by_name['Greet']._loaded_options = None
+  _globals['_GREETSERVICE'].methods_by_name['Greet']._serialized_options = b'\202\323\344\223\002\022\022\020/v1/greet/{name}'
+  _globals['_GREETSERVICE'].methods_by_name['GreetGroup']._loaded_options = None
+  _globals['_GREETSERVICE'].methods_by_name['GreetGroup']._serialized_options = b'\202\323\344\223\002*\"\017/v1/greet:group:\001*Z\024\"\017/v1/group:greet:\001*'
+  _globals['_MOOD']._serialized_start=646
+  _globals['_MOOD']._serialized_end=704
+  _globals['_GREETREQUEST']._serialized_start=56
+  _globals['_GREETREQUEST']._serialized_end=251
+  _globals['_GREETREQUEST_TAGSENTRY']._serialized_start=187
+  _globals['_GREETREQUEST_TAGSENTRY']._serialized_end=242
+  _globals['_GREETRESPONSE']._serialized_start=254
+  _globals['_GREETRESPONSE']._serialized_end=443
+  _globals['_GREETRESPONSE_TAGSENTRY']._serialized_start=187
+  _globals['_GREETRESPONSE_TAGSENTRY']._serialized_end=242
+  _globals['_PERSON']._serialized_start=445
+  _globals['_PERSON']._serialized_end=509
+  _globals['_GREETGROUPREQUEST']._serialized_start=511
+  _globals['_GREETGROUPREQUEST']._serialized_end=572
+  _globals['_GREETGROUPRESPONSE']._serialized_start=574
+  _globals['_GREETGROUPRESPONSE']._serialized_end=644
+  _globals['_GREETSERVICE']._serialized_start=707
+  _globals['_GREETSERVICE']._serialized_end=928
 # @@protoc_insertion_point(module_scope)

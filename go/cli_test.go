@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func cliServer(t *testing.T) *Server {
@@ -29,6 +31,17 @@ func TestCLIInlineInvalidJSON(t *testing.T) {
 	_, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", "not json"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot parse inline value as JSON")
+}
+
+func TestCLIUnknownFieldRejected(t *testing.T) {
+	srv := cliServer(t)
+	_, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"Alice","extra":"x"}`})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field")
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
 func TestCLINoRequest(t *testing.T) {

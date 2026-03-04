@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 from google.protobuf import descriptor_pool, json_format, message_factory
 
+from invariant.errors import as_invariant_error, invalid_argument_from_json_error
+
 if TYPE_CHECKING:
     from invariant.server import Server
 
@@ -106,11 +108,13 @@ class _StdioMCP:
                 },
             )
         except Exception as e:
+            err = as_invariant_error(e)
             return _ok(
                 msg_id,
                 {
-                    "content": [{"type": "text", "text": str(e)}],
+                    "content": [{"type": "text", "text": err.message}],
                     "isError": True,
+                    "error": err.to_payload(),
                 },
             )
 
@@ -124,7 +128,10 @@ class _StdioMCP:
             ) from e
         msg_class = message_factory.GetMessageClass(desc)
         msg = msg_class()
-        json_format.ParseDict(arguments, msg)
+        try:
+            json_format.ParseDict(arguments, msg)
+        except Exception as e:
+            raise invalid_argument_from_json_error(e) from None
         return msg
 
 

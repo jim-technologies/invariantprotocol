@@ -115,6 +115,27 @@ def test_mcp_tool_call():
     assert result["message"] == "Hi World"
 
 
+def test_mcp_tool_call_rejects_unknown_field():
+    responses = _run_mcp_session(
+        [
+            _mcp_request(0, "initialize", {}),
+            _mcp_request(
+                1,
+                "tools/call",
+                {
+                    "name": "GreetService.Greet",
+                    "arguments": {"name": "World", "extra": "x"},
+                },
+            ),
+        ]
+    )
+    result = responses[1]["result"]
+    assert result["isError"] is True
+    assert result["error"]["code"] == "INVALID_ARGUMENT"
+    assert "field named \"extra\"" in result["error"]["message"]
+    assert result["error"]["details"][0]["fieldViolations"][0]["field"] == "extra"
+
+
 def test_mcp_tool_call_with_enum_and_tags():
     responses = _run_mcp_session(
         [

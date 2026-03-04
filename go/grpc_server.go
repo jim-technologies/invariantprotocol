@@ -8,13 +8,15 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // serveGRPC starts a blocking gRPC server on the given port.
-func (s *Server) serveGRPC(port int) error {
+// Optional grpc.ServerOption values are passed to grpc.NewServer.
+func (s *Server) serveGRPC(port int, opts ...grpc.ServerOption) error {
 	if s.fds == nil {
 		return errors.New("serveGRPC requires a Server created via ServerFromDescriptor or ServerFromBytes")
 	}
@@ -24,7 +26,7 @@ func (s *Server) serveGRPC(port int) error {
 		return fmt.Errorf("build file descriptors: %w", err)
 	}
 
-	gs := grpc.NewServer()
+	gs := grpc.NewServer(opts...)
 
 	// Group tools by service for ServiceDesc registration.
 	type svcEntry struct {
@@ -81,21 +83,38 @@ func (s *Server) grpcMethodHandler(tool *Tool, reqMD, respMD protoreflect.Messag
 			return nil, err
 		}
 
-		// Marshal request to JSON, invoke handler, unmarshal response from JSON.
-		reqJSON, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(req)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request to JSON: %w", err)
-		}
-
-		resultJSON, err := s.invoke(ctx, tool, reqJSON)
+		// Proto-first: pass dynamic message directly, no JSON round-trip.
+		resp, err := s.invoke(ctx, tool, req)
 		if err != nil {
 			return nil, err
 		}
 
-		resp := dynamicpb.NewMessage(respMD)
-		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(resultJSON), resp); err != nil {
-			return nil, fmt.Errorf("unmarshal response JSON: %w", err)
+		// If the response is already a *dynamicpb.Message, return it directly.
+		if dynResp, ok := resp.(*dynamicpb.Message); ok {
+			return dynResp, nil
 		}
-		return resp, nil
+
+		// Convert typed proto response back to dynamicpb for gRPC codec.
+		dynResp := dynamicpb.NewMessage(respMD)
+		if resp.ProtoReflect().Descriptor().FullName() == respMD.FullName() {
+			// Same proto type — fast binary conversion.
+			b, err := proto.Marshal(resp)
+			if err != nil {
+				return nil, fmt.Errorf("marshal response to binary: %w", err)
+			}
+			if err := proto.Unmarshal(b, dynResp); err != nil {
+				return nil, fmt.Errorf("unmarshal binary to dynamic: %w", err)
+			}
+		} else {
+			// Different proto types (e.g. structpb.Struct) — fall back to JSON.
+			b, err := protojson.Marshal(resp)
+			if err != nil {
+				return nil, fmt.Errorf("marshal response to JSON: %w", err)
+			}
+			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, dynResp); err != nil {
+				return nil, fmt.Errorf("unmarshal JSON to dynamic: %w", err)
+			}
+		}
+		return dynResp, nil
 	}
 }

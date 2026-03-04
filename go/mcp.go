@@ -11,9 +11,9 @@ import (
 	"reflect"
 	"sync"
 
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
@@ -152,11 +152,13 @@ func (m *mcpSession) toolsCall(ctx context.Context, id, rawParams json.RawMessag
 		return mcpErr(id, -32602, "Unknown tool: "+p.Name)
 	}
 
-	text, err := m.server.invoke(ctx, tool, p.Arguments)
+	text, err := m.server.invokeJSON(ctx, tool, p.Arguments)
 	if err != nil {
+		payload := errorPayload(err)
 		return mcpOK(id, map[string]any{
-			"content": []any{map[string]any{"type": "text", "text": err.Error()}},
+			"content": []any{map[string]any{"type": "text", "text": errorMessage(err)}},
 			"isError": true,
+			"error":   payload,
 		})
 	}
 
@@ -165,35 +167,122 @@ func (m *mcpSession) toolsCall(ctx context.Context, id, rawParams json.RawMessag
 	})
 }
 
-// invoke deserializes JSON args into a proto request, runs the interceptor
-// chain, calls the handler, and serializes the response back to JSON.
+// invoke is the core proto-in/proto-out dispatch — the equivalent of
+// Python's Server._invoke(). Runs the interceptor chain then calls the handler.
 //
-// Unlike the Python implementation which is proto-in/proto-out (each projection
-// handles its own serialization), this method is JSON-in/JSON-out centralizing
-// all serialization logic.
-func (s *Server) invoke(ctx context.Context, tool *Tool, argsJSON json.RawMessage) (string, error) {
-	// Phase 1: Deserialize JSON → proto message + build inner handler.
-	var req proto.Message
-	var innerHandler grpc.UnaryHandler
+// Each projection converts at its boundary:
+//   - MCP, HTTP: JSON → proto → invoke → proto → JSON  (via invokeJSON())
+//   - gRPC:           proto(dynamic) → invoke → proto → proto(dynamic)
+//
+// For reflected handlers that receive a dynamicpb.Message (e.g. from gRPC),
+// the request is converted to the handler's typed proto via binary
+// Marshal/Unmarshal (~10x faster than JSON round-trip).
+func (s *Server) invoke(ctx context.Context, tool *Tool, req proto.Message) (proto.Message, error) {
+	var innerHandler UnaryHandler
 
-	if dh, ok := tool.Handler.(*grpcDynamicHandler); ok {
-		// Dynamic handler path — Connect() proxy.
-		dynReq := dynamicpb.NewMessage(dh.reqDesc)
+	switch h := tool.Handler.(type) {
+	case *grpcDynamicHandler:
+		innerHandler = func(ctx context.Context, req any) (any, error) {
+			return h.callProto(ctx, req.(proto.Message))
+		}
+	case *httpDynamicHandler:
+		innerHandler = func(ctx context.Context, req any) (any, error) {
+			return h.callProto(ctx, req.(proto.Message))
+		}
+	default:
+		// Reflected handler path — local servicer.
+		handlerVal := reflect.ValueOf(tool.Handler)
+		handlerType := handlerVal.Type()
+
+		if handlerType.NumIn() != 2 || handlerType.NumOut() != 2 {
+			return nil, fmt.Errorf("handler has unexpected signature (in=%d, out=%d)", handlerType.NumIn(), handlerType.NumOut())
+		}
+
+		reqType := handlerType.In(1)
+
+		// Check if the handler's expected type matches the dynamic message type.
+		// If they share the same proto full name, binary conversion works (~10x
+		// faster). Otherwise fall back to JSON (e.g. when handler uses structpb.Struct).
+		handlerReqMsg := reflect.New(reqType.Elem()).Interface().(proto.Message)
+		handlerFullName := handlerReqMsg.ProtoReflect().Descriptor().FullName()
+
+		innerHandler = func(ctx context.Context, r any) (any, error) {
+			rMsg := r.(proto.Message)
+
+			// If the request is a dynamicpb.Message but the handler expects a
+			// typed proto, convert to the handler's type.
+			if dynMsg, isDynamic := rMsg.(*dynamicpb.Message); isDynamic {
+				typed := reflect.New(reqType.Elem()).Interface().(proto.Message)
+				if dynMsg.ProtoReflect().Descriptor().FullName() == handlerFullName {
+					// Same proto type — use fast binary conversion.
+					b, err := proto.Marshal(rMsg)
+					if err != nil {
+						return nil, fmt.Errorf("marshal dynamic to binary: %w", err)
+					}
+					if err := proto.Unmarshal(b, typed); err != nil {
+						return nil, fmt.Errorf("unmarshal binary to typed: %w", err)
+					}
+				} else {
+					// Different proto types (e.g. structpb.Struct) — fall back to JSON.
+					b, err := protojson.Marshal(rMsg)
+					if err != nil {
+						return nil, fmt.Errorf("marshal dynamic to JSON: %w", err)
+					}
+					if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, typed); err != nil {
+						return nil, fmt.Errorf("unmarshal JSON to typed: %w", err)
+					}
+				}
+				rMsg = typed
+			}
+
+			results := handlerVal.Call([]reflect.Value{
+				reflect.ValueOf(ctx),
+				reflect.ValueOf(rMsg),
+			})
+			if !results[1].IsNil() {
+				return nil, results[1].Interface().(error)
+			}
+			return results[0].Interface(), nil
+		}
+	}
+
+	info := &ServerCallInfo{
+		FullMethod: fmt.Sprintf("/%s/%s", tool.ServiceFullName, tool.MethodName),
+	}
+	resp, err := s.chainedInvoke(ctx, req, info, innerHandler)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp == nil {
+		return nil, nil
+	}
+
+	respMsg, ok := resp.(proto.Message)
+	if !ok {
+		return nil, errors.New("response does not implement proto.Message")
+	}
+	return respMsg, nil
+}
+
+// invokeJSON deserializes JSON args into a proto request, calls invoke(),
+// and serializes the response back to JSON. Used by MCP and HTTP projections
+// (JSON wire boundaries). CLI and gRPC call invoke() directly.
+func (s *Server) invokeJSON(ctx context.Context, tool *Tool, argsJSON json.RawMessage) (string, error) {
+	// Deserialize JSON → proto message.
+	var req proto.Message
+
+	if provider, ok := tool.Handler.(interface {
+		requestDescriptor() protoreflect.MessageDescriptor
+	}); ok {
+		dynReq := dynamicpb.NewMessage(provider.requestDescriptor())
 		if len(argsJSON) > 0 && string(argsJSON) != "null" {
-			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(argsJSON, dynReq); err != nil {
-				return "", fmt.Errorf("unmarshal request: %w", err)
+			if err := protojson.Unmarshal(argsJSON, dynReq); err != nil {
+				return "", invalidArgumentFromJSONError(err)
 			}
 		}
 		req = dynReq
-		innerHandler = func(ctx context.Context, req any) (any, error) {
-			resp := dynamicpb.NewMessage(dh.respDesc)
-			if err := dh.conn.Invoke(ctx, dh.methodPath, req.(proto.Message), resp); err != nil {
-				return nil, fmt.Errorf("grpc call %s: %w", dh.methodPath, err)
-			}
-			return resp, nil
-		}
 	} else {
-		// Reflected handler path — local servicer.
 		handlerVal := reflect.ValueOf(tool.Handler)
 		handlerType := handlerVal.Type()
 
@@ -210,43 +299,25 @@ func (s *Server) invoke(ctx context.Context, tool *Tool, argsJSON json.RawMessag
 		}
 
 		if len(argsJSON) > 0 && string(argsJSON) != "null" {
-			if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(argsJSON, reqMsg); err != nil {
-				return "", fmt.Errorf("unmarshal request: %w", err)
+			if err := protojson.Unmarshal(argsJSON, reqMsg); err != nil {
+				return "", invalidArgumentFromJSONError(err)
 			}
 		}
 		req = reqMsg
-		innerHandler = func(ctx context.Context, r any) (any, error) {
-			results := handlerVal.Call([]reflect.Value{
-				reflect.ValueOf(ctx),
-				reflect.ValueOf(r),
-			})
-			if !results[1].IsNil() {
-				return nil, results[1].Interface().(error)
-			}
-			return results[0].Interface(), nil
-		}
 	}
 
-	// Phase 2: Run interceptor chain.
-	info := &grpc.UnaryServerInfo{
-		FullMethod: fmt.Sprintf("/%s/%s", tool.ServiceFullName, tool.MethodName),
-	}
-	resp, err := s.chainedInvoke(ctx, req, info, innerHandler)
+	// Call proto-first dispatch.
+	resp, err := s.invoke(ctx, tool, req)
 	if err != nil {
 		return "", err
 	}
 
-	// Phase 3: Serialize proto response → JSON.
+	// Serialize proto response → JSON.
 	if resp == nil {
 		return "{}", nil
 	}
 
-	respMsg, ok := resp.(proto.Message)
-	if !ok {
-		return "", errors.New("response does not implement proto.Message")
-	}
-
-	out, err := (protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}).Marshal(respMsg)
+	out, err := (protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}).Marshal(resp)
 	if err != nil {
 		return "", fmt.Errorf("marshal response: %w", err)
 	}
@@ -255,7 +326,7 @@ func (s *Server) invoke(ctx context.Context, tool *Tool, argsJSON json.RawMessag
 
 // chainedInvoke runs the interceptor chain then calls the handler.
 // Chain ordering: first registered = outermost (A(B(C(handler)))).
-func (s *Server) chainedInvoke(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+func (s *Server) chainedInvoke(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error) {
 	if len(s.interceptors) == 0 {
 		return handler(ctx, req)
 	}

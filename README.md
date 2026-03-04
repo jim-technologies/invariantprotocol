@@ -99,6 +99,8 @@ Those comments — the ones you'd write anyway for good documentation — are al
 ```
 POST /user.v1.UserService/CreateUser
 {"display_name": "Alice Smith", "email": "alice@example.com", "role": "ROLE_EDITOR", "tags": ["engineering"]}
+POST /v1/users
+{"display_name": "Alice Smith", "email": "alice@example.com", "role": "ROLE_EDITOR", "tags": ["engineering"]}
 ```
 
 Write the comment once. It appears everywhere — typed, validated, with enums, required fields, and descriptions.
@@ -111,6 +113,7 @@ from_bytes(raw_bytes)                 # load from embedded bytes
 
 register(servicer)                    # wire your implementation
 connect("host:port")                  # or proxy to a remote gRPC server
+connect_http("https://api.example")   # or proxy to a remote HTTP service
 
 use(interceptor)                      # add middleware (logging, auth, tracing)
 
@@ -156,12 +159,100 @@ srv.Connect("localhost:50051")
 srv.Serve(invariant.MCP())  // your gRPC server is now an MCP tool
 ```
 
-## Middleware
-
-Standard gRPC `UnaryServerInterceptor` pattern. Runs on every invocation across all projections.
+Remote HTTP service:
 
 ```go
-srv.Use(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+srv, _ := invariant.ServerFromDescriptor("descriptor.binpb")
+srv.ConnectHTTP("https://api.example.com")
+srv.Serve(invariant.MCP()) // your HTTP service is now an MCP tool
+```
+
+```python
+server = Server.from_descriptor("descriptor.binpb")
+server.connect_http("https://api.example.com")
+server.serve(mcp=True)  # your HTTP service is now an MCP tool
+```
+
+## HTTP Transcoding (`google.api.http`)
+
+Invariant always exposes the canonical RPC route:
+
+```text
+POST /{package.ServiceName}/{Method}
+```
+
+If you add `google.api.http` annotations, those routes are exposed too (including `additional_bindings`):
+
+```protobuf
+import "google/api/annotations.proto";
+
+service UserService {
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse) {
+    option (google.api.http) = {
+      post: "/v1/users"
+      body: "*"
+      additional_bindings {
+        post: "/v1/create-user"
+        body: "*"
+      }
+    };
+  }
+}
+```
+
+To use `google/api/annotations.proto`, add the dependency in your `buf.yaml`:
+
+```yaml
+version: v2
+modules:
+  - path: .
+deps:
+  - buf.build/googleapis/googleapis
+```
+
+Then run:
+
+```bash
+buf dep update
+```
+
+The same annotation metadata is also used by `ConnectHTTP`/`connect_http` when acting as a remote HTTP client proxy.
+
+## Supported `google.api.http` Subset
+
+Supported now:
+
+- HTTP methods: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, and `custom` method kinds.
+- Path templates: literal segments, `{field}`, `{field=*}`, `{field=**}` (only when `**` is the final segment).
+- Body mapping: `body: "*"`, `body: "field_path"`, or omitted body.
+- Canonical fallback route always available: `POST /{package.ServiceName}/{Method}`.
+- Strict request decoding (unknown fields rejected with gRPC-style `INVALID_ARGUMENT` errors).
+
+Server-side routing:
+
+- Uses primary `google.api.http` binding and all `additional_bindings`.
+
+Remote HTTP client proxy (`ConnectHTTP` / `connect_http`):
+
+- Uses the primary `google.api.http` binding when present.
+- Falls back to canonical RPC route if no annotation exists.
+- Injects outbound HTTP headers from environment variables using:
+  - `INVARIANT_HTTP_HEADER_<NAME>=value`
+  - Example: `INVARIANT_HTTP_HEADER_AUTHORIZATION="Bearer <token>"`
+  - Example: `INVARIANT_HTTP_HEADER_X_POLYMARKET_SIGNATURE="..."`
+
+Not yet implemented:
+
+- `response_body` mapping.
+- Full path-template grammar beyond the patterns above.
+- Client-side selection among `additional_bindings`.
+
+## Middleware
+
+gRPC-style unary interceptor pattern. Runs on every invocation across all projections.
+
+```go
+srv.Use(func(ctx context.Context, req any, info *invariant.ServerCallInfo, handler invariant.UnaryHandler) (any, error) {
     log.Printf("→ %s", info.FullMethod)
     resp, err := handler(ctx, req)
     log.Printf("← %s err=%v", info.FullMethod, err)
@@ -179,7 +270,7 @@ def logging_interceptor(request, context, info, handler):
 server.use(logging_interceptor)
 ```
 
-First registered = outermost. Existing gRPC ecosystem interceptors plug in directly (Go).
+First registered = outermost. Existing gRPC interceptors are usually a small adapter away in Go.
 
 ## Projections
 
@@ -187,8 +278,31 @@ First registered = outermost. Existing gRPC ecosystem interceptors plug in direc
 |------------|-------------|
 | **MCP** | Each unary RPC becomes a tool. JSON Schema from proto types. Descriptions from proto comments. Served over stdio. |
 | **CLI** | `ServiceName Method -r request.yaml`. AI agents that prefer shell over MCP can call it directly. Humans get `--help` with field types and descriptions. |
-| **HTTP** | `POST /{package.ServiceName}/{Method}` with JSON body. ConnectRPC-compatible routing. |
+| **HTTP** | Canonical RPC route: `POST /{package.ServiceName}/{Method}`. Also supports `google.api.http` routes and `additional_bindings` when present. |
 | **gRPC** | Standard gRPC server. Dynamic dispatch from descriptor — no generated server stubs needed. |
+
+## Validation And Errors
+
+- Parsing is strict by default across MCP/CLI/HTTP (unknown fields are rejected).
+- Errors are gRPC-code aligned (`INVALID_ARGUMENT`, `NOT_FOUND`, etc.).
+- HTTP maps gRPC status codes to HTTP status codes and returns:
+
+```json
+{
+  "error": {
+    "code": "INVALID_ARGUMENT",
+    "message": "proto: (line 1:27): unknown field \"extra\"",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.BadRequest",
+        "fieldViolations": [
+          {"field": "extra", "description": "proto: (line 1:27): unknown field \"extra\""}
+        ]
+      }
+    ]
+  }
+}
+```
 
 ## Install
 
@@ -206,7 +320,8 @@ pip install "invariant-protocol @ git+https://github.com/jim-technologies/invari
 
 - `buf build --include-source-info -o descriptor.binpb`
 - Generated stubs for your language (`buf generate`)
-- That's it
+- If you use `google.api.http`, add Buf dep `buf.build/googleapis/googleapis` and run `buf dep update`
+- No vendored `google/api/*.proto` files required
 
 ## License
 

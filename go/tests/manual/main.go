@@ -19,40 +19,31 @@ import (
 	"strconv"
 
 	invariant "github.com/jim-technologies/invariantprotocol/go"
+	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// GreetServicer implements GreetService RPCs using structpb.Struct.
+// GreetServicer implements GreetService RPCs using generated proto types.
 type GreetServicer struct{}
 
-func (s *GreetServicer) Greet(_ context.Context, req *structpb.Struct) (*structpb.Struct, error) {
-	name := ""
-	if v, ok := req.GetFields()["name"]; ok {
-		name = v.GetStringValue()
-	}
-	result, _ := structpb.NewStruct(map[string]any{"message": "Hi " + name + "!"})
-	return result, nil
+func (s *GreetServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	return &greetpb.GreetResponse{Message: "Hi " + req.Name + "!"}, nil
 }
 
-func (s *GreetServicer) GreetGroup(_ context.Context, req *structpb.Struct) (*structpb.Struct, error) {
-	var messages []any
-	if v, ok := req.GetFields()["people"]; ok {
-		for _, p := range v.GetListValue().GetValues() {
-			name := p.GetStructValue().GetFields()["name"].GetStringValue()
-			messages = append(messages, "Hi "+name)
-		}
+func (s *GreetServicer) GreetGroup(_ context.Context, req *greetpb.GreetGroupRequest) (*greetpb.GreetGroupResponse, error) {
+	var messages []string
+	for _, p := range req.People {
+		messages = append(messages, "Hi "+p.Name)
 	}
-	result, _ := structpb.NewStruct(map[string]any{
-		"messages": messages,
-		"count":    float64(len(messages)),
-	})
-	return result, nil
+	return &greetpb.GreetGroupResponse{
+		Messages: messages,
+		Count:    int32(len(messages)),
+	}, nil
 }
 
 func descriptorPath() string {

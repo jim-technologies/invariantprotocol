@@ -5,28 +5,22 @@ import (
 	"net"
 	"testing"
 
+	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// grpcServerServicer uses structpb.Struct for flexibility, same pattern as mcp_test.go.
+// grpcServerServicer implements GreetService RPCs using generated proto types.
 type grpcServerServicer struct{}
 
-func (s *grpcServerServicer) Greet(_ context.Context, req *structpb.Struct) (*structpb.Struct, error) {
-	name := ""
-	if v, ok := req.GetFields()["name"]; ok {
-		name = v.GetStringValue()
-	}
-	result, _ := structpb.NewStruct(map[string]any{"message": "Hello, " + name})
-	return result, nil
+func (s *grpcServerServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	return &greetpb.GreetResponse{Message: "Hello, " + req.Name}, nil
 }
 
-func (s *grpcServerServicer) GreetGroup(_ context.Context, _ *structpb.Struct) (*structpb.Struct, error) {
-	result, _ := structpb.NewStruct(map[string]any{"messages": []any{"Group hello"}, "count": float64(1)})
-	return result, nil
+func (s *grpcServerServicer) GreetGroup(_ context.Context, _ *greetpb.GreetGroupRequest) (*greetpb.GreetGroupResponse, error) {
+	return &greetpb.GreetGroupResponse{Messages: []string{"Group hello"}, Count: 1}, nil
 }
 
 func startServeGRPC(t *testing.T) (addr string, stop func()) {

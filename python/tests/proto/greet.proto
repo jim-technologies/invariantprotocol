@@ -2,6 +2,10 @@ syntax = "proto3";
 
 package greet.v1;
 
+import "google/api/annotations.proto";
+
+option go_package = "github.com/jim-technologies/invariantprotocol/go/tests/gen;greetpb";
+
 // Mood of a greeting.
 enum Mood {
   // Unspecified mood.
@@ -15,10 +19,23 @@ enum Mood {
 // A simple greeting service.
 service GreetService {
   // Greet a person by name.
-  rpc Greet(GreetRequest) returns (GreetResponse);
+  rpc Greet(GreetRequest) returns (GreetResponse) {
+    option (google.api.http) = {
+      get: "/v1/greet/{name}"
+    };
+  }
 
   // Greet multiple people at once.
-  rpc GreetGroup(GreetGroupRequest) returns (GreetGroupResponse);
+  rpc GreetGroup(GreetGroupRequest) returns (GreetGroupResponse) {
+    option (google.api.http) = {
+      post: "/v1/greet:group"
+      body: "*"
+      additional_bindings: {
+        post: "/v1/group:greet"
+        body: "*"
+      }
+    };
+  }
 }
 
 // Request for the Greet RPC.

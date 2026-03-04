@@ -2,3 +2,6 @@ version: v2
 plugins:
   - protoc_builtin: python
     out: gen
+  - protoc_builtin: go
+    out: ../../../go/tests/gen
+    opt: paths=source_relative

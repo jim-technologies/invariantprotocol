@@ -7,6 +7,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
@@ -21,17 +22,29 @@ type grpcDynamicHandler struct {
 	respDesc   protoreflect.MessageDescriptor
 }
 
+func (h *grpcDynamicHandler) requestDescriptor() protoreflect.MessageDescriptor {
+	return h.reqDesc
+}
+
+func (h *grpcDynamicHandler) callProto(ctx context.Context, req proto.Message) (proto.Message, error) {
+	resp := dynamicpb.NewMessage(h.respDesc)
+	if err := h.conn.Invoke(ctx, h.methodPath, req, resp); err != nil {
+		return nil, fmt.Errorf("grpc call %s: %w", h.methodPath, err)
+	}
+	return resp, nil
+}
+
 func (h *grpcDynamicHandler) CallJSON(ctx context.Context, argsJSON json.RawMessage) (string, error) {
 	req := dynamicpb.NewMessage(h.reqDesc)
 	if len(argsJSON) > 0 && string(argsJSON) != "null" {
-		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(argsJSON, req); err != nil {
-			return "", fmt.Errorf("unmarshal request: %w", err)
+		if err := protojson.Unmarshal(argsJSON, req); err != nil {
+			return "", invalidArgumentFromJSONError(err)
 		}
 	}
 
-	resp := dynamicpb.NewMessage(h.respDesc)
-	if err := h.conn.Invoke(ctx, h.methodPath, req, resp); err != nil {
-		return "", fmt.Errorf("grpc call %s: %w", h.methodPath, err)
+	resp, err := h.callProto(ctx, req)
+	if err != nil {
+		return "", err
 	}
 
 	out, err := (protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}).Marshal(resp)

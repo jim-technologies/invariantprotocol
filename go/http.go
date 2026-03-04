@@ -3,27 +3,33 @@ package invariant
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 )
 
 // serveHTTP starts a blocking HTTP server on the given port.
+// Pattern mirrors Python's start_http: one goroutine per request (via net/http),
+// synchronous handler calls invoke() directly.
 func (s *Server) serveHTTP(port int) error {
-	mux := http.NewServeMux()
+	bindings, err := s.buildHTTPBindings()
+	if err != nil {
+		return err
+	}
 
-	// Build route map: "/greet.v1.GreetService/Greet" -> Tool
-	for _, tool := range s.tools {
-		route := fmt.Sprintf("/%s/%s", tool.ServiceFullName, tool.MethodName)
-		t := tool // capture
-		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		binding, pathParams, methodMismatch := findHTTPBinding(bindings, r.Method, r.URL.Path)
+		if binding == nil {
+			if methodMismatch {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
-			s.handleHTTP(w, r, t)
-		})
-	}
+			http.NotFound(w, r)
+			return
+		}
+
+		s.handleHTTP(w, r, binding, pathParams)
+	})
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
@@ -33,27 +39,17 @@ func (s *Server) serveHTTP(port int) error {
 	return srv.ListenAndServe()
 }
 
-func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, tool *Tool) {
-	body, err := io.ReadAll(r.Body)
+func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, binding *httpBinding, pathParams map[string]string) {
+	argsJSON, err := binding.requestArgs(r, pathParams)
 	if err != nil {
-		httpError(w, http.StatusBadRequest, "read body: "+err.Error())
+		httpError(w, err)
 		return
 	}
 
-	var argsJSON json.RawMessage
-	if len(body) > 0 {
-		if !json.Valid(body) {
-			httpError(w, http.StatusBadRequest, "invalid JSON body")
-			return
-		}
-		argsJSON = body
-	} else {
-		argsJSON = json.RawMessage("{}")
-	}
-
-	result, err := s.invoke(r.Context(), tool, argsJSON)
+	// Boundary conversion + core dispatch + boundary conversion (JSON → proto → JSON)
+	result, err := s.invokeJSON(r.Context(), binding.tool, argsJSON)
 	if err != nil {
-		httpError(w, http.StatusBadRequest, err.Error())
+		httpError(w, err)
 		return
 	}
 
@@ -61,8 +57,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, tool *Tool) 
 	_, _ = w.Write([]byte(result)) //nolint:gosec // response is server-generated JSON, not user taint
 }
 
-func httpError(w http.ResponseWriter, code int, msg string) {
+func httpError(w http.ResponseWriter, err error) {
+	st := statusFromError(err)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	w.WriteHeader(grpcCodeToHTTPStatus(st.Code()))
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": errorPayload(err)})
 }

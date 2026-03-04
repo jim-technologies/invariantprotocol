@@ -16,6 +16,23 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
+// --- Interceptor types (mirrors gRPC pattern, zero coupling to grpc package) ---
+
+// ServerCallInfo holds metadata about the RPC being invoked, passed to interceptors.
+// Equivalent to Python's ServerCallInfo.
+type ServerCallInfo struct {
+	FullMethod string // e.g. "/greet.v1.GreetService/Greet"
+}
+
+// UnaryHandler is the handler function called at the end of the interceptor chain.
+// Equivalent to Python's Handler type.
+type UnaryHandler func(ctx context.Context, req any) (any, error)
+
+// UnaryServerInterceptor intercepts unary RPCs across all projections (MCP, HTTP,
+// gRPC, CLI). Same signature as grpc.UnaryServerInterceptor but framework-native.
+// Equivalent to Python's Interceptor type.
+type UnaryServerInterceptor func(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error)
+
 // Tool represents a single registered RPC method projected as a tool.
 type Tool struct {
 	Name            string
@@ -38,12 +55,12 @@ type Server struct {
 	tools        map[string]*Tool
 	fds          *descriptorpb.FileDescriptorSet // original FDS for dynamic message creation
 	conns        []*grpc.ClientConn              // gRPC client connections to close
-	interceptors []grpc.UnaryServerInterceptor
+	interceptors []UnaryServerInterceptor
 }
 
-// Use registers a gRPC unary server interceptor. Interceptors run in registration
-// order (first registered = outermost) on every tool invocation across all projections.
-func (s *Server) Use(interceptor grpc.UnaryServerInterceptor) {
+// Use registers an interceptor. Interceptors run in registration order
+// (first registered = outermost) on every tool invocation across all projections.
+func (s *Server) Use(interceptor UnaryServerInterceptor) {
 	s.interceptors = append(s.interceptors, interceptor)
 }
 
@@ -232,15 +249,19 @@ func (s *Server) Connect(target string, serviceName ...string) error {
 
 // Projection specifies a protocol to serve.
 type Projection struct {
-	kind string
-	port int
+	kind     string
+	port     int
+	grpcOpts []grpc.ServerOption
 }
 
 // HTTP returns a projection that serves HTTP on the given port.
 func HTTP(port int) Projection { return Projection{kind: "http", port: port} }
 
 // GRPC returns a projection that serves gRPC on the given port.
-func GRPC(port int) Projection { return Projection{kind: "grpc", port: port} }
+// Optional grpc.ServerOption values (TLS, keepalive, etc.) are passed to grpc.NewServer.
+func GRPC(port int, opts ...grpc.ServerOption) Projection {
+	return Projection{kind: "grpc", port: port, grpcOpts: opts}
+}
 
 // MCP returns a projection that serves MCP over stdio.
 func MCP() Projection { return Projection{kind: "mcp"} }
@@ -277,7 +298,7 @@ func (s *Server) serveOne(p Projection) error {
 	case "http":
 		return s.serveHTTP(p.port)
 	case "grpc":
-		return s.serveGRPC(p.port)
+		return s.serveGRPC(p.port, p.grpcOpts...)
 	default:
 		return fmt.Errorf("unknown projection: %s", p.kind)
 	}

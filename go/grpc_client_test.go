@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -253,6 +255,26 @@ func TestConnectdynamicHandlerDirect(t *testing.T) {
 	result, err := dh.CallJSON(t.Context(), []byte(`{"name": "Direct"}`))
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, Direct")
+}
+
+func TestConnectdynamicHandlerDirectRejectsUnknownField(t *testing.T) {
+	addr, stop := startTestGRPCServer(t)
+	defer stop()
+
+	srv := connectServer(t, addr)
+	defer srv.Stop()
+
+	tool := srv.tools["GreetService.Greet"]
+	dh, ok := tool.Handler.(*grpcDynamicHandler)
+	require.True(t, ok, "handler should be *grpcDynamicHandler")
+
+	_, err := dh.CallJSON(t.Context(), []byte(`{"name":"Direct","extra":"x"}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown field")
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
 func TestConnectUnknownService(t *testing.T) {

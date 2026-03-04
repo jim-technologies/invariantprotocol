@@ -4,7 +4,10 @@ import json
 import os
 import tempfile
 
+import grpc
 import pytest
+
+from invariant import InvariantError
 
 
 def test_greet_cli(server):
@@ -13,8 +16,9 @@ def test_greet_cli(server):
 
 
 def test_greet_cli_inline_invalid_json(server):
-    with pytest.raises(ValueError, match="Cannot parse inline value as JSON"):
+    with pytest.raises(InvariantError, match="Cannot parse inline value as JSON") as exc:
         server._cli(["GreetService", "Greet", "-r", "not json"])
+    assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
 
 
 def test_greet_cli_request_yaml_file(server):
@@ -95,3 +99,11 @@ def test_greet_group_cli(server):
 def test_greet_cli_missing_r_value(server):
     with pytest.raises(ValueError, match="Missing value after -r"):
         server._cli(["GreetService", "Greet", "-r"])
+
+
+def test_greet_cli_unknown_field_rejected(server):
+    with pytest.raises(InvariantError, match="field named \"extra\"") as exc:
+        server._cli(["GreetService", "Greet", "-r", '{"name": "World", "extra": "x"}'])
+    assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
+    payload = exc.value.to_payload()
+    assert payload["code"] == "INVALID_ARGUMENT"

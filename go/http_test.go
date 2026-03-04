@@ -10,62 +10,58 @@ import (
 	"net/http"
 	"testing"
 
+	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// httpTestServicer mirrors mcpTestServicer but for HTTP tests.
+// httpTestServicer implements GreetService RPCs using generated proto types.
 type httpTestServicer struct{}
 
-func (s *httpTestServicer) Greet(_ context.Context, req *structpb.Struct) (*structpb.Struct, error) {
-	fields := req.GetFields()
-	out := map[string]any{"message": "Hello, " + fields["name"].GetStringValue()}
-	if v, ok := fields["mood"]; ok {
-		out["mood"] = v.GetStringValue()
+func (s *httpTestServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	resp := &greetpb.GreetResponse{
+		Message: "Hello, " + req.Name,
+		Tags:    req.Tags,
 	}
-	if v, ok := fields["tags"]; ok && v.GetStructValue() != nil {
-		tags := make(map[string]any)
-		for k, val := range v.GetStructValue().GetFields() {
-			tags[k] = val.GetStringValue()
-		}
-		out["tags"] = tags
+	if req.Mood != nil {
+		resp.Mood = *req.Mood
 	}
-	result, _ := structpb.NewStruct(out)
-	return result, nil
+	return resp, nil
 }
 
-func (s *httpTestServicer) GreetGroup(_ context.Context, req *structpb.Struct) (*structpb.Struct, error) {
-	people := req.GetFields()["people"].GetListValue().GetValues()
-	var messages []any
-	for _, p := range people {
-		name := p.GetStructValue().GetFields()["name"].GetStringValue()
-		messages = append(messages, "Hello, "+name)
+func (s *httpTestServicer) GreetGroup(_ context.Context, req *greetpb.GreetGroupRequest) (*greetpb.GreetGroupResponse, error) {
+	var messages []string
+	for _, p := range req.People {
+		messages = append(messages, "Hello, "+p.Name)
 	}
-	result, _ := structpb.NewStruct(map[string]any{
-		"messages": messages,
-		"count":    float64(len(people)),
-	})
-	return result, nil
+	return &greetpb.GreetGroupResponse{
+		Messages: messages,
+		Count:    int32(len(req.People)),
+	}, nil
 }
 
 func startHTTPServer(t *testing.T) (port int, cancel context.CancelFunc) {
 	t.Helper()
-	srv := newServer(mustParse(t))
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
 	require.NoError(t, srv.Register(&httpTestServicer{}))
 
+	bindings, err := srv.buildHTTPBindings()
+	require.NoError(t, err)
+
 	mux := http.NewServeMux()
-	for _, tool := range srv.tools {
-		route := "/" + tool.ServiceFullName + "/" + tool.MethodName
-		t := tool
-		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		binding, pathParams, methodMismatch := findHTTPBinding(bindings, r.Method, r.URL.Path)
+		if binding == nil {
+			if methodMismatch {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
-			srv.handleHTTP(w, r, t)
-		})
-	}
+			http.NotFound(w, r)
+			return
+		}
+		srv.handleHTTP(w, r, binding, pathParams)
+	})
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
@@ -88,6 +84,20 @@ func TestHTTPGreet(t *testing.T) {
 
 	body := postJSON(t, port, "/greet.v1.GreetService/Greet", map[string]any{"name": "Alice"})
 	assert.Contains(t, body, "Hello, Alice")
+}
+
+func TestHTTPGreetViaAnnotatedRoute(t *testing.T) {
+	port, cancel := startHTTPServer(t)
+	defer cancel()
+
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/greet/Alice", port))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, 200, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "Hello, Alice")
 }
 
 func TestHTTPGreetWithEnumAndTags(t *testing.T) {
@@ -126,6 +136,39 @@ func TestHTTPGreetGroup(t *testing.T) {
 	assert.Equal(t, "Hello, Bob", messages[1])
 }
 
+func TestHTTPGreetGroupViaAnnotatedRoute(t *testing.T) {
+	port, cancel := startHTTPServer(t)
+	defer cancel()
+
+	body := postJSON(t, port, "/v1/greet:group", map[string]any{
+		"people": []any{
+			map[string]any{"name": "Alice"},
+			map[string]any{"name": "Bob"},
+		},
+	})
+
+	var data map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &data))
+	messages := data["messages"].([]any)
+	assert.Equal(t, "Hello, Alice", messages[0])
+	assert.Equal(t, "Hello, Bob", messages[1])
+}
+
+func TestHTTPGreetGroupViaAdditionalBinding(t *testing.T) {
+	port, cancel := startHTTPServer(t)
+	defer cancel()
+
+	body := postJSON(t, port, "/v1/group:greet", map[string]any{
+		"people": []any{
+			map[string]any{"name": "Alice"},
+		},
+	})
+
+	var data map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &data))
+	assert.Equal(t, "Hello, Alice", data["messages"].([]any)[0])
+}
+
 func TestHTTPMethodNotAllowed(t *testing.T) {
 	port, cancel := startHTTPServer(t)
 	defer cancel()
@@ -162,6 +205,30 @@ func TestHTTPInvalidJSON(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, 400, resp.StatusCode)
+}
+
+func TestHTTPUnknownFieldRejected(t *testing.T) {
+	port, cancel := startHTTPServer(t)
+	defer cancel()
+
+	resp, err := http.Post(
+		fmt.Sprintf("http://localhost:%d/greet.v1.GreetService/Greet", port),
+		"application/json",
+		bytes.NewReader([]byte(`{"name":"Alice","extra":"x"}`)),
+	)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, 400, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+
+	errObj := payload["error"].(map[string]any)
+	assert.Equal(t, "INVALID_ARGUMENT", errObj["code"])
+	assert.Contains(t, errObj["message"], "unknown field")
 }
 
 func TestHTTPEmptyBody(t *testing.T) {

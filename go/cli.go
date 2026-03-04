@@ -5,6 +5,10 @@
 // Values for -r are auto-detected:
 //   - Existing file path → load by extension (.yaml/.yml, .json, .binpb/.pb)
 //   - Otherwise → parse as inline JSON
+//
+// Internally proto-first: input is deserialized directly into a proto.Message,
+// passed through invoke() (proto in/out), then marshaled to JSON only at the
+// terminal output boundary.
 package invariant
 
 import (
@@ -14,9 +18,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/dynamicpb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,17 +50,104 @@ func (s *Server) cli(ctx context.Context, args []string) (string, error) {
 
 	tool := s.tools[toolName]
 
-	var requestJSON json.RawMessage
-	if requestValue != "" {
-		requestJSON, err = loadValue(requestValue)
-		if err != nil {
-			return "", fmt.Errorf("load request: %w", err)
-		}
-	} else {
-		requestJSON = json.RawMessage("{}")
+	// Build proto request directly from input.
+	req, err := s.newRequest(tool)
+	if err != nil {
+		return "", err
 	}
 
-	return s.invoke(ctx, tool, requestJSON)
+	if requestValue != "" {
+		if err := loadIntoProto(req, requestValue); err != nil {
+			return "", fmt.Errorf("load request: %w", err)
+		}
+	}
+
+	// Core dispatch (proto in / proto out).
+	resp, err := s.invoke(ctx, tool, req)
+	if err != nil {
+		return "", err
+	}
+
+	// Boundary: proto → JSON (terminal output).
+	if resp == nil {
+		return "{}", nil
+	}
+	out, err := (protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}).Marshal(resp)
+	if err != nil {
+		return "", fmt.Errorf("marshal response: %w", err)
+	}
+	return string(out), nil
+}
+
+// newRequest creates an empty proto.Message of the correct type for the tool's input.
+func (s *Server) newRequest(tool *Tool) (proto.Message, error) {
+	if provider, ok := tool.Handler.(interface {
+		requestDescriptor() protoreflect.MessageDescriptor
+	}); ok {
+		return dynamicpb.NewMessage(provider.requestDescriptor()), nil
+	}
+
+	handlerVal := reflect.ValueOf(tool.Handler)
+	handlerType := handlerVal.Type()
+	if handlerType.NumIn() != 2 || handlerType.NumOut() != 2 {
+		return nil, fmt.Errorf("handler has unexpected signature (in=%d, out=%d)", handlerType.NumIn(), handlerType.NumOut())
+	}
+	reqType := handlerType.In(1)
+	reqMsg, ok := reflect.New(reqType.Elem()).Interface().(proto.Message)
+	if !ok {
+		return nil, fmt.Errorf("request type %s does not implement proto.Message", reqType)
+	}
+	return reqMsg, nil
+}
+
+// loadIntoProto populates a proto.Message from a file path or inline JSON string.
+// File detection: if value is an existing file, load by extension.
+// Inline: parse as JSON.
+func loadIntoProto(msg proto.Message, value string) error {
+	if _, err := os.Stat(value); err == nil {
+		return loadFileIntoProto(msg, value)
+	}
+
+	// Inline JSON.
+	if !json.Valid([]byte(value)) {
+		return invalidArgumentError("cannot parse inline value as JSON")
+	}
+	if err := protojson.Unmarshal([]byte(value), msg); err != nil {
+		return invalidArgumentFromJSONError(err)
+	}
+	return nil
+}
+
+// loadFileIntoProto reads a file and deserializes it into a proto.Message.
+func loadFileIntoProto(msg proto.Message, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read file %s: %w", path, err)
+	}
+
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".binpb", ".pb":
+		return proto.Unmarshal(data, msg)
+	case ".json":
+		if err := protojson.Unmarshal(data, msg); err != nil {
+			return invalidArgumentFromJSONError(err)
+		}
+		return nil
+	default: // .yaml, .yml
+		var m any
+		if err := yaml.Unmarshal(data, &m); err != nil {
+			return fmt.Errorf("parse YAML file %s: %w", path, err)
+		}
+		jsonBytes, err := json.Marshal(convertYAMLToJSON(m))
+		if err != nil {
+			return fmt.Errorf("convert YAML to JSON for %s: %w", path, err)
+		}
+		if err := protojson.Unmarshal(jsonBytes, msg); err != nil {
+			return invalidArgumentFromJSONError(err)
+		}
+		return nil
+	}
 }
 
 // serveCLI reads args from os.Args and prints the result to stdout.
@@ -102,7 +198,7 @@ func splitCLIArgs(args []string) (serviceName, methodName, requestValue string, 
 // cliHelp returns a help string listing all registered tools and their fields.
 func (s *Server) cliHelp() string {
 	var b strings.Builder
-	b.WriteString("Usage: <binary> <ServiceName> <Method> [-r request.yaml|request.json|'{\"inline\":\"json\"}']\n\n")
+	b.WriteString("Usage: <binary> <ServiceName> <Method> [-r request.yaml|request.json|request.binpb|'{\"inline\":\"json\"}']\n\n")
 
 	if len(s.tools) == 0 {
 		b.WriteString("No tools registered.\n")
@@ -210,43 +306,6 @@ func (s *Server) resolveServiceMethod(service, method string) string {
 		}
 	}
 	return ""
-}
-
-// loadValue loads a value from file path or inline JSON string.
-// If value is an existing file, loads by extension (.yaml/.yml, .json, .binpb/.pb).
-// Otherwise parses as inline JSON.
-func loadValue(value string) (json.RawMessage, error) {
-	if _, err := os.Stat(value); err == nil {
-		return loadFile(value)
-	}
-
-	if !json.Valid([]byte(value)) {
-		return nil, errors.New("cannot parse inline value as JSON")
-	}
-	return json.RawMessage(value), nil
-}
-
-// loadFile reads a file and returns JSON bytes.
-func loadFile(path string) (json.RawMessage, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read file %s: %w", path, err)
-	}
-
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".json":
-		return json.RawMessage(data), nil
-	case ".binpb", ".pb":
-		return nil, errors.New("protobin files not yet supported in CLI")
-	default: // .yaml, .yml
-		var m any
-		if err := yaml.Unmarshal(data, &m); err != nil {
-			return nil, fmt.Errorf("parse YAML file %s: %w", path, err)
-		}
-		converted := convertYAMLToJSON(m)
-		return json.Marshal(converted)
-	}
 }
 
 // convertYAMLToJSON converts yaml.v3 decoded values to JSON-compatible types.

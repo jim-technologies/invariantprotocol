@@ -8,13 +8,21 @@ from typing import TYPE_CHECKING
 import grpc
 from google.protobuf import descriptor_pool, message_factory
 
+from invariant.errors import as_invariant_error
+
 if TYPE_CHECKING:
     from invariant.server import Server, Tool
 
 
-def start_grpc(server: Server, port: int) -> tuple[grpc.Server, int]:
-    """Start a gRPC server on the given port and return (server, actual_port)."""
-    grpc_server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+def start_grpc(server: Server, port: int, *, options: list | None = None) -> tuple[grpc.Server, int]:
+    """Start a gRPC server on the given port and return (server, actual_port).
+
+    Args:
+        options: Optional list of gRPC channel options
+            (e.g. ``[("grpc.max_receive_message_length", 1024)]``),
+            passed to ``grpc.server()``.
+    """
+    grpc_server = grpc.server(futures.ThreadPoolExecutor(max_workers=4), options=options)
     grpc_server.add_generic_rpc_handlers([_InvariantHandler(server)])
     actual_port = grpc_server.add_insecure_port(f"[::]:{port}")
     grpc_server.start()
@@ -47,7 +55,11 @@ class _InvariantHandler(grpc.GenericRpcHandler):
             return msg.SerializeToString()
 
         def handler(request, context):
-            return server._invoke(tool, request, context)
+            try:
+                return server._invoke(tool, request, context)
+            except Exception as e:
+                err = as_invariant_error(e)
+                context.abort(err.code, err.message)
 
         return grpc.unary_unary_rpc_method_handler(
             handler,

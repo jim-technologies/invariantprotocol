@@ -5,34 +5,35 @@ Format: ServiceName Method [-r request]
 Values for -r are auto-detected:
   - Existing file path → load by extension (.yaml/.yml, .json, .binpb/.pb)
   - Otherwise → parse as inline JSON
+
+Internally proto-first: input is deserialized directly into a proto message,
+passed through _invoke() (proto in/out), and returned as a proto message.
+JSON conversion happens only at the terminal output boundary in server.py.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from google.protobuf import descriptor_pool, json_format, message_factory
 
+from invariant.errors import invalid_argument, invalid_argument_from_json_error
+
 if TYPE_CHECKING:
+    from google.protobuf.message import Message
+
     from invariant.server import Server
 
 
-@dataclass
-class CLIResult:
-    """Parsed CLI arguments."""
-
-    tool_name: str
-    response: dict
-
-
-def run_cli(server: Server, args: list[str]) -> dict | str:
-    """Execute a CLI command and return the response as a dict (or help string).
+def run_cli(server: Server, args: list[str]) -> Message | str:
+    """Execute a CLI command and return the response as a proto Message (or help string).
 
     Format: ServiceName Method [-r request]
+
+    Equivalent to Go's Server.cli() — proto-first, JSON only at output boundary.
     """
     if not args or args[0] in ("--help", "-h"):
         return _cli_help(server)
@@ -46,18 +47,68 @@ def run_cli(server: Server, args: list[str]) -> dict | str:
         available = list(server.tools.keys())
         raise ValueError(f"Unknown tool '{tool_name}'. Available: {available}")
 
-    # Load request
-    request_dict = _load_value(request_value, message_type=tool.input_type) if request_value is not None else {}
+    # Build proto request directly from input.
+    request = _new_request(tool.input_type)
+    if request_value is not None:
+        _load_into_proto(request, request_value)
 
-    # Invoke
+    # Core dispatch (proto in / proto out).
+    return server._invoke(tool, request, None)
+
+
+def _new_request(input_type: str) -> Message:
+    """Create an empty proto message for the given type name."""
     pool = descriptor_pool.Default()
-    req_desc = pool.FindMessageTypeByName(tool.input_type)
+    req_desc = pool.FindMessageTypeByName(input_type)
     req_class = message_factory.GetMessageClass(req_desc)
-    request = req_class()
-    json_format.ParseDict(request_dict, request)
+    return req_class()
 
-    response = server._invoke(tool, request, None)
-    return json_format.MessageToDict(response, preserving_proto_field_name=True)
+
+def _load_into_proto(msg: Any, value: str) -> None:
+    """Populate a proto message from a file path or inline JSON string.
+
+    File detection: if value is an existing file, load by extension.
+    Inline: parse as JSON.
+
+    Equivalent to Go's loadIntoProto().
+    """
+    if os.path.isfile(value):
+        _load_file_into_proto(msg, value)
+        return
+
+    try:
+        d = json.loads(value)
+    except (json.JSONDecodeError, ValueError) as e:
+        raise invalid_argument(f"Cannot parse inline value as JSON: {e}") from None
+    try:
+        json_format.ParseDict(d, msg)
+    except Exception as e:
+        raise invalid_argument_from_json_error(e) from None
+
+
+def _load_file_into_proto(msg: Any, path: str) -> None:
+    """Read a file and deserialize it into a proto message.
+
+    Equivalent to Go's loadFileIntoProto().
+    """
+    ext = os.path.splitext(path)[1].lower()
+
+    if ext in (".binpb", ".pb"):
+        with open(path, "rb") as f:
+            msg.ParseFromString(f.read())
+        return
+
+    if ext == ".json":
+        with open(path) as f:
+            d = json.load(f)
+    else:  # .yaml, .yml
+        with open(path) as f:
+            d = yaml.safe_load(f)
+
+    try:
+        json_format.ParseDict(d, msg)
+    except Exception as e:
+        raise invalid_argument_from_json_error(e) from None
 
 
 def _split_args(
@@ -105,47 +156,9 @@ def _resolve_tool(server: Server, service_name: str, method_name: str) -> str:
     )
 
 
-def _load_value(value: str, *, message_type: str | None = None) -> dict:
-    """Load a value from file path or inline JSON string.
-
-    File detection: if value is an existing file, load by extension.
-    Inline: parse as JSON.
-    """
-    if os.path.isfile(value):
-        return _load_file(value, message_type=message_type)
-
-    try:
-        return json.loads(value)
-    except (json.JSONDecodeError, ValueError) as e:
-        raise ValueError(f"Cannot parse inline value as JSON: {e}") from None
-
-
-def _load_file(path: str, *, message_type: str | None = None) -> dict:
-    """Load a file by extension: .yaml/.yml, .json, .binpb/.pb."""
-    ext = os.path.splitext(path)[1].lower()
-
-    if ext in (".binpb", ".pb"):
-        if message_type is None:
-            raise ValueError(
-                f"Cannot load protobuf binary '{path}' without message type."
-            )
-        pool = descriptor_pool.Default()
-        desc = pool.FindMessageTypeByName(message_type)
-        cls = message_factory.GetMessageClass(desc)
-        msg = cls()
-        with open(path, "rb") as f:
-            msg.ParseFromString(f.read())
-        return json_format.MessageToDict(msg, preserving_proto_field_name=True)
-
-    with open(path) as f:
-        if ext == ".json":
-            return json.load(f)
-        return yaml.safe_load(f)
-
-
 def _cli_help(server: Server) -> str:
     """Generate help text listing all registered tools and their fields."""
-    lines = ['Usage: <binary> <ServiceName> <Method> [-r request.yaml|request.json|\'{"inline":"json"}\']', ""]
+    lines = ['Usage: <binary> <ServiceName> <Method> [-r request.yaml|request.json|request.binpb|\'{"inline":"json"}\']', ""]
 
     if not server.tools:
         lines.append("No tools registered.")
