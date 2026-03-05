@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"slices"
 	"sync"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -127,8 +128,15 @@ func (m *mcpSession) dispatch(ctx context.Context, req *jsonRPCRequest) *jsonRPC
 }
 
 func (m *mcpSession) toolsList(id json.RawMessage) *jsonRPCResponse {
+	names := make([]string, 0, len(m.server.tools))
+	for name := range m.server.tools {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
 	tools := make([]map[string]any, 0, len(m.server.tools))
-	for _, t := range m.server.tools {
+	for _, name := range names {
+		t := m.server.tools[name]
 		tools = append(tools, map[string]any{
 			"name":        t.Name,
 			"description": t.Description,

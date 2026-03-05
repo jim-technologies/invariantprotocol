@@ -1,16 +1,21 @@
 package invariant
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func startAnnotatedHTTPBackend(t *testing.T) (baseURL string, stop func()) {
@@ -293,4 +298,135 @@ func TestConnectHTTPInjectsHeadersFromEnv(t *testing.T) {
 	})
 	result := resp["result"].(map[string]any)
 	assert.Nil(t, result["isError"])
+}
+
+func TestConnectHTTPRetriesTransientGET(t *testing.T) {
+	var attempts atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/greet/World", func(w http.ResponseWriter, r *http.Request) {
+		current := attempts.Add(1)
+		if current <= 2 {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"code":    "UNAVAILABLE",
+					"message": "temporary outage",
+				},
+			})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Hello, World"})
+	})
+
+	lis, err := net.Listen("tcp", "localhost:0")
+	require.NoError(t, err)
+	server := &http.Server{Handler: mux}
+	go func() { _ = server.Serve(lis) }()
+	defer server.Close()
+
+	srv := connectHTTPServer(t, "http://"+lis.Addr().String())
+	defer srv.Stop()
+
+	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
+	require.NoError(t, err)
+	assert.Contains(t, result, "Hello, World")
+	assert.Equal(t, int32(3), attempts.Load())
+}
+
+func TestConnectHTTPDoesNotRetryPOST(t *testing.T) {
+	var attempts atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/greet:group", func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{
+				"code":    "UNAVAILABLE",
+				"message": "temporary outage",
+			},
+		})
+	})
+
+	lis, err := net.Listen("tcp", "localhost:0")
+	require.NoError(t, err)
+	server := &http.Server{Handler: mux}
+	go func() { _ = server.Serve(lis) }()
+	defer server.Close()
+
+	srv := connectHTTPServer(t, "http://"+lis.Addr().String())
+	defer srv.Stop()
+
+	_, err = srv.cli(t.Context(), []string{"GreetService", "GreetGroup", "-r", `{"people":[{"name":"Alice"}]}`})
+	require.Error(t, err)
+	assert.Equal(t, int32(1), attempts.Load())
+}
+
+func TestConnectHTTPUsesDynamicHeaderProvider(t *testing.T) {
+	var gotMethodPath string
+	var gotMethod string
+	var gotBody string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/greet/World", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Signature") != "sig-value" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{
+					"code":    "UNAUTHENTICATED",
+					"message": "missing signature",
+				},
+			})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Hello, World"})
+	})
+
+	lis, err := net.Listen("tcp", "localhost:0")
+	require.NoError(t, err)
+	server := &http.Server{Handler: mux}
+	go func() { _ = server.Serve(lis) }()
+	defer server.Close()
+
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	srv.UseHTTPHeaderProvider(func(_ context.Context, req *OutboundHTTPRequest) (map[string]string, error) {
+		gotMethodPath = req.MethodPath
+		gotMethod = req.Method
+		gotBody = string(req.Body)
+		return map[string]string{"X-Signature": "sig-value"}, nil
+	})
+	require.NoError(t, srv.ConnectHTTP("http://"+lis.Addr().String()))
+	defer srv.Stop()
+
+	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
+	require.NoError(t, err)
+	assert.Contains(t, result, "Hello, World")
+	assert.Equal(t, "/greet.v1.GreetService/Greet", gotMethodPath)
+	assert.Equal(t, http.MethodGet, gotMethod)
+	assert.Equal(t, "", gotBody)
+}
+
+func TestConnectHTTPDynamicHeaderProviderError(t *testing.T) {
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	srv.UseHTTPHeaderProvider(func(_ context.Context, _ *OutboundHTTPRequest) (map[string]string, error) {
+		return nil, errors.New("missing signing key")
+	})
+	require.NoError(t, srv.ConnectHTTP("http://localhost:1"))
+	defer srv.Stop()
+
+	_, err = srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+	assert.Contains(t, err.Error(), "missing signing key")
 }

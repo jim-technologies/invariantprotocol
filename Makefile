@@ -1,4 +1,4 @@
-.PHONY: lint fmt test generate deps
+.PHONY: lint fmt test generate deps verify-generate
 
 lint:
 	cd go && golangci-lint run ./...
@@ -19,3 +19,11 @@ generate:
 
 deps:
 	cd go && go mod tidy
+
+verify-generate:
+	$(MAKE) generate
+	@if [ -n "$$(git status --porcelain --untracked-files=all)" ]; then \
+		echo "Generated files are out of date. Run 'make generate' and commit the results."; \
+		git status --short; \
+		exit 1; \
+	fi

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	invpb "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1"
 	annotationspb "google.golang.org/genproto/googleapis/api/annotations"
@@ -26,13 +27,15 @@ import (
 )
 
 type httpDynamicHandler struct {
-	client     *http.Client
-	baseURL    *url.URL
-	binding    *httpClientBinding
-	headers    map[string]string
-	reqDesc    protoreflect.MessageDescriptor
-	respDesc   protoreflect.MessageDescriptor
-	methodPath string
+	client         *http.Client
+	baseURL        *url.URL
+	binding        *httpClientBinding
+	headers        map[string]string
+	headerProvider HTTPHeaderProvider
+	maxRetries     int
+	reqDesc        protoreflect.MessageDescriptor
+	respDesc       protoreflect.MessageDescriptor
+	methodPath     string
 }
 
 type httpClientBinding struct {
@@ -41,6 +44,14 @@ type httpClientBinding struct {
 	body     string
 	template *pathTemplate
 }
+
+const (
+	defaultHTTPClientTimeout    = 10 * time.Second
+	defaultHTTPClientMaxRetries = 2
+	baseHTTPClientRetryDelay    = 100 * time.Millisecond
+	maxHTTPClientRetryDelay     = 2 * time.Second
+	retryAfterHeader            = "Retry-After"
+)
 
 func (h *httpDynamicHandler) requestDescriptor() protoreflect.MessageDescriptor {
 	return h.reqDesc
@@ -52,48 +63,115 @@ func (h *httpDynamicHandler) callProto(ctx context.Context, req proto.Message) (
 		return nil, err
 	}
 
-	var bodyReader io.Reader
-	if len(bodyBytes) > 0 {
-		bodyReader = bytes.NewReader(bodyBytes)
-	}
+	for attempt := 0; ; attempt++ {
+		var bodyReader io.Reader
+		if len(bodyBytes) > 0 {
+			bodyReader = bytes.NewReader(bodyBytes)
+		}
 
-	httpReq, err := http.NewRequestWithContext(ctx, h.binding.method, endpointURL, bodyReader)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "build HTTP request for %s: %v", h.methodPath, err)
-	}
-	if len(bodyBytes) > 0 {
-		httpReq.Header.Set("Content-Type", "application/json")
-	}
-	httpReq.Header.Set("Accept", "application/json")
-	for name, value := range h.headers {
-		httpReq.Header.Set(name, value)
-	}
+		httpReq, err := http.NewRequestWithContext(ctx, h.binding.method, endpointURL, bodyReader)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "build HTTP request for %s: %v", h.methodPath, err)
+		}
+		if len(bodyBytes) > 0 {
+			httpReq.Header.Set("Content-Type", "application/json")
+		}
+		httpReq.Header.Set("Accept", "application/json")
+		for name, value := range h.headers {
+			httpReq.Header.Set(name, value)
+		}
+		if err := h.applyDynamicHeaders(ctx, httpReq, endpointURL, bodyBytes); err != nil {
+			return nil, err
+		}
 
-	httpResp, err := h.client.Do(httpReq) //nolint:gosec // base URL is explicit caller configuration for remote proxy mode
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "http call %s %s failed: %v", h.binding.method, endpointURL, err)
-	}
-	defer httpResp.Body.Close()
+		httpResp, err := h.client.Do(httpReq) //nolint:gosec // base URL is explicit caller configuration for remote proxy mode
+		if err != nil {
+			if h.shouldRetry(attempt, 0) {
+				if sleepErr := sleepWithContext(ctx, httpRetryDelay(attempt, "")); sleepErr != nil {
+					return nil, status.Errorf(contextErrCode(sleepErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, sleepErr)
+				}
+				continue
+			}
+			return nil, status.Errorf(codes.Unavailable, "http call %s %s failed: %v", h.binding.method, endpointURL, err)
+		}
 
-	rawResp, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "read HTTP response body: %v", err)
-	}
+		rawResp, readErr := io.ReadAll(httpResp.Body)
+		_ = httpResp.Body.Close()
+		if readErr != nil {
+			if h.shouldRetry(attempt, httpResp.StatusCode) {
+				if sleepErr := sleepWithContext(ctx, httpRetryDelay(attempt, httpResp.Header.Get(retryAfterHeader))); sleepErr != nil {
+					return nil, status.Errorf(contextErrCode(sleepErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, sleepErr)
+				}
+				continue
+			}
+			return nil, status.Errorf(codes.Unavailable, "read HTTP response body: %v", readErr)
+		}
 
-	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return nil, httpClientError(httpResp.StatusCode, rawResp)
-	}
+		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+			if h.shouldRetry(attempt, httpResp.StatusCode) {
+				if sleepErr := sleepWithContext(ctx, httpRetryDelay(attempt, httpResp.Header.Get(retryAfterHeader))); sleepErr != nil {
+					return nil, status.Errorf(contextErrCode(sleepErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, sleepErr)
+				}
+				continue
+			}
+			return nil, httpClientError(httpResp.StatusCode, rawResp)
+		}
 
-	resp := dynamicpb.NewMessage(h.respDesc)
-	trimmed := bytes.TrimSpace(rawResp)
-	if len(trimmed) == 0 {
+		resp := dynamicpb.NewMessage(h.respDesc)
+		trimmed := bytes.TrimSpace(rawResp)
+		if len(trimmed) == 0 {
+			return resp, nil
+		}
+
+		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(trimmed, resp); err != nil {
+			return nil, status.Errorf(codes.Internal, "decode HTTP response JSON: %v", err)
+		}
 		return resp, nil
 	}
+}
 
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(trimmed, resp); err != nil {
-		return nil, status.Errorf(codes.Internal, "decode HTTP response JSON: %v", err)
+func (h *httpDynamicHandler) shouldRetry(attempt, statusCode int) bool {
+	if attempt >= h.maxRetries {
+		return false
 	}
-	return resp, nil
+	if !isSafeRetryMethod(h.binding.method) {
+		return false
+	}
+	if statusCode == 0 {
+		return true
+	}
+	return shouldRetryHTTPStatus(statusCode)
+}
+
+func (h *httpDynamicHandler) applyDynamicHeaders(ctx context.Context, httpReq *http.Request, endpointURL string, bodyBytes []byte) error {
+	if h.headerProvider == nil {
+		return nil
+	}
+
+	info := &OutboundHTTPRequest{
+		MethodPath: h.methodPath,
+		Method:     h.binding.method,
+		URL:        endpointURL,
+	}
+	if len(bodyBytes) > 0 {
+		info.Body = append([]byte(nil), bodyBytes...)
+	}
+
+	headers, err := h.headerProvider(ctx, info)
+	if err != nil {
+		return status.Errorf(codes.Unauthenticated, "build outbound HTTP headers for %s: %v", h.methodPath, err)
+	}
+
+	for name, value := range headers {
+		if name == "" || value == "" {
+			continue
+		}
+		if strings.EqualFold(name, "Accept") || strings.EqualFold(name, "Content-Type") {
+			continue
+		}
+		httpReq.Header.Set(name, value)
+	}
+	return nil
 }
 
 func (h *httpDynamicHandler) CallJSON(ctx context.Context, argsJSON json.RawMessage) (string, error) {
@@ -188,13 +266,15 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 				Description: description,
 				InputSchema: s.schemaGen.MessageToSchema(methodInfo.InputType),
 				Handler: &httpDynamicHandler{
-					client:     &http.Client{},
-					baseURL:    parsedBaseURL,
-					binding:    binding,
-					headers:    headers,
-					reqDesc:    reqDesc,
-					respDesc:   respDesc,
-					methodPath: methodPath,
+					client:         &http.Client{Timeout: defaultHTTPClientTimeout},
+					baseURL:        parsedBaseURL,
+					binding:        binding,
+					headers:        headers,
+					headerProvider: s.httpHeaderProvider,
+					maxRetries:     defaultHTTPClientMaxRetries,
+					reqDesc:        reqDesc,
+					respDesc:       respDesc,
+					methodPath:     methodPath,
 				},
 				InputType:       methodInfo.InputType,
 				OutputType:      methodInfo.OutputType,
@@ -584,6 +664,84 @@ func grpcCodeFromName(name string) codes.Code {
 		}
 	}
 	return codes.Unknown
+}
+
+func shouldRetryHTTPStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func isSafeRetryMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodGet, http.MethodHead:
+		return true
+	default:
+		return false
+	}
+}
+
+func httpRetryDelay(attempt int, retryAfter string) time.Duration {
+	if d, ok := parseRetryAfterDelay(retryAfter); ok {
+		return d
+	}
+	delay := baseHTTPClientRetryDelay
+	for range attempt {
+		delay *= 2
+		if delay >= maxHTTPClientRetryDelay {
+			return maxHTTPClientRetryDelay
+		}
+	}
+	return delay
+}
+
+func parseRetryAfterDelay(raw string) (time.Duration, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(value); err == nil {
+		if secs <= 0 {
+			return 0, true
+		}
+		return time.Duration(secs) * time.Second, true
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		d := time.Until(at)
+		if d < 0 {
+			return 0, true
+		}
+		return d, true
+	}
+	return 0, false
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func contextErrCode(err error) codes.Code {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return codes.DeadlineExceeded
+	case errors.Is(err, context.Canceled):
+		return codes.Canceled
+	default:
+		return codes.Canceled
+	}
 }
 
 const outboundHTTPHeaderEnvPrefix = "INVARIANT_HTTP_HEADER_"

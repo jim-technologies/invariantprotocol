@@ -24,6 +24,52 @@ jobs:
         with:
           command: make lint
 
+  generated:
+    name: Verify Generated
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: /nix/store
+          key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
+          restore-keys: nix-${{ runner.os }}-
+
+      - uses: flox/install-flox-action@v2
+      - uses: flox/activate-action@v1
+        with:
+          command: make verify-generate
+
+  breaking:
+    name: Proto Breaking
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/cache@v4
+        with:
+          path: /nix/store
+          key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
+          restore-keys: nix-${{ runner.os }}-
+
+      - name: Ensure base commit is available
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "${BASE_SHA}"
+          fi
+
+      - uses: flox/install-flox-action@v2
+      - uses: flox/activate-action@v1
+        with:
+          command: |
+            cd proto
+            buf breaking --against ".git#ref=${{ github.event.pull_request.base.sha }},subdir=proto"
+
   test:
     name: Test
     runs-on: ubuntu-latest

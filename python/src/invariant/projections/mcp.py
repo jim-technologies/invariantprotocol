@@ -61,6 +61,7 @@ class _StdioMCP:
             )
 
         if method == "tools/list":
+            tools = sorted(self.server.tools.values(), key=lambda t: t.name)
             return _ok(
                 msg_id,
                 {
@@ -70,7 +71,7 @@ class _StdioMCP:
                             "description": t.description,
                             "inputSchema": t.input_schema,
                         }
-                        for t in self.server.tools.values()
+                        for t in tools
                     ],
                 },
             )

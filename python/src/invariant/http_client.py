@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from email.utils import parsedate_to_datetime
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +17,11 @@ from google.api import annotations_pb2
 from google.protobuf import descriptor_pool, json_format, message_factory
 
 from invariant.errors import InvariantError, invalid_argument
+
+_DEFAULT_HTTP_MAX_RETRIES = 2
+_BASE_HTTP_RETRY_DELAY_SECONDS = 0.1
+_MAX_HTTP_RETRY_DELAY_SECONDS = 2.0
+_RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
 
 @dataclass
@@ -100,10 +107,15 @@ class HTTPDynamicHandler:
         binding: HTTPClientBinding,
         output_type: str,
         timeout: float,
+        method_path: str,
+        header_provider=None,
     ) -> None:
         self._base_url = _validated_base_url(base_url)
         self._binding = binding
         self._timeout = timeout
+        self._max_retries = _DEFAULT_HTTP_MAX_RETRIES
+        self._method_path = method_path
+        self._header_provider = header_provider
         self._headers = _outbound_http_headers_from_env()
         pool = descriptor_pool.Default()
         resp_desc = pool.FindMessageTypeByName(output_type)
@@ -112,33 +124,88 @@ class HTTPDynamicHandler:
     def __call__(self, request, _context):
         args = json_format.MessageToDict(request, preserving_proto_field_name=True)
         body_bytes, target = self._binding.build(args, self._base_url)
+        attempt = 0
 
-        req = urllib.request.Request(  # noqa: S310
-            target,
-            data=body_bytes,
-            method=self._binding.method,
-        )
-        req.add_header("Accept", "application/json")
-        if body_bytes is not None:
-            req.add_header("Content-Type", "application/json")
-        for name, value in self._headers.items():
-            req.add_header(name, value)
+        while True:
+            req = urllib.request.Request(  # noqa: S310
+                target,
+                data=body_bytes,
+                method=self._binding.method,
+            )
+            req.add_header("Accept", "application/json")
+            if body_bytes is not None:
+                req.add_header("Content-Type", "application/json")
+            for name, value in self._headers.items():
+                req.add_header(name, value)
+            self._add_dynamic_headers(req, target, body_bytes)
+
+            try:
+                with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310
+                    raw = resp.read()
+            except urllib.error.HTTPError as e:
+                body = e.read()
+                if self._should_retry(attempt, status_code=e.code):
+                    delay = _retry_delay_seconds(attempt, e.headers.get("Retry-After") if e.headers else None)
+                    _sleep_seconds(delay)
+                    attempt += 1
+                    continue
+                raise _http_error(e.code, body) from None
+            except urllib.error.URLError as e:
+                if self._should_retry(attempt, status_code=0):
+                    _sleep_seconds(_retry_delay_seconds(attempt, None))
+                    attempt += 1
+                    continue
+                raise InvariantError(grpc.StatusCode.UNAVAILABLE, f"HTTP request failed: {e}") from None
+
+            out = self._resp_class()
+            if raw.strip():
+                try:
+                    json_format.Parse(raw.decode(), out, ignore_unknown_fields=True)
+                except Exception as e:
+                    raise InvariantError(grpc.StatusCode.INTERNAL, f"decode HTTP response JSON: {e}") from None
+            return out
+
+    def _should_retry(self, attempt: int, *, status_code: int) -> bool:
+        if attempt >= self._max_retries:
+            return False
+        if not _is_safe_retry_method(self._binding.method):
+            return False
+        if status_code == 0:
+            return True
+        return status_code in _RETRYABLE_HTTP_STATUSES
+
+    def _add_dynamic_headers(self, req: urllib.request.Request, target: str, body_bytes: bytes | None) -> None:
+        if self._header_provider is None:
+            return
 
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310
-                raw = resp.read()
-        except urllib.error.HTTPError as e:
-            raise _http_error(e.code, e.read()) from None
-        except urllib.error.URLError as e:
-            raise InvariantError(grpc.StatusCode.UNAVAILABLE, f"HTTP request failed: {e}") from None
+            from invariant.server import OutboundHTTPRequest
 
-        out = self._resp_class()
-        if raw.strip():
-            try:
-                json_format.Parse(raw.decode(), out, ignore_unknown_fields=True)
-            except Exception as e:
-                raise InvariantError(grpc.StatusCode.INTERNAL, f"decode HTTP response JSON: {e}") from None
-        return out
+            dynamic_headers = self._header_provider(
+                OutboundHTTPRequest(
+                    method_path=self._method_path,
+                    method=self._binding.method,
+                    url=target,
+                    body=body_bytes or b"",
+                )
+            )
+        except InvariantError:
+            raise
+        except Exception as e:
+            raise InvariantError(
+                grpc.StatusCode.UNAUTHENTICATED,
+                f"build outbound HTTP headers for {self._method_path}: {e}",
+            ) from None
+
+        if not dynamic_headers:
+            return
+        for name, value in dynamic_headers.items():
+            if not name or not value:
+                continue
+            lowered = name.lower()
+            if lowered in ("accept", "content-type"):
+                continue
+            req.add_header(name, value)
 
 
 def http_rules_by_method_path(fds) -> dict[str, Any]:
@@ -377,6 +444,52 @@ def _outbound_http_headers_from_env() -> dict[str, str]:
 def _env_header_suffix_to_http_header(suffix: str) -> str:
     parts = suffix.lower().split("_")
     return "-".join(part[:1].upper() + part[1:] if part else "" for part in parts)
+
+
+def _retry_delay_seconds(attempt: int, retry_after: str | None) -> float:
+    parsed = _parse_retry_after_seconds(retry_after)
+    if parsed is not None:
+        return parsed
+
+    delay = _BASE_HTTP_RETRY_DELAY_SECONDS
+    for _ in range(attempt):
+        delay *= 2
+        if delay >= _MAX_HTTP_RETRY_DELAY_SECONDS:
+            return _MAX_HTTP_RETRY_DELAY_SECONDS
+    return delay
+
+
+def _parse_retry_after_seconds(value: str | None) -> float | None:
+    if value is None:
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+
+    try:
+        seconds = int(trimmed)
+        return float(max(0, seconds))
+    except ValueError:
+        pass
+
+    try:
+        dt = parsedate_to_datetime(trimmed)
+    except Exception:
+        return None
+
+    if dt.tzinfo is None:
+        return 0.0
+    remaining = dt.timestamp() - time.time()
+    return max(0.0, remaining)
+
+
+def _sleep_seconds(delay: float) -> None:
+    if delay > 0:
+        time.sleep(delay)
+
+
+def _is_safe_retry_method(method: str) -> bool:
+    return method.upper() in {"GET", "HEAD"}
 
 
 def _validated_base_url(base_url: str) -> str:

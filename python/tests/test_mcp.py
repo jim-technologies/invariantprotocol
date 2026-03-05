@@ -87,6 +87,7 @@ def test_mcp_tools_list():
     )
     tools = responses[1]["result"]["tools"]
     assert len(tools) == 2
+    assert [t["name"] for t in tools] == ["GreetService.Greet", "GreetService.GreetGroup"]
     tools_by_name = {t["name"]: t for t in tools}
     assert "GreetService.Greet" in tools_by_name
     assert tools_by_name["GreetService.Greet"]["description"] == "Greet a person by name."
@@ -132,7 +133,7 @@ def test_mcp_tool_call_rejects_unknown_field():
     result = responses[1]["result"]
     assert result["isError"] is True
     assert result["error"]["code"] == "INVALID_ARGUMENT"
-    assert "field named \"extra\"" in result["error"]["message"]
+    assert 'field named "extra"' in result["error"]["message"]
     assert result["error"]["details"][0]["fieldViolations"][0]["field"] == "extra"
 
 

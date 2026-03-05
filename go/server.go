@@ -33,6 +33,19 @@ type UnaryHandler func(ctx context.Context, req any) (any, error)
 // Equivalent to Python's Interceptor type.
 type UnaryServerInterceptor func(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error)
 
+// OutboundHTTPRequest describes an HTTP request that will be sent by ConnectHTTP.
+// It is passed to HTTPHeaderProvider so callers can compute dynamic auth headers.
+type OutboundHTTPRequest struct {
+	MethodPath string // e.g. "/greet.v1.GreetService/Greet"
+	Method     string // e.g. "GET", "POST"
+	URL        string // fully expanded URL with query string
+	Body       []byte // JSON body bytes (may be empty)
+}
+
+// HTTPHeaderProvider returns extra outbound HTTP headers for ConnectHTTP requests.
+// Typical use: API signatures, short-lived tokens, per-request timestamps.
+type HTTPHeaderProvider func(ctx context.Context, req *OutboundHTTPRequest) (map[string]string, error)
+
 // Tool represents a single registered RPC method projected as a tool.
 type Tool struct {
 	Name            string
@@ -50,18 +63,25 @@ type Server struct {
 	Name    string // server name (used in MCP initialize)
 	Version string // server version
 
-	parsed       *invpb.ParsedDescriptor
-	schemaGen    *schemaGenerator
-	tools        map[string]*Tool
-	fds          *descriptorpb.FileDescriptorSet // original FDS for dynamic message creation
-	conns        []*grpc.ClientConn              // gRPC client connections to close
-	interceptors []UnaryServerInterceptor
+	parsed             *invpb.ParsedDescriptor
+	schemaGen          *schemaGenerator
+	tools              map[string]*Tool
+	fds                *descriptorpb.FileDescriptorSet // original FDS for dynamic message creation
+	conns              []*grpc.ClientConn              // gRPC client connections to close
+	interceptors       []UnaryServerInterceptor
+	httpHeaderProvider HTTPHeaderProvider
 }
 
 // Use registers an interceptor. Interceptors run in registration order
 // (first registered = outermost) on every tool invocation across all projections.
 func (s *Server) Use(interceptor UnaryServerInterceptor) {
 	s.interceptors = append(s.interceptors, interceptor)
+}
+
+// UseHTTPHeaderProvider sets an optional outbound header provider for ConnectHTTP.
+// The provider is called for every outbound HTTP request.
+func (s *Server) UseHTTPHeaderProvider(provider HTTPHeaderProvider) {
+	s.httpHeaderProvider = provider
 }
 
 func newServer(parsed *invpb.ParsedDescriptor) *Server {

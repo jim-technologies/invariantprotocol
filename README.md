@@ -116,12 +116,13 @@ connect("host:port")                  # or proxy to a remote gRPC server
 connect_http("https://api.example")   # or proxy to a remote HTTP service
 
 use(interceptor)                      # add middleware (logging, auth, tracing)
+use_http_header_provider(fn)          # optional per-request outbound HTTP auth/signing
 
 serve(...)                            # start projections (blocking)
 stop()                                # cleanup
 ```
 
-Seven methods. Everything else is convention.
+Eight methods. Everything else is convention.
 
 ## Go
 
@@ -171,6 +172,23 @@ srv.Serve(invariant.MCP()) // your HTTP service is now an MCP tool
 server = Server.from_descriptor("descriptor.binpb")
 server.connect_http("https://api.example.com")
 server.serve(mcp=True)  # your HTTP service is now an MCP tool
+```
+
+Signed HTTP requests (dynamic headers per request):
+
+```go
+srv.UseHTTPHeaderProvider(func(ctx context.Context, req *invariant.OutboundHTTPRequest) (map[string]string, error) {
+    // Example only: replace with real signing logic.
+    return map[string]string{"X-Polymarket-Signature": sign(req.Method, req.URL, req.Body)}, nil
+})
+```
+
+```python
+def sign_headers(req):
+    # Example only: replace with real signing logic.
+    return {"X-Polymarket-Signature": sign(req.method, req.url, req.body)}
+
+server.use_http_header_provider(sign_headers)
 ```
 
 ## HTTP Transcoding (`google.api.http`)
@@ -236,6 +254,8 @@ Remote HTTP client proxy (`ConnectHTTP` / `connect_http`):
 
 - Uses the primary `google.api.http` binding when present.
 - Falls back to canonical RPC route if no annotation exists.
+- Uses a built-in timeout and safe retries for `GET`/`HEAD` on transient failures (`429`, `500`, `502`, `503`, `504`), including `Retry-After` when provided.
+- Optional dynamic outbound headers via `UseHTTPHeaderProvider` / `use_http_header_provider` (for signatures and per-request auth).
 - Injects outbound HTTP headers from environment variables using:
   - `INVARIANT_HTTP_HEADER_<NAME>=value`
   - Example: `INVARIANT_HTTP_HEADER_AUTHORIZATION="Bearer <token>"`

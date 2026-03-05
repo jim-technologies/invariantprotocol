@@ -33,6 +33,19 @@ class ServerCallInfo:
     full_method: str  # e.g. "/greet.v1.GreetService/Greet"
 
 
+@dataclass
+class OutboundHTTPRequest:
+    """Outbound HTTP request metadata for dynamic header providers."""
+
+    method_path: str
+    method: str
+    url: str
+    body: bytes
+
+
+HTTPHeaderProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
+
+
 class Tool:
     """A single registered RPC method projected as a tool."""
 
@@ -89,6 +102,7 @@ class Server:
         self._http_server = None
         self._channels: list[grpc.Channel] = []
         self._interceptors: list[Interceptor] = []
+        self._http_header_provider: HTTPHeaderProvider | None = None
 
     def use(self, interceptor: Interceptor) -> None:
         """Register an interceptor. Interceptors run in registration order
@@ -97,6 +111,10 @@ class Server:
         Equivalent to Go's Server.Use().
         """
         self._interceptors.append(interceptor)
+
+    def use_http_header_provider(self, provider: HTTPHeaderProvider | None) -> None:
+        """Set optional dynamic headers for outbound ConnectHTTP requests."""
+        self._http_header_provider = provider
 
     def _invoke(self, tool: Tool, request: Any, context: Any) -> Any:
         """Core proto-in/proto-out dispatch — the equivalent of Go's invoke().
@@ -132,6 +150,7 @@ class Server:
         def wrap(interceptor, next_handler):
             def wrapped(request, context):
                 return interceptor(request, context, info, next_handler)
+
             return wrapped
 
         current = handler
@@ -195,7 +214,8 @@ class Server:
         matched = {}
         for svc_full_name, svc_info in self.parsed.services.items():
             rpc_names = {
-                name for name, info in svc_info.methods.items()
+                name
+                for name, info in svc_info.methods.items()
                 if not info.client_streaming and not info.server_streaming
             }
             if rpc_names and rpc_names & servicer_methods:
@@ -256,7 +276,13 @@ class Server:
                     method_name=method_name,
                 )
 
-    def connect_http(self, base_url: str, service_name: str | None = None, *, timeout: float = 10.0) -> None:
+    def connect_http(
+        self,
+        base_url: str,
+        service_name: str | None = None,
+        *,
+        timeout: float = 10.0,
+    ) -> None:
         """Connect to a remote HTTP service and register its methods as tools.
 
         Routes are derived from google.api.http annotations when present, otherwise
@@ -293,6 +319,8 @@ class Server:
                     binding=binding,
                     output_type=method_info.output_type,
                     timeout=timeout,
+                    method_path=method_path,
+                    header_provider=self._http_header_provider,
                 )
 
                 tool_name = f"{svc_info.name}.{method_name}"
@@ -311,9 +339,15 @@ class Server:
 
     # -- Public API: single serve method --
 
-    def serve(self, *, mcp: bool = False, cli: bool = False,
-              http: int | None = None, grpc: int | None = None,
-              grpc_options: list | None = None) -> None:
+    def serve(
+        self,
+        *,
+        mcp: bool = False,
+        cli: bool = False,
+        http: int | None = None,
+        grpc: int | None = None,
+        grpc_options: list | None = None,
+    ) -> None:
         """Start the specified projections and block.
 
         Args:
@@ -352,9 +386,11 @@ class Server:
         done = threading.Event()
 
         for kind, port in projections:
+
             def run(k=kind, p=port):
                 self._serve_one(k, p)
                 done.set()
+
             t = threading.Thread(target=run, daemon=True)
             t.start()
 
@@ -366,22 +402,27 @@ class Server:
     def _serve_one(self, kind: str, port: int | None = None) -> None:
         if kind == "mcp":
             from invariant.projections.mcp import serve_mcp
+
             serve_mcp(self)
         elif kind == "cli":
             from invariant.projections.cli import run_cli
+
             result = run_cli(self, sys.argv[1:])
             if isinstance(result, str):
                 print(result)
             else:
                 # Boundary: proto → JSON (terminal output).
                 from google.protobuf import json_format as _jf
+
                 print(_jf.MessageToJson(result, preserving_proto_field_name=True, indent=2))
         elif kind == "http":
             from invariant.projections.http import start_http
+
             httpd, _ = start_http(self, port)
             httpd.serve_forever()
         elif kind == "grpc":
             from invariant.projections.grpc import start_grpc
+
             grpc_server, _ = start_grpc(self, port, options=getattr(self, "_grpc_options", None))
             grpc_server.wait_for_termination()
 
@@ -418,6 +459,7 @@ class Server:
             return result
         # Boundary: proto → dict.
         from google.protobuf import json_format as _jf
+
         return _jf.MessageToDict(result, preserving_proto_field_name=True)
 
     def stop(self) -> None:

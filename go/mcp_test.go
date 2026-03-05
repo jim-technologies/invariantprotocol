@@ -119,15 +119,14 @@ func TestMCPToolsList(t *testing.T) {
 	tools := result["tools"].([]any)
 	assert.Len(t, tools, 2)
 
-	names := make(map[string]bool)
+	var names []string
 	for _, raw := range tools {
 		tool := raw.(map[string]any)
-		names[tool["name"].(string)] = true
+		names = append(names, tool["name"].(string))
 		assert.NotEmpty(t, tool["description"])
 		assert.NotNil(t, tool["inputSchema"])
 	}
-	assert.True(t, names["GreetService.Greet"])
-	assert.True(t, names["GreetService.GreetGroup"])
+	assert.Equal(t, []string{"GreetService.Greet", "GreetService.GreetGroup"}, names)
 }
 
 func TestMCPToolCall(t *testing.T) {
