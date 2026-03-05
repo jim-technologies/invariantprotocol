@@ -39,18 +39,20 @@ type httpDynamicHandler struct {
 }
 
 type httpClientBinding struct {
-	method   string
-	pattern  string
-	body     string
-	template *pathTemplate
+	method       string
+	pattern      string
+	body         string
+	responseBody string
+	template     *pathTemplate
 }
 
 const (
-	defaultHTTPClientTimeout    = 10 * time.Second
-	defaultHTTPClientMaxRetries = 2
-	baseHTTPClientRetryDelay    = 100 * time.Millisecond
-	maxHTTPClientRetryDelay     = 2 * time.Second
-	retryAfterHeader            = "Retry-After"
+	defaultHTTPClientTimeout     = 10 * time.Second
+	defaultHTTPClientMaxRetries  = 2
+	baseHTTPClientRetryDelay     = 100 * time.Millisecond
+	maxHTTPClientRetryDelay      = 2 * time.Second
+	retryAfterHeader             = "Retry-After"
+	defaultOutboundHTTPUserAgent = "invariant-protocol/0.1"
 )
 
 func (h *httpDynamicHandler) requestDescriptor() protoreflect.MessageDescriptor {
@@ -123,7 +125,7 @@ func (h *httpDynamicHandler) callProto(ctx context.Context, req proto.Message) (
 			return resp, nil
 		}
 
-		if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(trimmed, resp); err != nil {
+		if err := decodeHTTPResponse(trimmed, resp, h.binding.responseBody); err != nil {
 			return nil, status.Errorf(codes.Internal, "decode HTTP response JSON: %v", err)
 		}
 		return resp, nil
@@ -317,26 +319,27 @@ func (s *Server) httpRulesByMethodPath() (map[string]*annotationspb.HttpRule, er
 func pickHTTPClientBinding(rule *annotationspb.HttpRule, svcFullName, methodName string) (*httpClientBinding, error) {
 	if rule == nil {
 		pattern := fmt.Sprintf("/%s/%s", svcFullName, methodName)
-		return newHTTPClientBinding(http.MethodPost, pattern, "*")
+		return newHTTPClientBinding(http.MethodPost, pattern, "*", "")
 	}
 
 	method, pattern, err := httpMethodAndPattern(rule)
 	if err != nil {
 		return nil, err
 	}
-	return newHTTPClientBinding(method, pattern, rule.GetBody())
+	return newHTTPClientBinding(method, pattern, rule.GetBody(), rule.GetResponseBody())
 }
 
-func newHTTPClientBinding(method, pattern, body string) (*httpClientBinding, error) {
+func newHTTPClientBinding(method, pattern, body, responseBody string) (*httpClientBinding, error) {
 	template, err := parsePathTemplate(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("invalid route pattern %q: %w", pattern, err)
 	}
 	return &httpClientBinding{
-		method:   strings.ToUpper(method),
-		pattern:  pattern,
-		body:     body,
-		template: template,
+		method:       strings.ToUpper(method),
+		pattern:      pattern,
+		body:         body,
+		responseBody: responseBody,
+		template:     template,
 	}, nil
 }
 
@@ -365,6 +368,7 @@ func (b *httpClientBinding) build(req proto.Message, baseURL *url.URL) ([]byte, 
 
 	query := url.Values{}
 	if b.body != "*" {
+		working = flattenQueryWrapper(working)
 		if err := encodeQueryFields("", working, query); err != nil {
 			return nil, "", err
 		}
@@ -487,6 +491,63 @@ func cloneSlice(in []any) []any {
 		}
 	}
 	return out
+}
+
+func flattenQueryWrapper(args map[string]any) map[string]any {
+	query, ok := args["query"].(map[string]any)
+	if !ok {
+		return args
+	}
+
+	merged := cloneMap(args)
+	delete(merged, "query")
+	for key, value := range query {
+		if _, exists := merged[key]; !exists {
+			merged[key] = value
+		}
+	}
+	return merged
+}
+
+func wrapResponseBody(payload any, fieldPath string) map[string]any {
+	parts := strings.Split(fieldPath, ".")
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			filtered = append(filtered, part)
+		}
+	}
+	if len(filtered) == 0 {
+		return map[string]any{}
+	}
+
+	out := payload
+	for i := len(filtered) - 1; i >= 0; i-- {
+		out = map[string]any{filtered[i]: out}
+	}
+	wrapped, _ := out.(map[string]any)
+	return wrapped
+}
+
+func decodeHTTPResponse(raw []byte, msg proto.Message, responseBody string) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil
+	}
+
+	if responseBody != "" && responseBody != "*" {
+		var payload any
+		if err := json.Unmarshal(trimmed, &payload); err != nil {
+			return err
+		}
+		wrapped := wrapResponseBody(payload, responseBody)
+		encoded, err := json.Marshal(wrapped)
+		if err != nil {
+			return err
+		}
+		trimmed = encoded
+	}
+	return (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(trimmed, msg)
 }
 
 func getNestedField(root map[string]any, fieldPath string) (any, bool) {
@@ -764,6 +825,9 @@ func outboundHTTPHeadersFromEnv() map[string]string {
 			continue
 		}
 		out[name] = value
+	}
+	if _, ok := out["User-Agent"]; !ok {
+		out["User-Agent"] = defaultOutboundHTTPUserAgent
 	}
 	return out
 }

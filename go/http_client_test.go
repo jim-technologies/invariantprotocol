@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -260,6 +261,42 @@ func TestConnectHTTPBasePath(t *testing.T) {
 	assert.Contains(t, block["text"], "Hello, World")
 }
 
+func TestFlattenQueryWrapper(t *testing.T) {
+	in := map[string]any{
+		"id": 42,
+		"query": map[string]any{
+			"limit":   5,
+			"filters": map[string]any{"hero_id": 1},
+		},
+	}
+	got := flattenQueryWrapper(in)
+
+	require.NotContains(t, got, "query")
+	assert.Equal(t, 42, got["id"])
+	assert.Equal(t, 5, got["limit"])
+	assert.Equal(t, map[string]any{"hero_id": 1}, got["filters"])
+}
+
+func TestFlattenQueryWrapperDoesNotOverrideExplicitFields(t *testing.T) {
+	in := map[string]any{
+		"id":    42,
+		"limit": 3,
+		"query": map[string]any{
+			"limit": 5,
+		},
+	}
+	got := flattenQueryWrapper(in)
+
+	assert.Equal(t, 3, got["limit"])
+}
+
+func TestDecodeHTTPResponseWithResponseBody(t *testing.T) {
+	resp := &greetpb.GreetResponse{}
+	err := decodeHTTPResponse([]byte(`"Hello, World"`), resp, "message")
+	require.NoError(t, err)
+	assert.Equal(t, "Hello, World", resp.GetMessage())
+}
+
 func TestConnectHTTPInjectsHeadersFromEnv(t *testing.T) {
 	t.Setenv("INVARIANT_HTTP_HEADER_AUTHORIZATION", "Bearer test-token")
 
@@ -298,6 +335,59 @@ func TestConnectHTTPInjectsHeadersFromEnv(t *testing.T) {
 	})
 	result := resp["result"].(map[string]any)
 	assert.Nil(t, result["isError"])
+}
+
+func TestConnectHTTPSetsDefaultUserAgent(t *testing.T) {
+	t.Setenv("INVARIANT_HTTP_HEADER_USER_AGENT", "")
+	var seenUserAgent string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/greet/World", func(w http.ResponseWriter, r *http.Request) {
+		seenUserAgent = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Hello, World"})
+	})
+
+	lis, err := net.Listen("tcp", "localhost:0")
+	require.NoError(t, err)
+	server := &http.Server{Handler: mux}
+	go func() { _ = server.Serve(lis) }()
+	defer server.Close()
+
+	srv := connectHTTPServer(t, "http://"+lis.Addr().String())
+	defer srv.Stop()
+
+	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
+	require.NoError(t, err)
+	assert.Contains(t, result, "Hello, World")
+	require.NotEmpty(t, seenUserAgent)
+	assert.True(t, strings.HasPrefix(seenUserAgent, "invariant-protocol/"))
+}
+
+func TestConnectHTTPUserAgentOverrideFromEnv(t *testing.T) {
+	t.Setenv("INVARIANT_HTTP_HEADER_USER_AGENT", "custom-agent/9.9")
+	var seenUserAgent string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/greet/World", func(w http.ResponseWriter, r *http.Request) {
+		seenUserAgent = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Hello, World"})
+	})
+
+	lis, err := net.Listen("tcp", "localhost:0")
+	require.NoError(t, err)
+	server := &http.Server{Handler: mux}
+	go func() { _ = server.Serve(lis) }()
+	defer server.Close()
+
+	srv := connectHTTPServer(t, "http://"+lis.Addr().String())
+	defer srv.Stop()
+
+	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
+	require.NoError(t, err)
+	assert.Contains(t, result, "Hello, World")
+	assert.Equal(t, "custom-agent/9.9", seenUserAgent)
 }
 
 func TestConnectHTTPRetriesTransientGET(t *testing.T) {
