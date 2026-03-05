@@ -27,6 +27,7 @@ pyyaml.pkg-path = "python313Packages.pyyaml"
 protoc-gen-go.pkg-path = "protoc-gen-go"
 golangci-lint.pkg-path = "golangci-lint"
 ruff.pkg-path = "ruff"
+protoc.pkg-path = "protobuf"
 # gum.pkg-path = "gum"
 # gum.version = "^0.14.5"
 
