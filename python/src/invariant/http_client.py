@@ -5,14 +5,13 @@ from __future__ import annotations
 import json
 import os
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from typing import Any
 
 import grpc
+import httpx
 from google.api import annotations_pb2
 from google.protobuf import descriptor_pool, json_format, message_factory
 
@@ -22,6 +21,7 @@ _DEFAULT_HTTP_MAX_RETRIES = 2
 _BASE_HTTP_RETRY_DELAY_SECONDS = 0.1
 _MAX_HTTP_RETRY_DELAY_SECONDS = 2.0
 _RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
+_DEFAULT_USER_AGENT = "invariant-protocol/0.1"
 
 
 @dataclass
@@ -29,14 +29,16 @@ class HTTPClientBinding:
     method: str
     pattern: str
     body: str
+    response_body: str
     template: _PathTemplate
 
     @classmethod
-    def new(cls, method: str, pattern: str, body: str) -> HTTPClientBinding:
+    def new(cls, method: str, pattern: str, body: str, response_body: str = "") -> HTTPClientBinding:
         return cls(
             method=method.upper(),
             pattern=pattern,
             body=body,
+            response_body=response_body,
             template=_PathTemplate.parse(pattern),
         )
 
@@ -53,6 +55,9 @@ class HTTPClientBinding:
 
         query = ""
         if self.body != "*":
+            # Compatibility shim for descriptors that model query params inside a
+            # top-level `query` struct/map instead of flattened scalar fields.
+            working = _flatten_query_wrapper(working)
             params: list[tuple[str, str]] = []
             _encode_query_fields("", working, params)
             if params:
@@ -127,43 +132,48 @@ class HTTPDynamicHandler:
         attempt = 0
 
         while True:
-            req = urllib.request.Request(  # noqa: S310
-                target,
-                data=body_bytes,
-                method=self._binding.method,
-            )
-            req.add_header("Accept", "application/json")
-            if body_bytes is not None:
-                req.add_header("Content-Type", "application/json")
-            for name, value in self._headers.items():
-                req.add_header(name, value)
-            self._add_dynamic_headers(req, target, body_bytes)
+            headers = self._build_headers(target, body_bytes)
 
             try:
-                with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310
-                    raw = resp.read()
-            except urllib.error.HTTPError as e:
-                body = e.read()
-                if self._should_retry(attempt, status_code=e.code):
-                    delay = _retry_delay_seconds(attempt, e.headers.get("Retry-After") if e.headers else None)
-                    _sleep_seconds(delay)
-                    attempt += 1
-                    continue
-                raise _http_error(e.code, body) from None
-            except urllib.error.URLError as e:
+                response = httpx.request(
+                    self._binding.method,
+                    target,
+                    content=body_bytes,
+                    headers=headers,
+                    timeout=self._timeout,
+                )
+            except httpx.RequestError as e:
                 if self._should_retry(attempt, status_code=0):
                     _sleep_seconds(_retry_delay_seconds(attempt, None))
                     attempt += 1
                     continue
                 raise InvariantError(grpc.StatusCode.UNAVAILABLE, f"HTTP request failed: {e}") from None
 
+            if response.status_code >= 400:
+                if self._should_retry(attempt, status_code=response.status_code):
+                    delay = _retry_delay_seconds(attempt, response.headers.get("Retry-After"))
+                    _sleep_seconds(delay)
+                    attempt += 1
+                    continue
+                raise _http_error(response.status_code, response.content) from None
+
             out = self._resp_class()
+            raw = response.content
             if raw.strip():
                 try:
-                    json_format.Parse(raw.decode(), out, ignore_unknown_fields=True)
+                    self._parse_http_response(raw, out)
                 except Exception as e:
                     raise InvariantError(grpc.StatusCode.INTERNAL, f"decode HTTP response JSON: {e}") from None
             return out
+
+    def _parse_http_response(self, raw: bytes, out: Any) -> None:
+        decoded = raw.decode()
+        if self._binding.response_body and self._binding.response_body != "*":
+            payload = json.loads(decoded)
+            wrapped = _wrap_response_body(payload, self._binding.response_body)
+            json_format.ParseDict(wrapped, out, ignore_unknown_fields=True)
+            return
+        json_format.Parse(decoded, out, ignore_unknown_fields=True)
 
     def _should_retry(self, attempt: int, *, status_code: int) -> bool:
         if attempt >= self._max_retries:
@@ -174,7 +184,15 @@ class HTTPDynamicHandler:
             return True
         return status_code in _RETRYABLE_HTTP_STATUSES
 
-    def _add_dynamic_headers(self, req: urllib.request.Request, target: str, body_bytes: bytes | None) -> None:
+    def _build_headers(self, target: str, body_bytes: bytes | None) -> dict[str, str]:
+        headers: dict[str, str] = {"Accept": "application/json"}
+        if body_bytes is not None:
+            headers["Content-Type"] = "application/json"
+        headers.update(self._headers)
+        self._add_dynamic_headers(headers, target, body_bytes)
+        return headers
+
+    def _add_dynamic_headers(self, headers: dict[str, str], target: str, body_bytes: bytes | None) -> None:
         if self._header_provider is None:
             return
 
@@ -205,7 +223,7 @@ class HTTPDynamicHandler:
             lowered = name.lower()
             if lowered in ("accept", "content-type"):
                 continue
-            req.add_header(name, value)
+            headers[name] = value
 
 
 def http_rules_by_method_path(fds) -> dict[str, Any]:
@@ -227,7 +245,7 @@ def client_binding_for_method(rule, service_full_name: str, method_name: str) ->
         return HTTPClientBinding.new("POST", f"/{service_full_name}/{method_name}", "*")
 
     method, pattern = _method_and_pattern(rule)
-    return HTTPClientBinding.new(method, pattern, rule.body)
+    return HTTPClientBinding.new(method, pattern, rule.body, rule.response_body)
 
 
 def _method_and_pattern(rule) -> tuple[str, str]:
@@ -311,6 +329,29 @@ def _clone_list(data: list[Any]) -> list[Any]:
             out.append(_clone_list(value))
         else:
             out.append(value)
+    return out
+
+
+def _flatten_query_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    query = args.get("query")
+    if not isinstance(query, dict):
+        return args
+
+    merged = _clone_map(args)
+    merged.pop("query", None)
+    for key, value in query.items():
+        if key not in merged:
+            merged[key] = value
+    return merged
+
+
+def _wrap_response_body(payload: Any, field_path: str) -> dict[str, Any]:
+    parts = [p for p in field_path.split(".") if p]
+    if not parts:
+        return {}
+    out: Any = payload
+    for part in reversed(parts):
+        out = {part: out}
     return out
 
 
@@ -438,6 +479,8 @@ def _outbound_http_headers_from_env() -> dict[str, str]:
         if name in ("Accept", "Content-Type"):
             continue
         out[name] = value
+    if "User-Agent" not in out:
+        out["User-Agent"] = _DEFAULT_USER_AGENT
     return out
 
 
