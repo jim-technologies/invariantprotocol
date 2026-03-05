@@ -8,8 +8,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from email.utils import parsedate_to_datetime
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import grpc
@@ -363,7 +363,7 @@ def _encode_query_fields(prefix: str, value: Any, out: list[tuple[str, str]]) ->
 def _scalar_to_string(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, (str, int, float)):
+    if isinstance(value, str | int | float):
         return str(value)
     raise invalid_argument(f"expected scalar value, got {type(value).__name__}")
 

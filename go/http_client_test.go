@@ -304,7 +304,7 @@ func TestConnectHTTPRetriesTransientGET(t *testing.T) {
 	var attempts atomic.Int32
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/greet/World", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/greet/World", func(w http.ResponseWriter, _ *http.Request) {
 		current := attempts.Add(1)
 		if current <= 2 {
 			w.Header().Set("Content-Type", "application/json")
@@ -342,7 +342,7 @@ func TestConnectHTTPDoesNotRetryPOST(t *testing.T) {
 	var attempts atomic.Int32
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/greet:group", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/greet:group", func(w http.ResponseWriter, _ *http.Request) {
 		attempts.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -413,7 +413,7 @@ func TestConnectHTTPUsesDynamicHeaderProvider(t *testing.T) {
 	assert.Contains(t, result, "Hello, World")
 	assert.Equal(t, "/greet.v1.GreetService/Greet", gotMethodPath)
 	assert.Equal(t, http.MethodGet, gotMethod)
-	assert.Equal(t, "", gotBody)
+	assert.Empty(t, gotBody)
 }
 
 func TestConnectHTTPDynamicHeaderProviderError(t *testing.T) {

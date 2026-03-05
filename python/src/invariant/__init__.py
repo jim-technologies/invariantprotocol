@@ -1,7 +1,7 @@
 from invariant.errors import InvariantError
 from invariant.server import (
-    HTTPHeaderProvider,
     Handler,
+    HTTPHeaderProvider,
     Interceptor,
     OutboundHTTPRequest,
     Server,
