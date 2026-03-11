@@ -242,6 +242,10 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 				continue
 			}
 
+			if !s.shouldInclude(svcFullName, methodName) {
+				continue
+			}
+
 			reqDesc, err := findMessageDescriptor(files, methodInfo.InputType)
 			if err != nil {
 				return err

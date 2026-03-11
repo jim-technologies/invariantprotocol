@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -113,7 +114,10 @@ func connectServer(t *testing.T, target string) *Server {
 	t.Helper()
 	srv, err := ServerFromDescriptor(descriptorPath())
 	require.NoError(t, err)
-	require.NoError(t, srv.Connect(target))
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() })
+	require.NoError(t, srv.Connect(conn))
 	return srv
 }
 
@@ -124,7 +128,7 @@ func TestConnectRegistersTools(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-	defer srv.Stop()
+
 
 	assert.Len(t, srv.tools, 2)
 	assert.Contains(t, srv.tools, "GreetService.Greet")
@@ -136,7 +140,6 @@ func TestConnectToolSchemaMatches(t *testing.T) {
 	defer stop()
 
 	remote := connectServer(t, addr)
-	defer remote.Stop()
 
 	local := registeredServer(t)
 
@@ -151,7 +154,7 @@ func TestConnectMCPToolsList(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-	defer srv.Stop()
+
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
@@ -166,7 +169,7 @@ func TestConnectMCPToolCall(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-	defer srv.Stop()
+
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -190,7 +193,7 @@ func TestConnectMCPToolCallWithEnum(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-	defer srv.Stop()
+
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -218,7 +221,7 @@ func TestConnectMCPToolCallGreetGroup(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-	defer srv.Stop()
+
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -246,7 +249,7 @@ func TestConnectdynamicHandlerDirect(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-	defer srv.Stop()
+
 
 	tool := srv.tools["GreetService.Greet"]
 	dh, ok := tool.Handler.(*grpcDynamicHandler)
@@ -262,7 +265,7 @@ func TestConnectdynamicHandlerDirectRejectsUnknownField(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-	defer srv.Stop()
+
 
 	tool := srv.tools["GreetService.Greet"]
 	dh, ok := tool.Handler.(*grpcDynamicHandler)
@@ -277,12 +280,16 @@ func TestConnectdynamicHandlerDirectRejectsUnknownField(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
-func TestConnectUnknownService(t *testing.T) {
+func TestConnectIncludeExclude(t *testing.T) {
 	srv, err := ServerFromDescriptor(descriptorPath())
 	require.NoError(t, err)
-	err = srv.Connect("localhost:1", "does.not.ExistService")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	srv.Include("greet.v1.GreetService.Greet")
+	conn, err := grpc.NewClient("localhost:1", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() })
+	require.NoError(t, srv.Connect(conn))
+	assert.Len(t, srv.Tools(), 1)
+	assert.Contains(t, srv.Tools(), "GreetService.Greet")
 }
 
 func TestConnectMultipleRequests(t *testing.T) {
@@ -290,7 +297,7 @@ func TestConnectMultipleRequests(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-	defer srv.Stop()
+
 
 	resps := sendMultiMCP(t, srv,
 		map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"},
@@ -321,7 +328,7 @@ func TestConnectEmptyArgs(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-	defer srv.Stop()
+
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -350,7 +357,10 @@ func TestServerFromBytesStoresFDS(t *testing.T) {
 
 func TestNewServerNoFDS(t *testing.T) {
 	srv := newServer(mustParse(t))
-	err := srv.Connect("localhost:1", "greet.v1.GreetService")
+	conn, err := grpc.NewClient("localhost:1", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() })
+	err = srv.Connect(conn)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ServerFromDescriptor or ServerFromBytes")
 }

@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 
 	invpb "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -67,9 +67,10 @@ type Server struct {
 	schemaGen          *schemaGenerator
 	tools              map[string]*Tool
 	fds                *descriptorpb.FileDescriptorSet // original FDS for dynamic message creation
-	conns              []*grpc.ClientConn              // gRPC client connections to close
 	interceptors       []UnaryServerInterceptor
 	httpHeaderProvider HTTPHeaderProvider
+	includes           []string // glob patterns for methods to include
+	excludes           []string // glob patterns for methods to exclude
 }
 
 // Use registers an interceptor. Interceptors run in registration order
@@ -82,6 +83,99 @@ func (s *Server) Use(interceptor UnaryServerInterceptor) {
 // The provider is called for every outbound HTTP request.
 func (s *Server) UseHTTPHeaderProvider(provider HTTPHeaderProvider) {
 	s.httpHeaderProvider = provider
+}
+
+// Include adds glob patterns for methods to include. Only methods matching at
+// least one include pattern are registered. Patterns are matched against the
+// fully qualified method path: "service.full.Name.MethodName".
+// Use "*" to match any sequence of characters (including dots).
+// Examples: "temporal.api.workflowservice.v1.WorkflowService.*", "*.StartWorkflow*"
+func (s *Server) Include(patterns ...string) {
+	s.includes = append(s.includes, patterns...)
+}
+
+// Exclude adds glob patterns for methods to exclude. Methods matching any
+// exclude pattern are skipped during registration. Exclude is applied after
+// include. Patterns use the same syntax as Include.
+func (s *Server) Exclude(patterns ...string) {
+	s.excludes = append(s.excludes, patterns...)
+}
+
+// shouldInclude returns true if the method should be registered based on
+// the configured include/exclude patterns and INVARIANT_INCLUDE/INVARIANT_EXCLUDE
+// environment variables.
+func (s *Server) shouldInclude(serviceFullName, methodName string) bool {
+	fullPath := serviceFullName + "." + methodName
+
+	includes := s.includes
+	if env := os.Getenv("INVARIANT_INCLUDE"); env != "" {
+		includes = append(includes, splitPatterns(env)...)
+	}
+
+	excludes := s.excludes
+	if env := os.Getenv("INVARIANT_EXCLUDE"); env != "" {
+		excludes = append(excludes, splitPatterns(env)...)
+	}
+
+	if len(includes) > 0 {
+		matched := false
+		for _, pattern := range includes {
+			if globMatch(pattern, fullPath) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	for _, pattern := range excludes {
+		if globMatch(pattern, fullPath) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// globMatch matches a pattern against a string where "*" matches any sequence
+// of characters (including dots). This is simpler than filepath.Match which
+// treats "/" specially.
+func globMatch(pattern, s string) bool {
+	for len(pattern) > 0 {
+		switch pattern[0] {
+		case '*':
+			pattern = pattern[1:]
+			if len(pattern) == 0 {
+				return true
+			}
+			for i := 0; i <= len(s); i++ {
+				if globMatch(pattern, s[i:]) {
+					return true
+				}
+			}
+			return false
+		default:
+			if len(s) == 0 || pattern[0] != s[0] {
+				return false
+			}
+			pattern = pattern[1:]
+			s = s[1:]
+		}
+	}
+	return len(s) == 0
+}
+
+func splitPatterns(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func newServer(parsed *invpb.ParsedDescriptor) *Server {
@@ -156,6 +250,10 @@ func (s *Server) Register(servicer any, serviceName ...string) error {
 				continue
 			}
 
+			if !s.shouldInclude(svcFullName, methodName) {
+				continue
+			}
+
 			method := servicerVal.MethodByName(methodName)
 			if !method.IsValid() {
 				continue
@@ -201,10 +299,10 @@ func (s *Server) matchServicer(servicer any) map[string]*invpb.ServiceInfo {
 	return matched
 }
 
-// Connect opens a gRPC connection to target and registers its methods as tools.
-// If serviceName is provided, only that service is registered; otherwise all
-// services in the descriptor are registered.
-func (s *Server) Connect(target string, serviceName ...string) error {
+// Connect registers a gRPC client connection's methods as tools.
+// The caller creates and manages the *grpc.ClientConn; Connect only reads from it.
+// Use Include/Exclude to filter which services and methods are registered.
+func (s *Server) Connect(conn *grpc.ClientConn) error {
 	if s.fds == nil {
 		return errors.New("connect requires a Server created via ServerFromDescriptor or ServerFromBytes")
 	}
@@ -214,25 +312,15 @@ func (s *Server) Connect(target string, serviceName ...string) error {
 		return err
 	}
 
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return fmt.Errorf("connect to %s: %w", target, err)
-	}
-	s.conns = append(s.conns, conn)
-
 	services := s.parsed.Services
-	if len(serviceName) > 0 && serviceName[0] != "" {
-		name := serviceName[0]
-		svcInfo, ok := services[name]
-		if !ok {
-			return fmt.Errorf("service %q not found in descriptor", name)
-		}
-		services = map[string]*invpb.ServiceInfo{name: svcInfo}
-	}
 
 	for svcFullName, svcInfo := range services {
 		for methodName, methodInfo := range svcInfo.Methods {
 			if methodInfo.ClientStreaming || methodInfo.ServerStreaming {
+				continue
+			}
+
+			if !s.shouldInclude(svcFullName, methodName) {
 				continue
 			}
 
@@ -324,12 +412,13 @@ func (s *Server) serveOne(p Projection) error {
 	}
 }
 
-// Stop closes all gRPC client connections opened by Connect.
-func (s *Server) Stop() {
-	for _, conn := range s.conns {
-		conn.Close()
+// Tools returns a snapshot of the registered tool names to their Tool metadata.
+func (s *Server) Tools() map[string]*Tool {
+	out := make(map[string]*Tool, len(s.tools))
+	for k, v := range s.tools {
+		out[k] = v
 	}
-	s.conns = nil
+	return out
 }
 
 func (s *Server) buildProtoFiles() (*protoregistry.Files, error) {

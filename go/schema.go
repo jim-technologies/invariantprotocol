@@ -49,12 +49,13 @@ var wkt = map[string]map[string]any{
 
 // schemaGenerator converts parsed proto types to JSON Schema.
 type schemaGenerator struct {
-	parsed *invpb.ParsedDescriptor
+	parsed   *invpb.ParsedDescriptor
+	visiting map[string]bool // cycle detection for recursive message types
 }
 
 // newSchemaGenerator creates a schemaGenerator from a ParsedDescriptor.
 func newSchemaGenerator(parsed *invpb.ParsedDescriptor) *schemaGenerator {
-	return &schemaGenerator{parsed: parsed}
+	return &schemaGenerator{parsed: parsed, visiting: make(map[string]bool)}
 }
 
 // MessageToSchema converts a fully-qualified message name to a JSON Schema.
@@ -63,6 +64,7 @@ func (sg *schemaGenerator) MessageToSchema(fullName string) map[string]any {
 	if !ok {
 		return map[string]any{"type": "object"}
 	}
+	clear(sg.visiting)
 	return sg.messageSchema(msg)
 }
 
@@ -147,11 +149,17 @@ func (sg *schemaGenerator) messageTypeSchema(typeName string) map[string]any {
 		maps.Copy(result, w)
 		return result
 	}
+	if sg.visiting[typeName] {
+		return map[string]any{"type": "object"}
+	}
 	msg, ok := sg.parsed.Messages[typeName]
 	if !ok {
 		return map[string]any{"type": "object"}
 	}
-	return sg.messageSchema(msg)
+	sg.visiting[typeName] = true
+	schema := sg.messageSchema(msg)
+	delete(sg.visiting, typeName)
+	return schema
 }
 
 func (sg *schemaGenerator) enumSchema(typeName string) map[string]any {

@@ -148,7 +148,6 @@ func TestServeGRPCViaConnect(t *testing.T) {
 	defer stop()
 
 	client := connectServer(t, addr)
-	defer client.Stop()
 
 	result, err := client.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"E2E"}`})
 	require.NoError(t, err)

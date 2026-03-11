@@ -21,6 +21,7 @@ import (
 	invariant "github.com/jim-technologies/invariantprotocol/go"
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -65,11 +66,15 @@ func runMCP() error {
 	if err != nil {
 		return fmt.Errorf("load descriptor: %w", err)
 	}
-	defer server.Stop()
 
 	if remote := flagValue("--remote"); remote != "" {
-		if err := server.Connect(remote); err != nil {
+		conn, err := grpc.NewClient(remote, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
 			return fmt.Errorf("connect to %s: %w", remote, err)
+		}
+		defer conn.Close()
+		if err := server.Connect(conn); err != nil {
+			return fmt.Errorf("register from %s: %w", remote, err)
 		}
 	} else {
 		if err := server.Register(&GreetServicer{}); err != nil {
@@ -191,11 +196,15 @@ func runCLI() error {
 	if err != nil {
 		return fmt.Errorf("load descriptor: %w", err)
 	}
-	defer server.Stop()
 
 	if remote := flagValue("--remote"); remote != "" {
-		if err := server.Connect(remote); err != nil {
+		conn, err := grpc.NewClient(remote, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
 			return fmt.Errorf("connect to %s: %w", remote, err)
+		}
+		defer conn.Close()
+		if err := server.Connect(conn); err != nil {
+			return fmt.Errorf("register from %s: %w", remote, err)
 		}
 	} else {
 		if err := server.Register(&GreetServicer{}); err != nil {
