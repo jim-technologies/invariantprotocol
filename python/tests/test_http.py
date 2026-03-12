@@ -236,7 +236,7 @@ def test_greet_http_unknown_field_rejected(server):
             assert e.code == 400
             body = json.loads(e.read())
             assert body["error"]["code"] == "INVALID_ARGUMENT"
-            assert "field named \"extra\"" in body["error"]["message"]
+            assert 'field named "extra"' in body["error"]["message"]
             assert body["error"]["details"][0]["fieldViolations"][0]["field"] == "extra"
     finally:
         server._stop_http()

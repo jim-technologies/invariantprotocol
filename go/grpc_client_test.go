@@ -129,7 +129,6 @@ func TestConnectRegistersTools(t *testing.T) {
 
 	srv := connectServer(t, addr)
 
-
 	assert.Len(t, srv.tools, 2)
 	assert.Contains(t, srv.tools, "GreetService.Greet")
 	assert.Contains(t, srv.tools, "GreetService.GreetGroup")
@@ -155,7 +154,6 @@ func TestConnectMCPToolsList(t *testing.T) {
 
 	srv := connectServer(t, addr)
 
-
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/list",
 	})
@@ -169,7 +167,6 @@ func TestConnectMCPToolCall(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -193,7 +190,6 @@ func TestConnectMCPToolCallWithEnum(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -222,7 +218,6 @@ func TestConnectMCPToolCallGreetGroup(t *testing.T) {
 
 	srv := connectServer(t, addr)
 
-
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
@@ -250,7 +245,6 @@ func TestConnectdynamicHandlerDirect(t *testing.T) {
 
 	srv := connectServer(t, addr)
 
-
 	tool := srv.tools["GreetService.Greet"]
 	dh, ok := tool.Handler.(*grpcDynamicHandler)
 	require.True(t, ok, "handler should be *grpcDynamicHandler")
@@ -265,7 +259,6 @@ func TestConnectdynamicHandlerDirectRejectsUnknownField(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-
 
 	tool := srv.tools["GreetService.Greet"]
 	dh, ok := tool.Handler.(*grpcDynamicHandler)
@@ -298,7 +291,6 @@ func TestConnectMultipleRequests(t *testing.T) {
 
 	srv := connectServer(t, addr)
 
-
 	resps := sendMultiMCP(t, srv,
 		map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"},
 		map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -328,7 +320,6 @@ func TestConnectEmptyArgs(t *testing.T) {
 	defer stop()
 
 	srv := connectServer(t, addr)
-
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",

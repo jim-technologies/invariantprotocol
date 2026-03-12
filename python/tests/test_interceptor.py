@@ -103,6 +103,7 @@ def test_interceptor_chain_order(server):
             resp = handler(request, context)
             log.append(f"{label}-after")
             return resp
+
         return interceptor
 
     server.use(make_interceptor("A"))

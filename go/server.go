@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"strings"
@@ -89,7 +90,7 @@ func (s *Server) UseHTTPHeaderProvider(provider HTTPHeaderProvider) {
 // least one include pattern are registered. Patterns are matched against the
 // fully qualified method path: "service.full.Name.MethodName".
 // Use "*" to match any sequence of characters (including dots).
-// Examples: "temporal.api.workflowservice.v1.WorkflowService.*", "*.StartWorkflow*"
+// Examples: "temporal.api.workflowservice.v1.WorkflowService.*", "*.StartWorkflow*".
 func (s *Server) Include(patterns ...string) {
 	s.includes = append(s.includes, patterns...)
 }
@@ -169,7 +170,7 @@ func globMatch(pattern, s string) bool {
 
 func splitPatterns(s string) []string {
 	var out []string
-	for _, p := range strings.Split(s, ",") {
+	for p := range strings.SplitSeq(s, ",") {
 		p = strings.TrimSpace(p)
 		if p != "" {
 			out = append(out, p)
@@ -415,9 +416,7 @@ func (s *Server) serveOne(p Projection) error {
 // Tools returns a snapshot of the registered tool names to their Tool metadata.
 func (s *Server) Tools() map[string]*Tool {
 	out := make(map[string]*Tool, len(s.tools))
-	for k, v := range s.tools {
-		out[k] = v
-	}
+	maps.Copy(out, s.tools)
 	return out
 }
 

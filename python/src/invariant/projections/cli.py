@@ -151,14 +151,15 @@ def _resolve_tool(server: Server, service_name: str, method_name: str) -> str:
         if svc_name == service_name and tool.method_name == method_name:
             return tool.name
     available = list(server.tools.keys())
-    raise ValueError(
-        f"Unknown service/method: {service_name} {method_name}. Available: {available}"
-    )
+    raise ValueError(f"Unknown service/method: {service_name} {method_name}. Available: {available}")
 
 
 def _cli_help(server: Server) -> str:
     """Generate help text listing all registered tools and their fields."""
-    lines = ['Usage: <binary> <ServiceName> <Method> [-r request.yaml|request.json|request.binpb|\'{"inline":"json"}\']', ""]
+    lines = [
+        'Usage: <binary> <ServiceName> <Method> [-r request.yaml|request.json|request.binpb|\'{"inline":"json"}\']',
+        "",
+    ]
 
     if not server.tools:
         lines.append("No tools registered.")

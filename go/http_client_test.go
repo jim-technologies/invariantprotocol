@@ -110,7 +110,6 @@ func TestConnectHTTPRegistersTools(t *testing.T) {
 
 	srv := connectHTTPServer(t, baseURL)
 
-
 	assert.Len(t, srv.tools, 2)
 	assert.Contains(t, srv.tools, "GreetService.Greet")
 	assert.Contains(t, srv.tools, "GreetService.GreetGroup")
@@ -121,7 +120,6 @@ func TestConnectHTTPMCPToolCall(t *testing.T) {
 	defer stop()
 
 	srv := connectHTTPServer(t, baseURL)
-
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -144,7 +142,6 @@ func TestConnectHTTPMCPToolCallGreetGroup(t *testing.T) {
 	defer stop()
 
 	srv := connectHTTPServer(t, baseURL)
-
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -174,7 +171,6 @@ func TestConnectHTTPMapsRemoteErrors(t *testing.T) {
 
 	srv := connectHTTPServer(t, baseURL)
 
-
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
@@ -197,7 +193,6 @@ func TestConnectHTTPHandlerDirect(t *testing.T) {
 
 	srv := connectHTTPServer(t, baseURL)
 
-
 	tool := srv.tools["GreetService.Greet"]
 	dh, ok := tool.Handler.(*httpDynamicHandler)
 	require.True(t, ok, "handler should be *httpDynamicHandler")
@@ -212,7 +207,6 @@ func TestConnectHTTPCli(t *testing.T) {
 	defer stop()
 
 	srv := connectHTTPServer(t, baseURL)
-
 
 	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"CLI"}`})
 	require.NoError(t, err)
@@ -246,7 +240,6 @@ func TestConnectHTTPBasePath(t *testing.T) {
 
 	baseURL := fmt.Sprintf("http://%s/api", lis.Addr().String())
 	srv := connectHTTPServer(t, baseURL)
-
 
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -325,7 +318,6 @@ func TestConnectHTTPInjectsHeadersFromEnv(t *testing.T) {
 
 	srv := connectHTTPServer(t, "http://"+lis.Addr().String())
 
-
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
@@ -356,7 +348,6 @@ func TestConnectHTTPSetsDefaultUserAgent(t *testing.T) {
 
 	srv := connectHTTPServer(t, "http://"+lis.Addr().String())
 
-
 	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, World")
@@ -382,7 +373,6 @@ func TestConnectHTTPUserAgentOverrideFromEnv(t *testing.T) {
 	defer server.Close()
 
 	srv := connectHTTPServer(t, "http://"+lis.Addr().String())
-
 
 	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
 	require.NoError(t, err)
@@ -421,7 +411,6 @@ func TestConnectHTTPRetriesTransientGET(t *testing.T) {
 
 	srv := connectHTTPServer(t, "http://"+lis.Addr().String())
 
-
 	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, World")
@@ -451,7 +440,6 @@ func TestConnectHTTPDoesNotRetryPOST(t *testing.T) {
 	defer server.Close()
 
 	srv := connectHTTPServer(t, "http://"+lis.Addr().String())
-
 
 	_, err = srv.cli(t.Context(), []string{"GreetService", "GreetGroup", "-r", `{"people":[{"name":"Alice"}]}`})
 	require.Error(t, err)
@@ -497,7 +485,6 @@ func TestConnectHTTPUsesDynamicHeaderProvider(t *testing.T) {
 	})
 	require.NoError(t, srv.ConnectHTTP("http://"+lis.Addr().String()))
 
-
 	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, World")
@@ -513,7 +500,6 @@ func TestConnectHTTPDynamicHeaderProviderError(t *testing.T) {
 		return nil, errors.New("missing signing key")
 	})
 	require.NoError(t, srv.ConnectHTTP("http://localhost:1"))
-
 
 	_, err = srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
 	require.Error(t, err)

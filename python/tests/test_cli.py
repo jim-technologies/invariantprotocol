@@ -102,7 +102,7 @@ def test_greet_cli_missing_r_value(server):
 
 
 def test_greet_cli_unknown_field_rejected(server):
-    with pytest.raises(InvariantError, match="field named \"extra\"") as exc:
+    with pytest.raises(InvariantError, match='field named "extra"') as exc:
         server._cli(["GreetService", "Greet", "-r", '{"name": "World", "extra": "x"}'])
     assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
     payload = exc.value.to_payload()

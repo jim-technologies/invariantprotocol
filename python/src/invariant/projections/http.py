@@ -306,10 +306,7 @@ def _build_http_bindings(server: Server) -> list[_HTTPBinding]:
 
 def _build_annotated_bindings(server: Server) -> list[_HTTPBinding]:
     out: list[_HTTPBinding] = []
-    tool_by_method = {
-        f"/{tool.service_full_name}/{tool.method_name}": tool
-        for tool in server.tools.values()
-    }
+    tool_by_method = {f"/{tool.service_full_name}/{tool.method_name}": tool for tool in server.tools.values()}
 
     for file_proto in server._fds.file:
         pkg = file_proto.package
