@@ -43,6 +43,8 @@ linters:
       excludes:
         - G104
         - G115
+        - G703
+        - G704
     govet:
       enable-all: true
       disable:

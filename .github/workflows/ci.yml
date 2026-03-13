@@ -66,9 +66,7 @@ jobs:
       - uses: flox/install-flox-action@v2
       - uses: flox/activate-action@v1
         with:
-          command: |
-            cd proto
-            buf breaking --against ".git#ref=${{ github.event.pull_request.base.sha }},subdir=proto"
+          command: make breaking BASE_REF=${{ github.event.pull_request.base.sha }}
 
   test:
     name: Test

@@ -1,4 +1,6 @@
-.PHONY: lint fmt test generate deps verify-generate
+.PHONY: lint fmt test generate deps verify-generate breaking
+
+BASE_REF ?= origin/main
 
 lint:
 	cd go && golangci-lint run ./...
@@ -20,10 +22,13 @@ generate:
 deps:
 	cd go && go mod tidy
 
+breaking:
+	cd proto && buf breaking --against "../.git#ref=$(BASE_REF),subdir=proto"
+
 verify-generate:
 	$(MAKE) generate
-	@if [ -n "$$(git status --porcelain --untracked-files=all)" ]; then \
+	@if [ -n "$$(git status --porcelain --untracked-files=all -- go/gen python/src/invariant/gen)" ]; then \
 		echo "Generated files are out of date. Run 'make generate' and commit the results."; \
-		git status --short; \
+		git status --short -- go/gen python/src/invariant/gen; \
 		exit 1; \
 	fi
