@@ -337,6 +337,43 @@ class Server:
                     method_name=method_name,
                 )
 
+    # -- Public API: convenience entry point --
+
+    def serve_from_argv(self, argv: list[str] | None = None) -> None:
+        """Parse command-line flags and call :meth:`serve` accordingly.
+
+        Recognised flags: ``--mcp``, ``--cli``, ``--http [port]``,
+        ``--grpc [port]``.  Defaults to MCP when no flags are given.
+        """
+        args = argv if argv is not None else sys.argv[1:]
+
+        if "--cli" in args:
+            idx = args.index("--cli")
+            # Rewrite sys.argv so the CLI projection sees only its args.
+            sys.argv = [sys.argv[0], *args[idx + 1:]]
+            self.serve(cli=True)
+            return
+
+        http_port: int | None = None
+        grpc_port: int | None = None
+
+        if "--http" in args:
+            http_port = 8080
+            idx = args.index("--http")
+            if idx + 1 < len(args) and args[idx + 1].isdigit():
+                http_port = int(args[idx + 1])
+
+        if "--grpc" in args:
+            grpc_port = 50051
+            idx = args.index("--grpc")
+            if idx + 1 < len(args) and args[idx + 1].isdigit():
+                grpc_port = int(args[idx + 1])
+
+        if http_port is not None or grpc_port is not None:
+            self.serve(http=http_port, grpc=grpc_port)
+        else:
+            self.serve(mcp=True)
+
     # -- Public API: single serve method --
 
     def serve(

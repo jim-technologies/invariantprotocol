@@ -19,10 +19,12 @@
         "pkg-path": "python313Packages.grpcio-tools"
       },
       "protobuf": {
-        "pkg-path": "python313Packages.protobuf"
+        "pkg-path": "python313Packages.protobuf",
+        "version": ">=6.33.5"
       },
       "protoc": {
-        "pkg-path": "protobuf"
+        "pkg-path": "protobuf",
+        "version": ">=33.5"
       },
       "protoc-gen-go": {
         "pkg-path": "protoc-gen-go"
@@ -51,20 +53,19 @@
     {
       "attr_path": "buf",
       "broken": false,
-      "derivation": "/nix/store/qla4lrb0hmmh1cdh7z7y99nbnjic3ypj-buf-1.64.0.drv",
+      "derivation": "/nix/store/vwxmdcd92va4hv3nl82dwyg78dihfjpw-buf-1.64.0.drv",
       "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
       "install_id": "buf",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "buf-1.64.0",
       "pname": "buf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:01.640765Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:46:37.050315Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.64.0",
@@ -81,20 +82,19 @@
     {
       "attr_path": "buf",
       "broken": false,
-      "derivation": "/nix/store/0dx24vjqbdd237ymyii300zs9yqxn51y-buf-1.64.0.drv",
+      "derivation": "/nix/store/9x0xgd3xp3qbpk522p1w1mqp8bx8kb6r-buf-1.64.0.drv",
       "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
       "install_id": "buf",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "buf-1.64.0",
       "pname": "buf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:24:01.119504Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:23:00.058650Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.64.0",
@@ -111,20 +111,19 @@
     {
       "attr_path": "buf",
       "broken": false,
-      "derivation": "/nix/store/25r1x0a5hgbkqb8dr052ym9w4mixhxa7-buf-1.64.0.drv",
+      "derivation": "/nix/store/xzly3nk49xczqnn0ijfn1xny72cs4iqj-buf-1.64.0.drv",
       "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
       "install_id": "buf",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "buf-1.64.0",
       "pname": "buf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:09:08.261131Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:03:51.366737Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.64.0",
@@ -141,20 +140,19 @@
     {
       "attr_path": "buf",
       "broken": false,
-      "derivation": "/nix/store/iivpwg6pbvyz59h87n8c7nvymkzi0ch1-buf-1.64.0.drv",
+      "derivation": "/nix/store/ljhsgg660dli62sivm4j7d0s9hgwf8xp-buf-1.64.0.drv",
       "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
       "install_id": "buf",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "buf-1.64.0",
       "pname": "buf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:00:09.673553Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:47:05.189408Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.64.0",
@@ -171,20 +169,19 @@
     {
       "attr_path": "go",
       "broken": false,
-      "derivation": "/nix/store/qxp3qchfll281gs2532av4926s6q5q2w-go-1.25.7.drv",
+      "derivation": "/nix/store/lpl3ynayhbwbzg5wj2d4dpw2mc1czmdd-go-1.25.7.drv",
       "description": "Go Programming language",
       "install_id": "go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "go-1.25.7",
       "pname": "go",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:02.939142Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:46:38.203858Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.25.7",
@@ -205,16 +202,15 @@
       "description": "Go Programming language",
       "install_id": "go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "go-1.25.7",
       "pname": "go",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:24:03.278112Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:23:02.389748Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.25.7",
@@ -231,20 +227,19 @@
     {
       "attr_path": "go",
       "broken": false,
-      "derivation": "/nix/store/nnbdvaq62kwr6d3n16y1g85ycpcns0zf-go-1.25.7.drv",
+      "derivation": "/nix/store/xcp6a3i1vawrpk4ivvknig702ii0w78a-go-1.25.7.drv",
       "description": "Go Programming language",
       "install_id": "go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "go-1.25.7",
       "pname": "go",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:09:09.512982Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:03:52.564239Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.25.7",
@@ -265,20 +260,20 @@
       "description": "Go Programming language",
       "install_id": "go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "go-1.25.7",
       "pname": "go",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:00:12.218111Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:47:07.634722Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.25.7",
       "outputs_to_install": [
+        "out",
         "out"
       ],
       "outputs": {
@@ -291,28 +286,27 @@
     {
       "attr_path": "golangci-lint",
       "broken": false,
-      "derivation": "/nix/store/vlz0xs97yrrmz7q5b2ckvd2fjd1i1230-golangci-lint-2.10.1.drv",
+      "derivation": "/nix/store/mwsqqni7j2fpkzi72y964d7wk5xrcs7a-golangci-lint-2.11.0.drv",
       "description": "Fast linters Runner for Go",
       "install_id": "golangci-lint",
       "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "golangci-lint-2.10.1",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "golangci-lint-2.11.0",
       "pname": "golangci-lint",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:02.998104Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:46:38.264706Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "2.10.1",
+      "version": "2.11.0",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/1rrjjclzxlr6f1ivb6l74vq1n1g1lki8-golangci-lint-2.10.1"
+        "out": "/nix/store/2kwyn9j1d4hnj55clp4xqa0yvs2qmn86-golangci-lint-2.11.0"
       },
       "system": "aarch64-darwin",
       "group": "toplevel",
@@ -321,28 +315,27 @@
     {
       "attr_path": "golangci-lint",
       "broken": false,
-      "derivation": "/nix/store/zh81m7rbbg5pk61n1mzfrpipdqpm8vk8-golangci-lint-2.10.1.drv",
+      "derivation": "/nix/store/apxv3kk4in18pkyfxyb02wvw7xv86ibg-golangci-lint-2.11.0.drv",
       "description": "Fast linters Runner for Go",
       "install_id": "golangci-lint",
       "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "golangci-lint-2.10.1",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "golangci-lint-2.11.0",
       "pname": "golangci-lint",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:24:03.369986Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:23:02.491524Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "2.10.1",
+      "version": "2.11.0",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/ri4b9yqars42sc3hwwa5w81w91h13lm8-golangci-lint-2.10.1"
+        "out": "/nix/store/8jgrrw39k6x57ha8q9hg68znh6vqb33m-golangci-lint-2.11.0"
       },
       "system": "aarch64-linux",
       "group": "toplevel",
@@ -351,28 +344,27 @@
     {
       "attr_path": "golangci-lint",
       "broken": false,
-      "derivation": "/nix/store/6k4ibklqbxwv4ixpw6zky8xdwfjr68qg-golangci-lint-2.10.1.drv",
+      "derivation": "/nix/store/66qszy7bdy27dk9fv1fh72qsw89z54ym-golangci-lint-2.11.0.drv",
       "description": "Fast linters Runner for Go",
       "install_id": "golangci-lint",
       "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "golangci-lint-2.10.1",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "golangci-lint-2.11.0",
       "pname": "golangci-lint",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:09:09.574396Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:03:52.624635Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "2.10.1",
+      "version": "2.11.0",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/qvvg1rv8b4m4qyvqh40zc4nfa72vyzlw-golangci-lint-2.10.1"
+        "out": "/nix/store/08d249n2hlmfh5fvvysx90hmjwqyjl2i-golangci-lint-2.11.0"
       },
       "system": "x86_64-darwin",
       "group": "toplevel",
@@ -381,28 +373,27 @@
     {
       "attr_path": "golangci-lint",
       "broken": false,
-      "derivation": "/nix/store/xxmjl2v7llf31g6fm2d939hbkjzzldsb-golangci-lint-2.10.1.drv",
+      "derivation": "/nix/store/zn2vwym35y76hc92x156jakb111grfkp-golangci-lint-2.11.0.drv",
       "description": "Fast linters Runner for Go",
       "install_id": "golangci-lint",
       "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "golangci-lint-2.10.1",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "golangci-lint-2.11.0",
       "pname": "golangci-lint",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:00:12.332341Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:47:07.734587Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "2.10.1",
+      "version": "2.11.0",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/ziv6x93wkd587qji6z0648050g0r9qjn-golangci-lint-2.10.1"
+        "out": "/nix/store/7vnd49xzb84ghk9p7vzqaqyqmy6bqd90-golangci-lint-2.11.0"
       },
       "system": "x86_64-linux",
       "group": "toplevel",
@@ -411,20 +402,19 @@
     {
       "attr_path": "python313Packages.grpcio",
       "broken": false,
-      "derivation": "/nix/store/28f2kvbnib8kd3w1nls751lbl4r1dqa9-python3.13-grpcio-1.78.0.drv",
+      "derivation": "/nix/store/dyszis9kvq9akfpif47hyjxr73c4m0pa-python3.13-grpcio-1.78.0.drv",
       "description": "HTTP/2-based RPC framework",
       "install_id": "grpcio",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-grpcio-1.78.0",
       "pname": "grpcio",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:47.319782Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:47:22.445501Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.78.0",
@@ -443,20 +433,19 @@
     {
       "attr_path": "python313Packages.grpcio",
       "broken": false,
-      "derivation": "/nix/store/vwj3l3knlz5k4dwhq3898hyz9pfx1f08-python3.13-grpcio-1.78.0.drv",
+      "derivation": "/nix/store/10z62g0jsdwyswms41z8s5b2j6l9z392-python3.13-grpcio-1.78.0.drv",
       "description": "HTTP/2-based RPC framework",
       "install_id": "grpcio",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-grpcio-1.78.0",
       "pname": "grpcio",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:25:05.382689Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:24:08.304183Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.78.0",
@@ -476,20 +465,19 @@
     {
       "attr_path": "python313Packages.grpcio",
       "broken": false,
-      "derivation": "/nix/store/ga8sa49g88bgs29yy7s6kxg33gc9bd5a-python3.13-grpcio-1.78.0.drv",
+      "derivation": "/nix/store/67svyz0v7qknl3dgimxklpd6fivdj046-python3.13-grpcio-1.78.0.drv",
       "description": "HTTP/2-based RPC framework",
       "install_id": "grpcio",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-grpcio-1.78.0",
       "pname": "grpcio",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:09:53.081200Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:04:36.691085Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.78.0",
@@ -508,20 +496,19 @@
     {
       "attr_path": "python313Packages.grpcio",
       "broken": false,
-      "derivation": "/nix/store/vc846zpa7abjzgh5gkhqani18gcl5wyi-python3.13-grpcio-1.78.0.drv",
+      "derivation": "/nix/store/b2gk321k4d2va0cfkpccwb5ii3ql01ar-python3.13-grpcio-1.78.0.drv",
       "description": "HTTP/2-based RPC framework",
       "install_id": "grpcio",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-grpcio-1.78.0",
       "pname": "grpcio",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:01:22.020024Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:48:17.301555Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.78.0",
@@ -541,20 +528,19 @@
     {
       "attr_path": "python313Packages.grpcio-tools",
       "broken": false,
-      "derivation": "/nix/store/50bjslnp4c5vmwb8ayxyyhkg6rwy3zk8-python3.13-grpcio-tools-1.78.0.drv",
+      "derivation": "/nix/store/r4gq62rp59mqq4ddd63vc0z1r41x6chg-python3.13-grpcio-tools-1.78.0.drv",
       "description": "Protobuf code generator for gRPC",
       "install_id": "grpcio-tools",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-grpcio-tools-1.78.0",
       "pname": "grpcio-tools",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:47.333064Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:47:22.458983Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.78.0",
@@ -573,20 +559,19 @@
     {
       "attr_path": "python313Packages.grpcio-tools",
       "broken": false,
-      "derivation": "/nix/store/b8f3g224pjbxs5fvngych1jk3r8iywwl-python3.13-grpcio-tools-1.78.0.drv",
+      "derivation": "/nix/store/sm69g84bh7szazqcjna718nscimd1kxv-python3.13-grpcio-tools-1.78.0.drv",
       "description": "Protobuf code generator for gRPC",
       "install_id": "grpcio-tools",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-grpcio-tools-1.78.0",
       "pname": "grpcio-tools",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:25:05.398373Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:24:08.322099Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.78.0",
@@ -605,20 +590,19 @@
     {
       "attr_path": "python313Packages.grpcio-tools",
       "broken": false,
-      "derivation": "/nix/store/6njgqhzwq8s7hpbn12gl4774w04rqb64-python3.13-grpcio-tools-1.78.0.drv",
+      "derivation": "/nix/store/5vf9msrpyr3nj3qx9i7jzl6zndv90dcz-python3.13-grpcio-tools-1.78.0.drv",
       "description": "Protobuf code generator for gRPC",
       "install_id": "grpcio-tools",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-grpcio-tools-1.78.0",
       "pname": "grpcio-tools",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:09:53.094281Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:04:36.704088Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.78.0",
@@ -637,20 +621,19 @@
     {
       "attr_path": "python313Packages.grpcio-tools",
       "broken": false,
-      "derivation": "/nix/store/0mq6h12n0xykagkrmbpfwyg5dp7smvvb-python3.13-grpcio-tools-1.78.0.drv",
+      "derivation": "/nix/store/23gg0j030xxigcyk52fvlyilkwx5hvy0-python3.13-grpcio-tools-1.78.0.drv",
       "description": "Protobuf code generator for gRPC",
       "install_id": "grpcio-tools",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-grpcio-tools-1.78.0",
       "pname": "grpcio-tools",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:01:22.037015Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:48:17.319270Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.78.0",
@@ -669,20 +652,19 @@
     {
       "attr_path": "python313Packages.protobuf",
       "broken": false,
-      "derivation": "/nix/store/8qq4f32fd8wnm486rbyn1w13brg3xw0v-python3.13-protobuf-6.33.5.drv",
+      "derivation": "/nix/store/x6irw3azlx815d3b0w4l45q2dww96wss-python3.13-protobuf-6.33.5.drv",
       "description": "Protocol Buffers are Google's data interchange format",
       "install_id": "protobuf",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-protobuf-6.33.5",
       "pname": "protobuf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:52.853601Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:47:28.049767Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "6.33.5",
@@ -700,20 +682,19 @@
     {
       "attr_path": "python313Packages.protobuf",
       "broken": false,
-      "derivation": "/nix/store/0j96in1v6kla3gdifb9lcb0q4mk3w6aj-python3.13-protobuf-6.33.5.drv",
+      "derivation": "/nix/store/bs9gscbz3qp5zl2f2mwz16ihp9hlpv73-python3.13-protobuf-6.33.5.drv",
       "description": "Protocol Buffers are Google's data interchange format",
       "install_id": "protobuf",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-protobuf-6.33.5",
       "pname": "protobuf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:25:12.149057Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:24:15.558550Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "6.33.5",
@@ -732,20 +713,19 @@
     {
       "attr_path": "python313Packages.protobuf",
       "broken": false,
-      "derivation": "/nix/store/6p5lpvl5wmgivy59ahll7jmaaixdl168-python3.13-protobuf-6.33.5.drv",
+      "derivation": "/nix/store/6i5j6mwvrfyvj9znxs7y9j2gyn2a5irw-python3.13-protobuf-6.33.5.drv",
       "description": "Protocol Buffers are Google's data interchange format",
       "install_id": "protobuf",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-protobuf-6.33.5",
       "pname": "protobuf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:09:58.502542Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:04:42.097632Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "6.33.5",
@@ -763,20 +743,19 @@
     {
       "attr_path": "python313Packages.protobuf",
       "broken": false,
-      "derivation": "/nix/store/hqqgy9dr1640nfmf4b1w72b6lnm1cxms-python3.13-protobuf-6.33.5.drv",
+      "derivation": "/nix/store/il8yqv45852bd2p70w3jv5dly869ryp6-python3.13-protobuf-6.33.5.drv",
       "description": "Protocol Buffers are Google's data interchange format",
       "install_id": "protobuf",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-protobuf-6.33.5",
       "pname": "protobuf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:01:29.375272Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:48:24.697036Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "6.33.5",
@@ -795,20 +774,19 @@
     {
       "attr_path": "protobuf",
       "broken": false,
-      "derivation": "/nix/store/34rsrdl7v9hglfg8xmix1h3drwj3pln0-protobuf-33.5.drv",
+      "derivation": "/nix/store/gvzdiljbj7lc4cymip0nyh0x57faka90-protobuf-33.5.drv",
       "description": "Google's data interchange format",
       "install_id": "protoc",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "protobuf-33.5",
       "pname": "protobuf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:41.387869Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:47:16.417987Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "33.5",
@@ -825,20 +803,19 @@
     {
       "attr_path": "protobuf",
       "broken": false,
-      "derivation": "/nix/store/3qb8sz1l3n3hdg0d70nn1hdpj852r78x-protobuf-33.5.drv",
+      "derivation": "/nix/store/mdrw1b350fra0c590qwgx2v3dh7kyqn5-protobuf-33.5.drv",
       "description": "Google's data interchange format",
       "install_id": "protoc",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "protobuf-33.5",
       "pname": "protobuf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:24:57.924318Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:24:00.089816Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "33.5",
@@ -857,20 +834,19 @@
     {
       "attr_path": "protobuf",
       "broken": false,
-      "derivation": "/nix/store/1czl714w305cl4ypqs2yy0vi46ww4nh0-protobuf-33.5.drv",
+      "derivation": "/nix/store/jkzpkhzklp279pzv2v09kzi1g3xh27fy-protobuf-33.5.drv",
       "description": "Google's data interchange format",
       "install_id": "protoc",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "protobuf-33.5",
       "pname": "protobuf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:09:47.266281Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:04:30.871666Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "33.5",
@@ -887,20 +863,19 @@
     {
       "attr_path": "protobuf",
       "broken": false,
-      "derivation": "/nix/store/97lcscjzy7k22rbss7c790p0kdn3w863-protobuf-33.5.drv",
+      "derivation": "/nix/store/9s303qrdlwlha3a9058kg622wvi3rcsc-protobuf-33.5.drv",
       "description": "Google's data interchange format",
       "install_id": "protoc",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "protobuf-33.5",
       "pname": "protobuf",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:01:13.834601Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:48:09.123965Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "33.5",
@@ -919,20 +894,19 @@
     {
       "attr_path": "protoc-gen-go",
       "broken": false,
-      "derivation": "/nix/store/crp5qxjjmzj5gw7jpbspgp7bqm4akq4c-protoc-gen-go-1.36.11.drv",
+      "derivation": "/nix/store/ymw95s21c64f21qi5h36r5i7k89visja-protoc-gen-go-1.36.11.drv",
       "description": "Go support for Google's protocol buffers",
       "install_id": "protoc-gen-go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "protoc-gen-go-1.36.11",
       "pname": "protoc-gen-go",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:41.419171Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:47:16.449289Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.36.11",
@@ -949,20 +923,19 @@
     {
       "attr_path": "protoc-gen-go",
       "broken": false,
-      "derivation": "/nix/store/c6f1337vvj4hgzp7kw1hbicqka88mwp3-protoc-gen-go-1.36.11.drv",
+      "derivation": "/nix/store/qyqnb0s9g0hhc3vx943gr3xq9p2gmss7-protoc-gen-go-1.36.11.drv",
       "description": "Go support for Google's protocol buffers",
       "install_id": "protoc-gen-go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "protoc-gen-go-1.36.11",
       "pname": "protoc-gen-go",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:24:57.962164Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:24:00.131871Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.36.11",
@@ -979,20 +952,19 @@
     {
       "attr_path": "protoc-gen-go",
       "broken": false,
-      "derivation": "/nix/store/4ayrw83w9k0gv0lf9y3wy935wyvjip3y-protoc-gen-go-1.36.11.drv",
+      "derivation": "/nix/store/na1rjwr8k906n6aq0ai8b8rwq3vv3f41-protoc-gen-go-1.36.11.drv",
       "description": "Go support for Google's protocol buffers",
       "install_id": "protoc-gen-go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "protoc-gen-go-1.36.11",
       "pname": "protoc-gen-go",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:09:47.297348Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:04:30.902669Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.36.11",
@@ -1009,20 +981,19 @@
     {
       "attr_path": "protoc-gen-go",
       "broken": false,
-      "derivation": "/nix/store/rp34j1zyqvvgwmr8062avyjg2bnjvpad-protoc-gen-go-1.36.11.drv",
+      "derivation": "/nix/store/2ixjvmnp8c92qpf5a9r9v05fky73sgmw-protoc-gen-go-1.36.11.drv",
       "description": "Go support for Google's protocol buffers",
       "install_id": "protoc-gen-go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "protoc-gen-go-1.36.11",
       "pname": "protoc-gen-go",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:01:13.876359Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:48:09.167285Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "1.36.11",
@@ -1039,20 +1010,19 @@
     {
       "attr_path": "python313Packages.pytest",
       "broken": false,
-      "derivation": "/nix/store/i0wdi3xgq4ypx8qd7wpjd5wyp20yca0a-python3.13-pytest-9.0.2.drv",
+      "derivation": "/nix/store/d2k5rwikkiysj3adsnlhxiy9d51p6270-python3.13-pytest-9.0.2.drv",
       "description": "Framework for writing tests",
       "install_id": "pytest",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-pytest-9.0.2",
       "pname": "pytest",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:54.915518Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:47:30.161227Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "9.0.2",
@@ -1071,20 +1041,19 @@
     {
       "attr_path": "python313Packages.pytest",
       "broken": false,
-      "derivation": "/nix/store/lsy2vp94szm9c402a3fa9sxa3qk1i6hj-python3.13-pytest-9.0.2.drv",
+      "derivation": "/nix/store/8pildj8qfzr2wm8m2k74mjymqg98parn-python3.13-pytest-9.0.2.drv",
       "description": "Framework for writing tests",
       "install_id": "pytest",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-pytest-9.0.2",
       "pname": "pytest",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:25:14.660104Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:24:18.229678Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "9.0.2",
@@ -1104,20 +1073,19 @@
     {
       "attr_path": "python313Packages.pytest",
       "broken": false,
-      "derivation": "/nix/store/8g7p65bbhq2s11dfbxdsfq81slxy948n-python3.13-pytest-9.0.2.drv",
+      "derivation": "/nix/store/ih77by6aivbiaqk64xn0a77zrllk370b-python3.13-pytest-9.0.2.drv",
       "description": "Framework for writing tests",
       "install_id": "pytest",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-pytest-9.0.2",
       "pname": "pytest",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:10:00.566833Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:04:44.123402Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "9.0.2",
@@ -1136,20 +1104,19 @@
     {
       "attr_path": "python313Packages.pytest",
       "broken": false,
-      "derivation": "/nix/store/nsml6nq1skrz3hx32s5a4w5annpjfnf8-python3.13-pytest-9.0.2.drv",
+      "derivation": "/nix/store/323w2kggprb8xpahjs23rqwryv0vl823-python3.13-pytest-9.0.2.drv",
       "description": "Framework for writing tests",
       "install_id": "pytest",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-pytest-9.0.2",
       "pname": "pytest",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:01:32.089575Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:48:27.406941Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "9.0.2",
@@ -1169,20 +1136,19 @@
     {
       "attr_path": "python3",
       "broken": false,
-      "derivation": "/nix/store/a97r4r3w7a8rfvd2q3kd11gz6aszg49j-python3-3.13.12.drv",
+      "derivation": "/nix/store/r64rcnyynpinf8l85b48ialiqrjmx0dv-python3-3.13.12.drv",
       "description": "High-level dynamically-typed programming language",
       "install_id": "python3",
       "license": "Python-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3-3.13.12",
       "pname": "python3",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:41.814670Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:47:16.840276Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "3.13.12",
@@ -1199,20 +1165,19 @@
     {
       "attr_path": "python3",
       "broken": false,
-      "derivation": "/nix/store/w2lfkd781k4a5jx7fbmk7b59kbhjvlpl-python3-3.13.12.drv",
+      "derivation": "/nix/store/1bl0sfah2gjhbgybi4w0dr0969yws25a-python3-3.13.12.drv",
       "description": "High-level dynamically-typed programming language",
       "install_id": "python3",
       "license": "Python-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3-3.13.12",
       "pname": "python3",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:24:58.548340Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:24:00.775358Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "3.13.12",
@@ -1231,20 +1196,19 @@
     {
       "attr_path": "python3",
       "broken": false,
-      "derivation": "/nix/store/yv8wl1gj37iaisz89x1n9r1gj4ynlvpz-python3-3.13.12.drv",
+      "derivation": "/nix/store/kz8cs222p5jjbrplrsmf6xwg1k9krxn5-python3-3.13.12.drv",
       "description": "High-level dynamically-typed programming language",
       "install_id": "python3",
       "license": "Python-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3-3.13.12",
       "pname": "python3",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:09:47.680026Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:04:31.283081Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "3.13.12",
@@ -1261,24 +1225,25 @@
     {
       "attr_path": "python3",
       "broken": false,
-      "derivation": "/nix/store/s2h0lp0m59cpragags7p355hhj7vrh1s-python3-3.13.12.drv",
+      "derivation": "/nix/store/pa77d4q4jilknq4zgakh8099frx4yyvy-python3-3.13.12.drv",
       "description": "High-level dynamically-typed programming language",
       "install_id": "python3",
       "license": "Python-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3-3.13.12",
       "pname": "python3",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:01:14.558961Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:48:09.858994Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "3.13.12",
       "outputs_to_install": [
+        "out",
+        "out",
         "out",
         "out"
       ],
@@ -1293,20 +1258,19 @@
     {
       "attr_path": "python313Packages.pyyaml",
       "broken": false,
-      "derivation": "/nix/store/izyvrv00ga8rxbrs95hipblksl145id9-python3.13-pyyaml-6.0.3.drv",
+      "derivation": "/nix/store/4a1f19my54b1fs91nf02hy7kymn9nf51-python3.13-pyyaml-6.0.3.drv",
       "description": "Next generation YAML parser and emitter for Python",
       "install_id": "pyyaml",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-pyyaml-6.0.3",
       "pname": "pyyaml",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:46:55.969245Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:47:31.248885Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "6.0.3",
@@ -1324,20 +1288,19 @@
     {
       "attr_path": "python313Packages.pyyaml",
       "broken": false,
-      "derivation": "/nix/store/a86crzfsab3gvv8ygvhfg7hwlps4ljms-python3.13-pyyaml-6.0.3.drv",
+      "derivation": "/nix/store/bj0vdmjkh8p1bygj2fq6kyz6f04jsv4s-python3.13-pyyaml-6.0.3.drv",
       "description": "Next generation YAML parser and emitter for Python",
       "install_id": "pyyaml",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-pyyaml-6.0.3",
       "pname": "pyyaml",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:25:15.933263Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:24:19.604753Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "6.0.3",
@@ -1356,20 +1319,19 @@
     {
       "attr_path": "python313Packages.pyyaml",
       "broken": false,
-      "derivation": "/nix/store/j0pvm4m9gx0c690h2ihc8zn3nkqqg6pv-python3.13-pyyaml-6.0.3.drv",
+      "derivation": "/nix/store/z0b699g1v4227a10kzfxd7l0q8k0vy27-python3.13-pyyaml-6.0.3.drv",
       "description": "Next generation YAML parser and emitter for Python",
       "install_id": "pyyaml",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-pyyaml-6.0.3",
       "pname": "pyyaml",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:10:01.644573Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:04:45.169596Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "6.0.3",
@@ -1387,20 +1349,19 @@
     {
       "attr_path": "python313Packages.pyyaml",
       "broken": false,
-      "derivation": "/nix/store/6l3vm184ww2mv3f91a8apf31861siyad-python3.13-pyyaml-6.0.3.drv",
+      "derivation": "/nix/store/9q0p833ry3miw0br6sbxpyzdrpg4msg9-python3.13-pyyaml-6.0.3.drv",
       "description": "Next generation YAML parser and emitter for Python",
       "install_id": "pyyaml",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
       "name": "python3.13-pyyaml-6.0.3",
       "pname": "pyyaml",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:01:33.446736Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:48:28.778012Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
       "version": "6.0.3",
@@ -1419,28 +1380,27 @@
     {
       "attr_path": "ruff",
       "broken": false,
-      "derivation": "/nix/store/icqhj5araa2crdz6qm1mklgsl4p22pz2-ruff-0.15.1.drv",
+      "derivation": "/nix/store/cs1ggajd41sg8bmbw28lvc6g8wdijqgi-ruff-0.15.5.drv",
       "description": "Extremely fast Python linter and code formatter",
       "install_id": "ruff",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "ruff-0.15.1",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "ruff-0.15.5",
       "pname": "ruff",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:47:31.250752Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:48:07.533415Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "0.15.1",
+      "version": "0.15.5",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/z4qndhvs1avahvnalx2d7lpld1xn15sd-ruff-0.15.1"
+        "out": "/nix/store/kh11g0vl1mf2bnqxlbpm3rr8r7a7xwpc-ruff-0.15.5"
       },
       "system": "aarch64-darwin",
       "group": "toplevel",
@@ -1449,28 +1409,27 @@
     {
       "attr_path": "ruff",
       "broken": false,
-      "derivation": "/nix/store/fa9llgajdhq658j7klr2hyr5c4rx8gr2-ruff-0.15.1.drv",
+      "derivation": "/nix/store/2y34zziqh0bx6dkk5w7cjcn4aq4vqy21-ruff-0.15.5.drv",
       "description": "Extremely fast Python linter and code formatter",
       "install_id": "ruff",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "ruff-0.15.1",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "ruff-0.15.5",
       "pname": "ruff",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:25:58.471387Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:25:05.701961Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "0.15.1",
+      "version": "0.15.5",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/g78xly6975js6w0k12ksxfg72i4z9f07-ruff-0.15.1"
+        "out": "/nix/store/ly7dps373j581s7864zgspkrvr0l2lia-ruff-0.15.5"
       },
       "system": "aarch64-linux",
       "group": "toplevel",
@@ -1479,28 +1438,27 @@
     {
       "attr_path": "ruff",
       "broken": false,
-      "derivation": "/nix/store/30kpzxjrhf04mmwnq3djg008snr7l0z2-ruff-0.15.1.drv",
+      "derivation": "/nix/store/bcqp6p8y56d74kqqgpnrg3pb3klk21j5-ruff-0.15.5.drv",
       "description": "Extremely fast Python linter and code formatter",
       "install_id": "ruff",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "ruff-0.15.1",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "ruff-0.15.5",
       "pname": "ruff",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:10:37.906002Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:05:20.556288Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "0.15.1",
+      "version": "0.15.5",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/g9cv6b067gzx7swniwahv1wi551mslq1-ruff-0.15.1"
+        "out": "/nix/store/cylfsnwwk98s901ihpjpmf7x61jf1iav-ruff-0.15.5"
       },
       "system": "x86_64-darwin",
       "group": "toplevel",
@@ -1509,28 +1467,27 @@
     {
       "attr_path": "ruff",
       "broken": false,
-      "derivation": "/nix/store/2qlslbbgagm8vw24lxp16vr6r109r2v8-ruff-0.15.1.drv",
+      "derivation": "/nix/store/vi222awbnv9idag1l62q7n34iw2pxr9v-ruff-0.15.5.drv",
       "description": "Extremely fast Python linter and code formatter",
       "install_id": "ruff",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "ruff-0.15.1",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "ruff-0.15.5",
       "pname": "ruff",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:02:20.064819Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:49:15.509044Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "0.15.1",
+      "version": "0.15.5",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/w0712ww7bkq6rrf2a9n8wjnvsf37q810-ruff-0.15.1"
+        "out": "/nix/store/nmylkiq687h76gk4snd3kqqvwbwg1vnd-ruff-0.15.5"
       },
       "system": "x86_64-linux",
       "group": "toplevel",
@@ -1539,28 +1496,27 @@
     {
       "attr_path": "uv",
       "broken": false,
-      "derivation": "/nix/store/x6j4192kdag9zpv7b13dsl6d9dl4mq0z-uv-0.10.4.drv",
+      "derivation": "/nix/store/f1p98q0i8p9gm57ipb52sxak4lsrbysj-uv-0.10.8.drv",
       "description": "Extremely fast Python package installer and resolver, written in Rust",
       "install_id": "uv",
       "license": "[ Apache-2.0, MIT ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "uv-0.10.4",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "uv-0.10.8",
       "pname": "uv",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T04:48:25.875225Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:49:03.182918Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "0.10.4",
+      "version": "0.10.8",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/iz3bcbs2pa00l0awp05pfb0x8dlx1ljm-uv-0.10.4"
+        "out": "/nix/store/6k5xdh5y55ydq3v2dbsyf48i2870y1jj-uv-0.10.8"
       },
       "system": "aarch64-darwin",
       "group": "toplevel",
@@ -1569,28 +1525,27 @@
     {
       "attr_path": "uv",
       "broken": false,
-      "derivation": "/nix/store/ylqxvsfnibr8lmrk4q7m63c3ks4vpy6g-uv-0.10.4.drv",
+      "derivation": "/nix/store/1mi2cn2rb56p46adldj2fvdzkyi8461r-uv-0.10.8.drv",
       "description": "Extremely fast Python package installer and resolver, written in Rust",
       "install_id": "uv",
       "license": "[ Apache-2.0, MIT ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "uv-0.10.4",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "uv-0.10.8",
       "pname": "uv",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T05:27:08.194782Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:26:20.345184Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "0.10.4",
+      "version": "0.10.8",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/d3agwkb703z1j2iccs5p0hyf8nva03fy-uv-0.10.4"
+        "out": "/nix/store/bqx5w6c5i9lp9p2gk328w2rg5zwrmvqi-uv-0.10.8"
       },
       "system": "aarch64-linux",
       "group": "toplevel",
@@ -1599,28 +1554,27 @@
     {
       "attr_path": "uv",
       "broken": false,
-      "derivation": "/nix/store/gxpzi6mcjlg7d52v60znp8ayqcqi9dg0-uv-0.10.4.drv",
+      "derivation": "/nix/store/j0l80ab6dlkh3w3npsm4z6bwg0jrgj49-uv-0.10.8.drv",
       "description": "Extremely fast Python package installer and resolver, written in Rust",
       "install_id": "uv",
       "license": "[ Apache-2.0, MIT ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "uv-0.10.4",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "uv-0.10.8",
       "pname": "uv",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T06:11:33.134995Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:06:14.483868Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "0.10.4",
+      "version": "0.10.8",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/vrznmkha6ws0574jhhnxf4czsy3igs8s-uv-0.10.4"
+        "out": "/nix/store/fb3r1v7d3kcdamr5gyhq15gkfhx82c87-uv-0.10.8"
       },
       "system": "x86_64-darwin",
       "group": "toplevel",
@@ -1629,28 +1583,27 @@
     {
       "attr_path": "uv",
       "broken": false,
-      "derivation": "/nix/store/p9g4bsrbhvchmm3adzdaz8bhcm1n80hd-uv-0.10.4.drv",
+      "derivation": "/nix/store/sm9h2rmx51f0skh9vqcsa3107kvns20i-uv-0.10.8.drv",
       "description": "Extremely fast Python package installer and resolver, written in Rust",
       "install_id": "uv",
       "license": "[ Apache-2.0, MIT ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=2fc6539b481e1d2569f25f8799236694180c0993",
-      "name": "uv-0.10.4",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "uv-0.10.8",
       "pname": "uv",
-      "rev": "2fc6539b481e1d2569f25f8799236694180c0993",
-      "rev_count": 953160,
-      "rev_date": "2026-02-23T12:05:20Z",
-      "scrape_date": "2026-02-25T07:03:34.022261Z",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:50:30.911099Z",
       "stabilities": [
-        "unstable",
-        "staging"
+        "unstable"
       ],
       "unfree": false,
-      "version": "0.10.4",
+      "version": "0.10.8",
       "outputs_to_install": [
         "out"
       ],
       "outputs": {
-        "out": "/nix/store/kwxpv3m0wyyzgpqvm805vlkh2as4asy6-uv-0.10.4"
+        "out": "/nix/store/17gz2fa64p6zhqrflmipyh0g6v14h5mg-uv-0.10.8"
       },
       "system": "x86_64-linux",
       "group": "toplevel",
