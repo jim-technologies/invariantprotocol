@@ -23,55 +23,31 @@ func mustParse(t *testing.T) *invpb.ParsedDescriptor {
 	return pd
 }
 
-// -- Services --
-
-func TestServiceFound(t *testing.T) {
+func TestParseServices(t *testing.T) {
 	pd := mustParse(t)
-	assert.Contains(t, pd.Services, "greet.v1.GreetService")
-}
+	svc := pd.Services["greet.v1.GreetService"]
+	require.NotNil(t, svc)
 
-func TestServiceName(t *testing.T) {
-	svc := mustParse(t).Services["greet.v1.GreetService"]
 	assert.Equal(t, "GreetService", svc.Name)
 	assert.Equal(t, "greet.v1.GreetService", svc.FullName)
-}
-
-func TestServiceComment(t *testing.T) {
-	svc := mustParse(t).Services["greet.v1.GreetService"]
 	assert.Contains(t, strings.ToLower(svc.Comment), "simple greeting service")
-}
-
-func TestServiceHasTwoMethods(t *testing.T) {
-	svc := mustParse(t).Services["greet.v1.GreetService"]
 	assert.Len(t, svc.Methods, 2)
 	assert.Contains(t, svc.Methods, "Greet")
 	assert.Contains(t, svc.Methods, "GreetGroup")
+
+	greet := svc.Methods["Greet"]
+	assert.Equal(t, "greet.v1.GreetRequest", greet.InputType)
+	assert.Equal(t, "greet.v1.GreetResponse", greet.OutputType)
+	assert.False(t, greet.ClientStreaming)
+	assert.False(t, greet.ServerStreaming)
+	assert.Contains(t, strings.ToLower(greet.Comment), "greet a person")
+
+	group := svc.Methods["GreetGroup"]
+	assert.Equal(t, "greet.v1.GreetGroupRequest", group.InputType)
+	assert.Equal(t, "greet.v1.GreetGroupResponse", group.OutputType)
 }
 
-// -- Methods --
-
-func TestMethodGreet(t *testing.T) {
-	m := mustParse(t).Services["greet.v1.GreetService"].Methods["Greet"]
-	assert.Equal(t, "greet.v1.GreetRequest", m.InputType)
-	assert.Equal(t, "greet.v1.GreetResponse", m.OutputType)
-	assert.False(t, m.ClientStreaming)
-	assert.False(t, m.ServerStreaming)
-}
-
-func TestMethodGreetGroup(t *testing.T) {
-	m := mustParse(t).Services["greet.v1.GreetService"].Methods["GreetGroup"]
-	assert.Equal(t, "greet.v1.GreetGroupRequest", m.InputType)
-	assert.Equal(t, "greet.v1.GreetGroupResponse", m.OutputType)
-}
-
-func TestMethodComment(t *testing.T) {
-	m := mustParse(t).Services["greet.v1.GreetService"].Methods["Greet"]
-	assert.Contains(t, strings.ToLower(m.Comment), "greet a person")
-}
-
-// -- Messages --
-
-func TestMessagesParsed(t *testing.T) {
+func TestParseMessages(t *testing.T) {
 	pd := mustParse(t)
 	for _, name := range []string{
 		"greet.v1.GreetRequest",
@@ -82,79 +58,49 @@ func TestMessagesParsed(t *testing.T) {
 	} {
 		assert.Contains(t, pd.Messages, name)
 	}
-}
 
-func TestGreetRequestFields(t *testing.T) {
-	msg := mustParse(t).Messages["greet.v1.GreetRequest"]
+	msg := pd.Messages["greet.v1.GreetRequest"]
 	names := fieldNames(msg)
 	assert.Contains(t, names, "name")
 	assert.Contains(t, names, "mood")
 	assert.Contains(t, names, "tags")
-}
 
-func TestFieldComment(t *testing.T) {
-	f := findField(t, mustParse(t).Messages["greet.v1.GreetRequest"], "name")
-	assert.Contains(t, strings.ToLower(f.Comment), "name of the person")
-}
+	nameField := findField(t, msg, "name")
+	assert.Contains(t, strings.ToLower(nameField.Comment), "name of the person")
+	assert.False(t, nameField.Optional)
 
-func TestOptionalField(t *testing.T) {
-	f := findField(t, mustParse(t).Messages["greet.v1.GreetRequest"], "mood")
-	assert.True(t, f.Optional)
-}
+	moodField := findField(t, msg, "mood")
+	assert.True(t, moodField.Optional)
+	assert.Equal(t, int32(typeEnum), moodField.Type)
 
-func TestNonOptionalField(t *testing.T) {
-	f := findField(t, mustParse(t).Messages["greet.v1.GreetRequest"], "name")
-	assert.False(t, f.Optional)
-}
-
-func TestMapEntryMessage(t *testing.T) {
-	pd := mustParse(t)
-	count := 0
+	// Map entry messages
+	mapEntries := 0
 	for _, m := range pd.Messages {
 		if m.IsMapEntry {
-			count++
+			mapEntries++
 		}
 	}
-	assert.GreaterOrEqual(t, count, 1)
+	assert.GreaterOrEqual(t, mapEntries, 1)
+
+	// Repeated and nested message references
+	people := findField(t, pd.Messages["greet.v1.GreetGroupRequest"], "people")
+	assert.Equal(t, int32(labelRepeated), people.Label)
+	assert.Equal(t, "greet.v1.Person", people.TypeName)
 }
 
-func TestRepeatedField(t *testing.T) {
-	f := findField(t, mustParse(t).Messages["greet.v1.GreetGroupRequest"], "people")
-	assert.Equal(t, int32(labelRepeated), f.Label)
-}
+func TestParseEnums(t *testing.T) {
+	pd := mustParse(t)
+	e := pd.Enums["greet.v1.Mood"]
+	require.NotNil(t, e)
 
-func TestNestedMessageReference(t *testing.T) {
-	f := findField(t, mustParse(t).Messages["greet.v1.GreetGroupRequest"], "people")
-	assert.Equal(t, "greet.v1.Person", f.TypeName)
-}
+	assert.Contains(t, strings.ToLower(e.Comment), "mood")
 
-func TestEnumFieldType(t *testing.T) {
-	f := findField(t, mustParse(t).Messages["greet.v1.GreetRequest"], "mood")
-	assert.Equal(t, int32(typeEnum), f.Type)
-}
-
-// -- Enums --
-
-func TestEnumParsed(t *testing.T) {
-	assert.Contains(t, mustParse(t).Enums, "greet.v1.Mood")
-}
-
-func TestEnumValues(t *testing.T) {
-	e := mustParse(t).Enums["greet.v1.Mood"]
 	var names []string
 	for _, v := range e.Values {
 		names = append(names, v.Name)
 	}
 	assert.Equal(t, []string{"MOOD_UNSPECIFIED", "MOOD_HAPPY", "MOOD_SAD"}, names)
-}
 
-func TestEnumComment(t *testing.T) {
-	e := mustParse(t).Enums["greet.v1.Mood"]
-	assert.Contains(t, strings.ToLower(e.Comment), "mood")
-}
-
-func TestEnumValueComments(t *testing.T) {
-	e := mustParse(t).Enums["greet.v1.Mood"]
 	for _, v := range e.Values {
 		if v.Name == "MOOD_HAPPY" {
 			assert.Contains(t, strings.ToLower(v.Comment), "happy")
@@ -163,8 +109,6 @@ func TestEnumValueComments(t *testing.T) {
 	}
 	t.Fatal("MOOD_HAPPY value not found")
 }
-
-// -- Error cases --
 
 func TestFromFileNotFound(t *testing.T) {
 	_, err := parseDescriptorFile("/nonexistent/path.binpb")

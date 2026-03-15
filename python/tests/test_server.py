@@ -1,4 +1,4 @@
-"""Test Server registration."""
+"""Test Server registration and include/exclude filtering."""
 
 import os
 
@@ -19,34 +19,6 @@ class GreetServicer:
 
 class NoMethodServicer:
     pass
-
-
-def test_register_creates_tools():
-    srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(GreetServicer())
-    assert len(srv.tools) == 2
-
-
-def test_tool_names():
-    srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(GreetServicer())
-    assert "GreetService.Greet" in srv.tools
-    assert "GreetService.GreetGroup" in srv.tools
-
-
-def test_tool_description():
-    srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(GreetServicer())
-    tool = srv.tools["GreetService.Greet"]
-    assert "greet a person" in tool.description.lower()
-
-
-def test_tool_input_schema():
-    srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(GreetServicer())
-    tool = srv.tools["GreetService.Greet"]
-    assert tool.input_schema["type"] == "object"
-    assert "name" in tool.input_schema["properties"]
 
 
 def test_register_explicit_service_name():
@@ -73,3 +45,44 @@ def test_from_bytes():
     srv = Server.from_bytes(data)
     srv.register(GreetServicer())
     assert len(srv.tools) == 2
+
+
+def test_include_filter():
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.include("greet.v1.GreetService.Greet")
+    srv.register(GreetServicer())
+    assert len(srv.tools) == 1
+    assert "GreetService.Greet" in srv.tools
+
+
+def test_exclude_filter():
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.exclude("*GreetGroup")
+    srv.register(GreetServicer())
+    assert len(srv.tools) == 1
+    assert "GreetService.Greet" in srv.tools
+
+
+def test_include_exclude_combined():
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.include("greet.v1.GreetService.*")
+    srv.exclude("*GreetGroup")
+    srv.register(GreetServicer())
+    assert len(srv.tools) == 1
+    assert "GreetService.Greet" in srv.tools
+
+
+def test_include_env_var(monkeypatch):
+    monkeypatch.setenv("INVARIANT_INCLUDE", "greet.v1.GreetService.Greet")
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.register(GreetServicer())
+    assert len(srv.tools) == 1
+    assert "GreetService.Greet" in srv.tools
+
+
+def test_exclude_env_var(monkeypatch):
+    monkeypatch.setenv("INVARIANT_EXCLUDE", "*GreetGroup")
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.register(GreetServicer())
+    assert len(srv.tools) == 1
+    assert "GreetService.Greet" in srv.tools

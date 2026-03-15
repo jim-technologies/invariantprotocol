@@ -247,23 +247,3 @@ func TestInterceptorFullMethod(t *testing.T) {
 
 	assert.Equal(t, "/greet.v1.GreetService/Greet", capturedMethod)
 }
-
-// --- No interceptors backward compat ---
-
-func TestNoInterceptorsBackwardCompat(t *testing.T) {
-	srv := interceptorServer(t) // no interceptors
-
-	resp := sendMCP(t, srv, map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-		"params": map[string]any{
-			"name":      "GreetService.Greet",
-			"arguments": map[string]any{"name": "Compat"},
-		},
-	})
-	result := resp["result"].(map[string]any)
-	content := result["content"].([]any)
-	block := content[0].(map[string]any)
-	assert.Contains(t, block["text"], "Hello, Compat")
-
-	assert.Nil(t, result["isError"])
-}

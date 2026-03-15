@@ -33,7 +33,11 @@ class _StdioMCP:
                 continue
             try:
                 msg = json.loads(line)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                # JSON-RPC 2.0 §4.2: parse errors get a response with null id.
+                resp = _err(None, -32700, f"Parse error: {e}")
+                sys.stdout.write(json.dumps(resp) + "\n")
+                sys.stdout.flush()
                 continue
 
             resp = self._dispatch(msg)

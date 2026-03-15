@@ -54,6 +54,19 @@ func (m *mcpSession) run(ctx context.Context) error {
 
 		var req jsonRPCRequest
 		if err := json.Unmarshal(line, &req); err != nil {
+			// JSON-RPC 2.0 §4.2: parse errors get a response with null id.
+			resp := mcpErr(nil, -32700, "Parse error: "+err.Error())
+			out, marshalErr := json.Marshal(resp)
+			if marshalErr != nil {
+				continue
+			}
+			m.mu.Lock()
+			_, _ = m.w.Write(out)
+			_, _ = m.w.Write([]byte("\n"))
+			if f, ok := m.w.(flusher); ok {
+				_ = f.Flush()
+			}
+			m.mu.Unlock()
 			continue
 		}
 

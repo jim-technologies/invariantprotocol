@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import fnmatch
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -103,6 +105,44 @@ class Server:
         self._channels: list[grpc.Channel] = []
         self._interceptors: list[Interceptor] = []
         self._http_header_provider: HTTPHeaderProvider | None = None
+        self._includes: list[str] = []
+        self._excludes: list[str] = []
+
+    def include(self, *patterns: str) -> None:
+        """Add glob patterns for methods to include. Only methods matching at
+        least one include pattern are registered. Patterns are matched against
+        the fully qualified method path: "service.full.Name.MethodName".
+        Use "*" to match any sequence of characters (including dots).
+        Examples: "temporal.api.workflowservice.v1.WorkflowService.*", "*.StartWorkflow*".
+        """
+        self._includes.extend(patterns)
+
+    def exclude(self, *patterns: str) -> None:
+        """Add glob patterns for methods to exclude. Methods matching any
+        exclude pattern are skipped during registration. Exclude is applied
+        after include. Patterns use the same syntax as include().
+        """
+        self._excludes.extend(patterns)
+
+    def _should_include(self, service_full_name: str, method_name: str) -> bool:
+        """Check if a method should be registered based on include/exclude patterns
+        and INVARIANT_INCLUDE/INVARIANT_EXCLUDE environment variables."""
+        full_path = f"{service_full_name}.{method_name}"
+
+        includes = list(self._includes)
+        env_include = os.environ.get("INVARIANT_INCLUDE", "")
+        if env_include:
+            includes.extend(p.strip() for p in env_include.split(",") if p.strip())
+
+        excludes = list(self._excludes)
+        env_exclude = os.environ.get("INVARIANT_EXCLUDE", "")
+        if env_exclude:
+            excludes.extend(p.strip() for p in env_exclude.split(",") if p.strip())
+
+        if includes and not any(_glob_match(p, full_path) for p in includes):
+            return False
+
+        return not any(_glob_match(p, full_path) for p in excludes)
 
     def use(self, interceptor: Interceptor) -> None:
         """Register an interceptor. Interceptors run in registration order
@@ -190,6 +230,9 @@ class Server:
                 if method_info.client_streaming or method_info.server_streaming:
                     continue
 
+                if not self._should_include(svc_full_name, method_name):
+                    continue
+
                 handler = getattr(servicer, method_name, None)
                 if handler is None:
                     continue
@@ -244,6 +287,9 @@ class Server:
         for svc_full_name, svc_info in services.items():
             for method_name, method_info in svc_info.methods.items():
                 if method_info.client_streaming or method_info.server_streaming:
+                    continue
+
+                if not self._should_include(svc_full_name, method_name):
                     continue
 
                 method_path = f"/{svc_full_name}/{method_name}"
@@ -312,6 +358,9 @@ class Server:
                 if method_info.client_streaming or method_info.server_streaming:
                     continue
 
+                if not self._should_include(svc_full_name, method_name):
+                    continue
+
                 method_path = f"/{svc_full_name}/{method_name}"
                 binding = client_binding_for_method(rules.get(method_path), svc_full_name, method_name)
                 handler = HTTPDynamicHandler(
@@ -350,7 +399,7 @@ class Server:
         if "--cli" in args:
             idx = args.index("--cli")
             # Rewrite sys.argv so the CLI projection sees only its args.
-            sys.argv = [sys.argv[0], *args[idx + 1:]]
+            sys.argv = [sys.argv[0], *args[idx + 1 :]]
             self.serve(cli=True)
             return
 
@@ -506,3 +555,12 @@ class Server:
         for ch in self._channels:
             ch.close()
         self._channels.clear()
+
+
+def _glob_match(pattern: str, s: str) -> bool:
+    """Match pattern against string where '*' matches any characters including dots.
+
+    Uses fnmatch with '[.]' translation to allow '*' to match dots,
+    since fnmatch's '*' normally doesn't match '/' but does match '.'.
+    """
+    return fnmatch.fnmatch(s, pattern)
