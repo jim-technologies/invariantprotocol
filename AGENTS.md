@@ -121,9 +121,9 @@ make generate  # regenerate proto stubs
 
 ## Dependency boundaries
 
-Three lockfiles, three sources of truth — keep them clean:
+Three lockfiles:
 
-- **`.flox/env/manifest.toml`** — language toolchains and CLI tools only: `python3`, `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`. Do NOT install Python or Go libraries here.
+- **`.flox/env/manifest.toml`** — language toolchains and CLI tools (`python3`, `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`). May also pin nix-built Python packages when uv would otherwise need a C toolchain inside the flox sandbox.
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev dep. `uv run` resolves against this.
 - **`go/go.mod` + `go/go.sum`** — every Go dep.
 

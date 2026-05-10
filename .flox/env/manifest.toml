@@ -1,3 +1,11 @@
+## Flox Environment Manifest -----------------------------------------
+##
+##   _Everything_ you need to know about the _manifest_ is here:
+##
+##   https://flox.dev/docs/reference/command-reference/manifest.toml/
+##
+## -------------------------------------------------------------------
+# Flox manifest version managed by Flox CLI
 schema-version = "1.11.0"
 
 
@@ -7,27 +15,28 @@ schema-version = "1.11.0"
 ##  $ flox show gum     <- show all versions of a package
 ## -------------------------------------------------------------------
 [install]
-# Language toolchains and CLI tools only.
-# Python deps live in python/pyproject.toml + python/uv.lock (managed by uv).
-# Go deps live in go/go.mod + go/go.sum.
 python3.pkg-path = "python3"
-python3.outputs = "all"
-uv.pkg-path = "uv"
-uv.outputs = "all"
-go.pkg-path = "go"
-go.outputs = "all"
 buf.pkg-path = "buf"
-buf.outputs = "all"
+uv.pkg-path = "uv"
+go.pkg-path = "go"
+protobuf.pkg-path = "python313Packages.protobuf"
+protobuf.version = ">=6.33.5"
+protobuf.outputs = "all"
+grpcio.pkg-path = "python313Packages.grpcio"
+grpcio.outputs = "all"
+grpcio-tools.pkg-path = "python313Packages.grpcio-tools"
+grpcio-tools.outputs = "all"
+pytest.pkg-path = "python313Packages.pytest"
+pytest.outputs = "all"
+pyyaml.pkg-path = "python313Packages.pyyaml"
+pyyaml.outputs = "all"
+protoc-gen-go.pkg-path = "protoc-gen-go"
 golangci-lint.pkg-path = "golangci-lint"
-golangci-lint.outputs = "all"
 ruff.pkg-path = "ruff"
-ruff.outputs = "all"
-# protoc + protoc-gen-go are required by `buf generate` for Go output.
 protoc.pkg-path = "protobuf"
 protoc.version = ">=33.5"
-protoc.outputs = "all"
-protoc-gen-go.pkg-path = "protoc-gen-go"
-protoc-gen-go.outputs = "all"
+# gum.pkg-path = "gum"
+# gum.version = "^0.14.5"
 
 
 ## Environment Variables ---------------------------------------------
