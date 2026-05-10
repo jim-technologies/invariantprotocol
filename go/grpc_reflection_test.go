@@ -1,6 +1,7 @@
 package invariant
 
 import (
+	"errors"
 	"io"
 	"testing"
 
@@ -31,7 +32,7 @@ func TestGRPCReflection(t *testing.T) {
 	services := map[string]bool{}
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)

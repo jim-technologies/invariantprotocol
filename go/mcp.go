@@ -21,7 +21,7 @@ type mcpSession struct {
 	r      io.Reader
 	w      io.Writer
 	mu     sync.Mutex
-	// inflight tracks per-request cancel funcs so notifications/cancelled
+	// inflight tracks per-request cancel funcs so notifications/canceled
 	// can interrupt long-running tools/call invocations.
 	inflightMu sync.Mutex
 	inflight   map[string]context.CancelFunc
@@ -80,7 +80,7 @@ func (m *mcpSession) run(ctx context.Context) error {
 		}
 
 		// tools/call is the only method that can block (user handler) —
-		// dispatch it concurrently so notifications/cancelled can interrupt
+		// dispatch it concurrently so notifications/canceled can interrupt
 		// it. Fast metadata methods (initialize, tools/list, ping) run inline
 		// to keep response order deterministic.
 		if req.Method != "tools/call" {
@@ -91,27 +91,26 @@ func (m *mcpSession) run(ctx context.Context) error {
 		}
 
 		// Register the cancel func synchronously *before* starting the goroutine
-		// so a notifications/cancelled arriving on the next read always finds it.
-		callCtx, cancel := context.WithCancel(ctx)
+		// so a notifications/canceled arriving on the next read always finds it.
+		callCtx, cancel := context.WithCancel(ctx) //nolint:gosec // cancel stored in inflight map and invoked via defer below
 		idKey := string(req.ID)
 		m.inflightMu.Lock()
 		m.inflight[idKey] = cancel
 		m.inflightMu.Unlock()
 
-		wg.Add(1)
-		go func(req jsonRPCRequest) {
-			defer wg.Done()
+		reqCopy := req
+		wg.Go(func() {
 			defer func() {
 				cancel()
 				m.inflightMu.Lock()
 				delete(m.inflight, idKey)
 				m.inflightMu.Unlock()
 			}()
-			resp := m.dispatch(callCtx, &req)
+			resp := m.dispatch(callCtx, &reqCopy)
 			if resp != nil {
 				m.writeResponse(resp)
 			}
-		}(req)
+		})
 	}
 	return scanner.Err()
 }
@@ -131,7 +130,7 @@ func (m *mcpSession) writeResponse(resp *jsonRPCResponse) {
 }
 
 func (m *mcpSession) handleNotification(req *jsonRPCRequest) {
-	if req.Method != "notifications/cancelled" {
+	if req.Method != "notifications/canceled" {
 		return
 	}
 	var p struct {

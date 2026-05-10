@@ -2,7 +2,9 @@ package invariant
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"buf.build/go/protovalidate"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -28,7 +30,7 @@ func Validation() (UnaryServerInterceptor, error) {
 		return nil, fmt.Errorf("create protovalidate validator: %w", err)
 	}
 
-	return func(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error) {
+	return func(ctx context.Context, req any, _ *ServerCallInfo, handler UnaryHandler) (any, error) {
 		msg, ok := req.(proto.Message)
 		if !ok {
 			return handler(ctx, req)
@@ -41,7 +43,8 @@ func Validation() (UnaryServerInterceptor, error) {
 }
 
 func validationToInvariantError(err error) error {
-	verr, ok := err.(*protovalidate.ValidationError)
+	verr := &protovalidate.ValidationError{}
+	ok := errors.As(err, &verr)
 	if !ok {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -82,12 +85,5 @@ func validationToInvariantError(err error) error {
 }
 
 func joinSemi(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += "; "
-		}
-		out += p
-	}
-	return out
+	return strings.Join(parts, "; ")
 }

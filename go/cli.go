@@ -281,4 +281,3 @@ func (s *Server) resolveServiceMethod(service, method string) string {
 	}
 	return ""
 }
-

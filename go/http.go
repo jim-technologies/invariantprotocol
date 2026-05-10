@@ -3,6 +3,7 @@ package invariant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -140,7 +141,7 @@ func (s *Server) serveHTTP(ctx context.Context, port int) error {
 		_ = srv.Shutdown(shutdownCtx)
 		return ctx.Err()
 	case err := <-errc:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 		return nil
@@ -180,6 +181,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, entry *httpT
 
 // applyConnectTimeout honors the Connect-Timeout-Ms request header. Returns
 // the request's existing context unchanged if the header is missing or invalid.
+// Caller must always defer the returned cancel.
 func applyConnectTimeout(r *http.Request) (context.Context, context.CancelFunc) {
 	raw := r.Header.Get("Connect-Timeout-Ms")
 	if raw == "" {
@@ -189,7 +191,8 @@ func applyConnectTimeout(r *http.Request) (context.Context, context.CancelFunc) 
 	if err != nil || ms <= 0 {
 		return r.Context(), func() {}
 	}
-	return context.WithTimeout(r.Context(), time.Duration(ms)*time.Millisecond)
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(ms)*time.Millisecond) //nolint:gosec // cancel returned for caller defer
+	return ctx, cancel
 }
 
 // handleHTTPProto handles requests with Content-Type: application/proto.
@@ -304,7 +307,7 @@ func isProtoContentType(ct string) bool {
 }
 
 func wantsProto(accept string) bool {
-	for _, part := range strings.Split(accept, ",") {
+	for part := range strings.SplitSeq(accept, ",") {
 		mt := strings.TrimSpace(part)
 		if i := strings.Index(mt, ";"); i >= 0 {
 			mt = mt[:i]

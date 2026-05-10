@@ -365,7 +365,7 @@ func buildInvokeHandler(handler any) (UnaryHandler, error) {
 	handlerVal := reflect.ValueOf(handler)
 	handlerType := handlerVal.Type()
 	if handlerType.Kind() != reflect.Func || handlerType.NumIn() != 2 || handlerType.NumOut() != 2 {
-		return nil, fmt.Errorf("handler has unexpected signature (expected func(ctx, *Req) (*Resp, error))")
+		return nil, errors.New("handler has unexpected signature (expected func(ctx, *Req) (*Resp, error))")
 	}
 
 	reqType := handlerType.In(1)
@@ -514,7 +514,7 @@ func MCP() Projection { return Projection{kind: "mcp"} }
 // CLI returns a projection that runs as a CLI from os.Args.
 func CLI() Projection { return Projection{kind: "cli"} }
 
-// Serve starts the specified projections and blocks until ctx is cancelled
+// Serve starts the specified projections and blocks until ctx is canceled
 // or the first projection returns an error.
 //
 //	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)

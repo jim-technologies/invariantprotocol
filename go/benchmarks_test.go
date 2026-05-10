@@ -46,12 +46,12 @@ func benchServer(b *testing.B) *Server {
 // (Server.Invoke → interceptor chain → handler → typed response).
 func BenchmarkInvokeDirect(b *testing.B) {
 	srv := benchServer(b)
-	ctx := context.Background()
+	ctx := b.Context()
 	req := &greetpb.GreetRequest{Name: "World"}
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if _, err := srv.Invoke(ctx, "GreetService.Greet", req); err != nil {
 			b.Fatal(err)
 		}
@@ -61,15 +61,15 @@ func BenchmarkInvokeDirect(b *testing.B) {
 // BenchmarkInvokeWithInterceptor measures the path with one no-op interceptor.
 func BenchmarkInvokeWithInterceptor(b *testing.B) {
 	srv := benchServer(b)
-	srv.Use(func(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error) {
+	srv.Use(func(ctx context.Context, req any, _ *ServerCallInfo, handler UnaryHandler) (any, error) {
 		return handler(ctx, req)
 	})
-	ctx := context.Background()
+	ctx := b.Context()
 	req := &greetpb.GreetRequest{Name: "World"}
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if _, err := srv.Invoke(ctx, "GreetService.Greet", req); err != nil {
 			b.Fatal(err)
 		}
@@ -99,7 +99,7 @@ func BenchmarkHTTPJSON(b *testing.B) {
 	client := &http.Client{}
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
@@ -134,7 +134,7 @@ func BenchmarkHTTPProto(b *testing.B) {
 	client := &http.Client{}
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/proto")
 		req.Header.Set("Accept", "application/proto")
@@ -149,7 +149,7 @@ func BenchmarkHTTPProto(b *testing.B) {
 
 // BenchmarkGRPCUnary measures the full gRPC unary path through the framework.
 func BenchmarkGRPCUnary(b *testing.B) {
-	addr, stop := startServeGRPC_b(b)
+	addr, stop := startServeGRPCB(b)
 	defer stop()
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -158,12 +158,12 @@ func BenchmarkGRPCUnary(b *testing.B) {
 	}
 	defer conn.Close()
 
-	ctx := context.Background()
+	ctx := b.Context()
 	req := &greetpb.GreetRequest{Name: "World"}
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		var resp greetpb.GreetResponse
 		if err := conn.Invoke(ctx, "/greet.v1.GreetService/Greet", req, &resp); err != nil {
 			b.Fatal(err)
@@ -171,8 +171,8 @@ func BenchmarkGRPCUnary(b *testing.B) {
 	}
 }
 
-// startServeGRPC_b is the benchmark-friendly equivalent of startServeGRPC (uses *testing.B).
-func startServeGRPC_b(b *testing.B) (string, func()) {
+// startServeGRPCB is the benchmark-friendly equivalent of startServeGRPC (uses *testing.B).
+func startServeGRPCB(b *testing.B) (string, func()) {
 	b.Helper()
 	srv, err := ServerFromDescriptor(descriptorPath())
 	if err != nil {
