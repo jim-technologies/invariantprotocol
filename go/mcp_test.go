@@ -164,7 +164,7 @@ func TestMCPToolCallRejectsUnknownField(t *testing.T) {
 	assert.Contains(t, block["text"], "unknown field")
 
 	errObj := result["error"].(map[string]any)
-	assert.Equal(t, "INVALID_ARGUMENT", errObj["code"])
+	assert.Equal(t, "invalid_argument", errObj["code"])
 	assert.Contains(t, errObj["message"], "unknown field")
 
 	details := errObj["details"].([]any)

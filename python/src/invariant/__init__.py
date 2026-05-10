@@ -8,6 +8,7 @@ from invariant.server import (
     ServerCallInfo,
     Tool,
 )
+from invariant.validation import validation
 
 __all__ = [
     "HTTPHeaderProvider",
@@ -18,4 +19,5 @@ __all__ = [
     "Server",
     "ServerCallInfo",
     "Tool",
+    "validation",
 ]

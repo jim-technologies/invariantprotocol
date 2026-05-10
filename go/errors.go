@@ -1,7 +1,9 @@
 package invariant
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -24,6 +26,12 @@ func statusFromError(err error) *status.Status {
 	if st, ok := status.FromError(err); ok {
 		return st
 	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.New(codes.DeadlineExceeded, err.Error())
+	case errors.Is(err, context.Canceled):
+		return status.New(codes.Canceled, err.Error())
+	}
 	return status.New(codes.Unknown, err.Error())
 }
 
@@ -31,26 +39,28 @@ func errorMessage(err error) string {
 	return statusFromError(err).Message()
 }
 
+// errorPayload builds the Connect-style error envelope:
+//
+//	{"code": "invalid_argument", "message": "...", "details": [...]}
 func errorPayload(err error) map[string]any {
 	st := statusFromError(err)
 	payload := map[string]any{
 		"code":    grpcCodeName(st.Code()),
 		"message": st.Message(),
 	}
-
 	if details := statusDetails(st); len(details) > 0 {
 		payload["details"] = details
 	}
-
 	return payload
 }
 
+// grpcCodeName returns the Connect-style lowercase code name (e.g. "invalid_argument").
 func grpcCodeName(code codes.Code) string {
 	name := codepb.Code(int32(code)).String()
 	if strings.HasPrefix(name, "Code(") {
-		return "UNKNOWN"
+		return "unknown"
 	}
-	return name
+	return strings.ToLower(name)
 }
 
 func statusDetails(st *status.Status) []map[string]any {

@@ -7,31 +7,34 @@ import (
 	"maps"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 
 	invpb "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // --- Interceptor types (mirrors gRPC pattern, zero coupling to grpc package) ---
 
 // ServerCallInfo holds metadata about the RPC being invoked, passed to interceptors.
-// Equivalent to Python's ServerCallInfo.
 type ServerCallInfo struct {
 	FullMethod string // e.g. "/greet.v1.GreetService/Greet"
 }
 
 // UnaryHandler is the handler function called at the end of the interceptor chain.
-// Equivalent to Python's Handler type.
 type UnaryHandler func(ctx context.Context, req any) (any, error)
 
 // UnaryServerInterceptor intercepts unary RPCs across all projections (MCP, HTTP,
 // gRPC, CLI). Same signature as grpc.UnaryServerInterceptor but framework-native.
-// Equivalent to Python's Interceptor type.
 type UnaryServerInterceptor func(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error)
 
 // OutboundHTTPRequest describes an HTTP request that will be sent by ConnectHTTP.
@@ -57,13 +60,20 @@ type Tool struct {
 	OutputType      string
 	ServiceFullName string
 	MethodName      string
+
+	// Cached at addTool time so the hot path doesn't reflect on every call.
+	invokeHandler UnaryHandler
+	callInfo      *ServerCallInfo
+	newRequest    func() proto.Message
 }
+
+const (
+	serverName    = "invariant-protocol"
+	serverVersion = "0.1.0"
+)
 
 // Server holds parsed descriptors and registered tools.
 type Server struct {
-	Name    string // server name (used in MCP initialize)
-	Version string // server version
-
 	parsed             *invpb.ParsedDescriptor
 	schemaGen          *schemaGenerator
 	tools              map[string]*Tool
@@ -184,8 +194,6 @@ func newServer(parsed *invpb.ParsedDescriptor) *Server {
 		parsed:    parsed,
 		schemaGen: newSchemaGenerator(parsed),
 		tools:     make(map[string]*Tool),
-		Name:      "invariant-protocol",
-		Version:   "0.1.0",
 	}
 }
 
@@ -266,7 +274,7 @@ func (s *Server) Register(servicer any, serviceName ...string) error {
 				description = toolName
 			}
 
-			s.tools[toolName] = &Tool{
+			if err := s.addTool(&Tool{
 				Name:            toolName,
 				Description:     description,
 				InputSchema:     s.schemaGen.MessageToSchema(methodInfo.InputType),
@@ -275,11 +283,137 @@ func (s *Server) Register(servicer any, serviceName ...string) error {
 				OutputType:      methodInfo.OutputType,
 				ServiceFullName: svcFullName,
 				MethodName:      methodName,
+			}); err != nil {
+				return err
 			}
 		}
 	}
 
 	return nil
+}
+
+// addTool registers a Tool, rejecting collisions and pre-building the per-Tool
+// invocation closure so invoke() doesn't reflect on every call.
+//
+// Build errors are deferred to invoke time — registration accepts the tool so
+// metadata-only tests don't have to use real handlers.
+func (s *Server) addTool(t *Tool) error {
+	if existing, ok := s.tools[t.Name]; ok && existing.ServiceFullName != t.ServiceFullName {
+		return fmt.Errorf(
+			"tool name collision: %q is registered by both %q and %q. "+
+				"Two services in different packages share the same simple name; "+
+				"use Server.Include() to scope to one",
+			t.Name, existing.ServiceFullName, t.ServiceFullName,
+		)
+	}
+	if handler, err := buildInvokeHandler(t.Handler); err == nil {
+		t.invokeHandler = handler
+	} else {
+		buildErr := err
+		t.invokeHandler = func(context.Context, any) (any, error) { return nil, buildErr }
+	}
+	t.newRequest = buildRequestFactory(t.Handler)
+	t.callInfo = &ServerCallInfo{FullMethod: "/" + t.ServiceFullName + "/" + t.MethodName}
+	s.tools[t.Name] = t
+	return nil
+}
+
+// buildRequestFactory returns a closure that produces an empty proto.Message
+// of the handler's request type. Reflection runs once at registration.
+func buildRequestFactory(handler any) func() proto.Message {
+	if provider, ok := handler.(interface {
+		requestDescriptor() protoreflect.MessageDescriptor
+	}); ok {
+		desc := provider.requestDescriptor()
+		return func() proto.Message { return dynamicpb.NewMessage(desc) }
+	}
+	hv := reflect.ValueOf(handler)
+	if hv.Kind() != reflect.Func {
+		return nil
+	}
+	ht := hv.Type()
+	if ht.NumIn() != 2 {
+		return nil
+	}
+	reqType := ht.In(1)
+	if reqType.Kind() != reflect.Ptr {
+		return nil
+	}
+	elem := reqType.Elem()
+	// Verify the pointer-to type implements proto.Message.
+	if _, ok := reflect.New(elem).Interface().(proto.Message); !ok {
+		return nil
+	}
+	return func() proto.Message { return reflect.New(elem).Interface().(proto.Message) }
+}
+
+// buildInvokeHandler returns the proto-in/proto-out closure for a tool's handler.
+// Reflection happens once at registration time, not on each request.
+func buildInvokeHandler(handler any) (UnaryHandler, error) {
+	switch h := handler.(type) {
+	case *grpcDynamicHandler:
+		return func(ctx context.Context, req any) (any, error) {
+			return h.callProto(ctx, req.(proto.Message))
+		}, nil
+	case *httpDynamicHandler:
+		return func(ctx context.Context, req any) (any, error) {
+			return h.callProto(ctx, req.(proto.Message))
+		}, nil
+	}
+
+	// Local servicer — bind via reflection once.
+	handlerVal := reflect.ValueOf(handler)
+	handlerType := handlerVal.Type()
+	if handlerType.Kind() != reflect.Func || handlerType.NumIn() != 2 || handlerType.NumOut() != 2 {
+		return nil, fmt.Errorf("handler has unexpected signature (expected func(ctx, *Req) (*Resp, error))")
+	}
+
+	reqType := handlerType.In(1)
+	// Snapshot the typed request's proto FullName so the binary fast-path on
+	// dynamicpb inputs can decide between binary roundtrip and JSON fallback.
+	handlerReqMsg, ok := reflect.New(reqType.Elem()).Interface().(proto.Message)
+	if !ok {
+		return nil, fmt.Errorf("handler request type %s does not implement proto.Message", reqType)
+	}
+	handlerFullName := handlerReqMsg.ProtoReflect().Descriptor().FullName()
+
+	return func(ctx context.Context, r any) (any, error) {
+		rMsg := r.(proto.Message)
+
+		// dynamicpb inputs (gRPC, binary HTTP proxy) need conversion to the
+		// handler's typed proto. Same-name → fast binary roundtrip; otherwise
+		// fall through to JSON for cross-type conversion (e.g. structpb.Struct).
+		if dynMsg, isDynamic := rMsg.(*dynamicpb.Message); isDynamic {
+			typed := reflect.New(reqType.Elem()).Interface().(proto.Message)
+			if dynMsg.ProtoReflect().Descriptor().FullName() == handlerFullName {
+				b, err := proto.Marshal(rMsg)
+				if err != nil {
+					return nil, fmt.Errorf("marshal dynamic to binary: %w", err)
+				}
+				if err := proto.Unmarshal(b, typed); err != nil {
+					return nil, fmt.Errorf("unmarshal binary to typed: %w", err)
+				}
+			} else {
+				b, err := protojson.Marshal(rMsg)
+				if err != nil {
+					return nil, fmt.Errorf("marshal dynamic to JSON: %w", err)
+				}
+				if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, typed); err != nil {
+					return nil, fmt.Errorf("unmarshal JSON to typed: %w", err)
+				}
+			}
+			rMsg = typed
+		}
+
+		results := handlerVal.Call([]reflect.Value{
+			reflect.ValueOf(ctx),
+			reflect.ValueOf(rMsg),
+		})
+		if !results[1].IsNil() {
+			return nil, results[1].Interface().(error)
+		}
+		return results[0].Interface(), nil
+	}, nil
 }
 
 // matchServicer finds services whose RPC names match methods on the servicer.
@@ -341,7 +475,7 @@ func (s *Server) Connect(conn *grpc.ClientConn) error {
 				description = toolName
 			}
 
-			s.tools[toolName] = &Tool{
+			if err := s.addTool(&Tool{
 				Name:            toolName,
 				Description:     description,
 				InputSchema:     s.schemaGen.MessageToSchema(methodInfo.InputType),
@@ -350,6 +484,8 @@ func (s *Server) Connect(conn *grpc.ClientConn) error {
 				OutputType:      methodInfo.OutputType,
 				ServiceFullName: svcFullName,
 				MethodName:      methodName,
+			}); err != nil {
+				return err
 			}
 		}
 	}
@@ -378,45 +514,94 @@ func MCP() Projection { return Projection{kind: "mcp"} }
 // CLI returns a projection that runs as a CLI from os.Args.
 func CLI() Projection { return Projection{kind: "cli"} }
 
-// Serve starts the specified projections and blocks.
+// Serve starts the specified projections and blocks until ctx is cancelled
+// or the first projection returns an error.
 //
-//	server.Serve(invariant.HTTP(8080))
-//	server.Serve(invariant.HTTP(8080), invariant.GRPC(50051))
-//	server.Serve(invariant.MCP())
-//	server.Serve(invariant.CLI())
-func (s *Server) Serve(projections ...Projection) error {
+//	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+//	defer cancel()
+//	server.Serve(ctx, invariant.HTTP(8080))
+//	server.Serve(ctx, invariant.HTTP(8080), invariant.GRPC(50051))
+//
+// On error or cancellation, all projections receive a graceful shutdown signal.
+func (s *Server) Serve(ctx context.Context, projections ...Projection) error {
 	if len(projections) == 0 {
 		return errors.New("no projections specified")
 	}
 	if len(projections) == 1 {
-		return s.serveOne(projections[0])
+		return s.serveOne(ctx, projections[0])
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	errc := make(chan error, len(projections))
 	for _, p := range projections {
-		go func() { errc <- s.serveOne(p) }()
+		go func() { errc <- s.serveOne(ctx, p) }()
 	}
-	return <-errc
+	first := <-errc
+	cancel()
+	for i := 1; i < len(projections); i++ {
+		<-errc
+	}
+	return first
 }
 
-func (s *Server) serveOne(p Projection) error {
+func (s *Server) serveOne(ctx context.Context, p Projection) error {
 	switch p.kind {
 	case "mcp":
-		return s.serveMCP(context.Background())
+		return s.serveMCP(ctx)
 	case "cli":
-		return s.serveCLI(context.Background())
+		return s.serveCLI(ctx)
 	case "http":
-		return s.serveHTTP(p.port)
+		return s.serveHTTP(ctx, p.port)
 	case "grpc":
-		return s.serveGRPC(p.port, p.grpcOpts...)
+		return s.serveGRPC(ctx, p.port, p.grpcOpts...)
 	default:
 		return fmt.Errorf("unknown projection: %s", p.kind)
 	}
+}
+
+// Invoke dispatches a request to a registered tool by name. Useful for
+// in-process callers (workflow runtimes, tests) that don't need to spin up
+// a projection.
+//
+// Returns a NOT_FOUND status error if the tool is not registered, so the
+// error projects to the right code through every projection.
+func (s *Server) Invoke(ctx context.Context, toolName string, req proto.Message) (proto.Message, error) {
+	tool, ok := s.tools[toolName]
+	if !ok {
+		var available []string
+		for name := range s.tools {
+			available = append(available, name)
+		}
+		return nil, status.Errorf(codes.NotFound, "unknown tool %q. Available: %v", toolName, available)
+	}
+	return s.invoke(ctx, tool, req)
 }
 
 // Tools returns a snapshot of the registered tool names to their Tool metadata.
 func (s *Server) Tools() map[string]*Tool {
 	out := make(map[string]*Tool, len(s.tools))
 	maps.Copy(out, s.tools)
+	return out
+}
+
+// ToolCatalog returns the canonical tool catalog (same shape as MCP `tools/list`).
+// Used by both the HTTP `GET /` endpoint and MCP's `tools/list`.
+func (s *Server) ToolCatalog() []map[string]any {
+	names := make([]string, 0, len(s.tools))
+	for name := range s.tools {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+
+	out := make([]map[string]any, 0, len(s.tools))
+	for _, name := range names {
+		t := s.tools[name]
+		out = append(out, map[string]any{
+			"name":        t.Name,
+			"description": t.Description,
+			"inputSchema": t.InputSchema,
+		})
+	}
 	return out
 }
 

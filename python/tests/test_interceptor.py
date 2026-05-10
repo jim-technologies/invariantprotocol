@@ -4,103 +4,94 @@ import json
 import os
 import subprocess
 import sys
-import urllib.request
 
+import grpc
+import httpx
 import pytest
+from google.protobuf import descriptor_pool, message_factory
 
 
-def test_interceptor_fires_on_cli(server):
+async def test_interceptor_fires_on_cli(server):
     log = []
 
-    def interceptor(request, context, info, handler):
+    async def interceptor(request, context, info, handler):
         log.append("A-before")
-        resp = handler(request, context)
+        resp = await handler(request, context)
         log.append("A-after")
         return resp
 
     server.use(interceptor)
     try:
-        result = server._cli(["GreetService", "Greet", "-r", '{"name": "CLI"}'])
+        result = await server._cli(["GreetService", "Greet", "-r", '{"name": "CLI"}'])
         assert result["message"] == "Hi CLI"
         assert log == ["A-before", "A-after"]
     finally:
         server._interceptors.clear()
 
 
-def test_interceptor_fires_on_http(server):
+async def test_interceptor_fires_on_http(server):
     log = []
 
-    def interceptor(request, context, info, handler):
+    async def interceptor(request, context, info, handler):
         log.append("A-before")
-        resp = handler(request, context)
+        resp = await handler(request, context)
         log.append("A-after")
         return resp
 
     server.use(interceptor)
-    port = server._start_http(port=0)
+    port = await server._start_http(port=0)
     try:
-        req = urllib.request.Request(
-            f"http://localhost:{port}/greet.v1.GreetService/Greet",
-            data=json.dumps({"name": "HTTP"}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req) as resp:
-            body = json.loads(resp.read())
-
-        assert body["message"] == "Hi HTTP"
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"http://localhost:{port}/greet.v1.GreetService/Greet",
+                json={"name": "HTTP"},
+            )
+        assert resp.json()["message"] == "Hi HTTP"
         assert log == ["A-before", "A-after"]
     finally:
-        server._stop_http()
+        await server._stop_http()
         server._interceptors.clear()
 
 
-def test_interceptor_fires_on_grpc(server):
+async def test_interceptor_fires_on_grpc(server):
     log = []
 
-    def interceptor(request, context, info, handler):
+    async def interceptor(request, context, info, handler):
         log.append("A-before")
-        resp = handler(request, context)
+        resp = await handler(request, context)
         log.append("A-after")
         return resp
 
     server.use(interceptor)
-    port = server._start_grpc(port=0)
+    port = await server._start_grpc(port=0)
     try:
-        import grpc
-        from google.protobuf import descriptor_pool, message_factory
-
         pool = descriptor_pool.Default()
-        req_desc = pool.FindMessageTypeByName("greet.v1.GreetRequest")
-        resp_desc = pool.FindMessageTypeByName("greet.v1.GreetResponse")
-        req_class = message_factory.GetMessageClass(req_desc)
-        resp_class = message_factory.GetMessageClass(resp_desc)
+        req_class = message_factory.GetMessageClass(pool.FindMessageTypeByName("greet.v1.GreetRequest"))
+        resp_class = message_factory.GetMessageClass(pool.FindMessageTypeByName("greet.v1.GreetResponse"))
 
-        channel = grpc.insecure_channel(f"localhost:{port}")
-        stub = channel.unary_unary(
-            "/greet.v1.GreetService/Greet",
-            request_serializer=lambda msg: msg.SerializeToString(),
-            response_deserializer=resp_class.FromString,
-        )
-
-        request = req_class()
-        request.name = "gRPC"
-        response = stub(request)
+        async with grpc.aio.insecure_channel(f"localhost:{port}") as channel:
+            stub = channel.unary_unary(
+                "/greet.v1.GreetService/Greet",
+                request_serializer=lambda msg: msg.SerializeToString(),
+                response_deserializer=resp_class.FromString,
+            )
+            request = req_class()
+            request.name = "gRPC"
+            response = await stub(request)
         assert response.message == "Hi gRPC"
         assert log == ["A-before", "A-after"]
-        channel.close()
     finally:
-        server._stop_grpc()
+        await server._stop_grpc()
         server._interceptors.clear()
 
 
-def test_interceptor_chain_order(server):
+async def test_interceptor_chain_order(server):
     log = []
 
     def make_interceptor(label):
-        def interceptor(request, context, info, handler):
+        async def interceptor(request, context, info, handler):
             log.append(f"{label}-before")
-            resp = handler(request, context)
+            resp = await handler(request, context)
             log.append(f"{label}-after")
             return resp
 
@@ -109,46 +100,59 @@ def test_interceptor_chain_order(server):
     server.use(make_interceptor("A"))
     server.use(make_interceptor("B"))
     try:
-        result = server._cli(["GreetService", "Greet", "-r", '{"name": "Order"}'])
+        result = await server._cli(["GreetService", "Greet", "-r", '{"name": "Order"}'])
         assert result["message"] == "Hi Order"
         assert log == ["A-before", "B-before", "B-after", "A-after"]
     finally:
         server._interceptors.clear()
 
 
-def test_interceptor_short_circuit(server):
-    def blocking_interceptor(request, context, info, handler):
+async def test_interceptor_short_circuit(server):
+    async def blocking_interceptor(request, context, info, handler):
         raise ValueError("blocked by interceptor")
 
     server.use(blocking_interceptor)
     try:
         with pytest.raises(ValueError, match="blocked by interceptor"):
-            server._cli(["GreetService", "Greet", "-r", '{"name": "Blocked"}'])
+            await server._cli(["GreetService", "Greet", "-r", '{"name": "Blocked"}'])
     finally:
         server._interceptors.clear()
 
 
-def test_interceptor_full_method(server):
+async def test_interceptor_full_method(server):
     captured = {}
 
-    def interceptor(request, context, info, handler):
+    async def interceptor(request, context, info, handler):
         captured["full_method"] = info.full_method
-        return handler(request, context)
+        return await handler(request, context)
 
     server.use(interceptor)
     try:
-        result = server._cli(["GreetService", "Greet", "-r", '{"name": "Method"}'])
+        result = await server._cli(["GreetService", "Greet", "-r", '{"name": "Method"}'])
         assert result["message"] == "Hi Method"
         assert captured["full_method"] == "/greet.v1.GreetService/Greet"
     finally:
         server._interceptors.clear()
 
 
-def test_no_interceptors_backward_compat(server):
-    # No interceptors registered — should work as before.
+async def test_no_interceptors(server):
     assert len(server._interceptors) == 0
-    result = server._cli(["GreetService", "Greet", "-r", '{"name": "Compat"}'])
+    result = await server._cli(["GreetService", "Greet", "-r", '{"name": "Compat"}'])
     assert result["message"] == "Hi Compat"
+
+
+def test_interceptor_rejects_sync():
+    from invariant import Server
+
+    srv = Server.from_descriptor(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "proto", "descriptor.binpb")
+    )
+
+    def sync_interceptor(request, context, info, handler):
+        return handler(request, context)
+
+    with pytest.raises(TypeError, match="must be async"):
+        srv.use(sync_interceptor)
 
 
 def test_interceptor_fires_on_mcp():
@@ -159,6 +163,7 @@ def test_interceptor_fires_on_mcp():
     descriptor = os.path.join(test_dir, "proto", "descriptor.binpb")
 
     script = f"""
+import asyncio
 import sys
 sys.path.insert(0, {src_dir!r})
 sys.path.insert(0, {gen_dir!r})
@@ -167,26 +172,26 @@ from invariant import Server
 
 log = []
 
-def interceptor(request, context, info, handler):
+async def interceptor(request, context, info, handler):
     log.append("A-before")
-    resp = handler(request, context)
+    resp = await handler(request, context)
     log.append("A-after")
     return resp
 
 class GreetServicer:
-    def Greet(self, request, context):
+    async def Greet(self, request, context):
         return greet_pb2.GreetResponse(message=f"Hi {{request.name}}")
-    def GreetGroup(self, request, context):
+    async def GreetGroup(self, request, context):
         return greet_pb2.GreetGroupResponse(messages=[], count=0)
 
-server = Server.from_descriptor({descriptor!r})
-server.register(GreetServicer())
-server.use(interceptor)
-server.serve(mcp=True)
+async def main():
+    server = Server.from_descriptor({descriptor!r})
+    server.register(GreetServicer())
+    server.use(interceptor)
+    await server.serve(mcp=True)
+    print(",".join(log), file=sys.stderr)
 
-# Print log to stderr so we can check it
-import sys
-print(",".join(log), file=sys.stderr)
+asyncio.run(main())
 """
 
     msg = {
@@ -218,5 +223,4 @@ print(",".join(log), file=sys.stderr)
     result = json.loads(content[0]["text"])
     assert result["message"] == "Hi MCP"
 
-    # Check interceptor log from stderr
     assert "A-before,A-after" in proc.stderr

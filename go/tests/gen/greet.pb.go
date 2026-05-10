@@ -7,6 +7,7 @@
 package greetpb
 
 import (
+	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
 	_ "google.golang.org/genproto/googleapis/api/annotations"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -363,9 +364,9 @@ var File_greet_proto protoreflect.FileDescriptor
 
 const file_greet_proto_rawDesc = "" +
 	"\n" +
-	"\vgreet.proto\x12\bgreet.v1\x1a\x1cgoogle/api/annotations.proto\"\xc3\x01\n" +
-	"\fGreetRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12'\n" +
+	"\vgreet.proto\x12\bgreet.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1cgoogle/api/annotations.proto\"\xcc\x01\n" +
+	"\fGreetRequest\x12\x1b\n" +
+	"\x04name\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x04name\x12'\n" +
 	"\x04mood\x18\x02 \x01(\x0e2\x0e.greet.v1.MoodH\x00R\x04mood\x88\x01\x01\x124\n" +
 	"\x04tags\x18\x03 \x03(\v2 .greet.v1.GreetRequest.TagsEntryR\x04tags\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +

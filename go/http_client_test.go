@@ -183,7 +183,7 @@ func TestConnectHTTPMapsRemoteErrors(t *testing.T) {
 	assert.Equal(t, true, result["isError"])
 
 	errObj := result["error"].(map[string]any)
-	assert.Equal(t, "INVALID_ARGUMENT", errObj["code"])
+	assert.Equal(t, "invalid_argument", errObj["code"])
 	assert.Equal(t, "bad name", errObj["message"])
 }
 
@@ -197,7 +197,7 @@ func TestConnectHTTPHandlerDirect(t *testing.T) {
 	dh, ok := tool.Handler.(*httpDynamicHandler)
 	require.True(t, ok, "handler should be *httpDynamicHandler")
 
-	result, err := dh.CallJSON(t.Context(), []byte(`{"name":"Direct"}`))
+	result, err := callDynamicJSON(t.Context(), dh, []byte(`{"name":"Direct"}`))
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, Direct")
 }

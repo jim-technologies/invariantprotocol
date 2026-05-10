@@ -1,11 +1,17 @@
-"""Invariant Protocol server — register gRPC servicers, project into MCP/CLI/HTTP/gRPC."""
+"""Invariant Protocol server — register gRPC servicers, project into MCP/CLI/HTTP/gRPC.
+
+Async-native end-to-end. All handlers and interceptors are async. Sync handlers
+are rejected at register() with a clear error.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
+import inspect
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,19 +24,17 @@ from invariant.schema import SchemaGenerator
 # --- Interceptor types (mirrors gRPC pattern, zero coupling to grpc package) ---
 
 #: Handler is the function called at the end of the interceptor chain.
-#: Equivalent to Go's UnaryHandler.
-Handler = Callable[[Any, Any], Any]  # (request, context) -> response
+#: Async-only — must be awaitable.
+Handler = Callable[[Any, Any], Awaitable[Any]]
 
 #: Interceptor intercepts unary RPCs across all projections (MCP, HTTP, gRPC, CLI).
-#: Same shape as grpc.UnaryServerInterceptor but framework-native.
-#: Equivalent to Go's UnaryServerInterceptor.
-Interceptor = Callable[[Any, Any, "ServerCallInfo", Handler], Any]
+#: Async-only — must be awaitable.
+Interceptor = Callable[[Any, Any, "ServerCallInfo", Handler], Awaitable[Any]]
 
 
 @dataclass
 class ServerCallInfo:
-    """Metadata about the RPC being invoked, passed to interceptors.
-    Equivalent to Go's ServerCallInfo."""
+    """Metadata about the RPC being invoked, passed to interceptors."""
 
     full_method: str  # e.g. "/greet.v1.GreetService/Greet"
 
@@ -48,85 +52,73 @@ class OutboundHTTPRequest:
 HTTPHeaderProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
 
 
+@dataclass(slots=True)
 class Tool:
     """A single registered RPC method projected as a tool."""
 
-    __slots__ = (
-        "description",
-        "handler",
-        "input_schema",
-        "input_type",
-        "method_name",
-        "name",
-        "output_type",
-        "service_full_name",
-    )
+    name: str
+    description: str
+    input_schema: dict
+    handler: Callable
+    input_type: str
+    output_type: str
+    service_full_name: str
+    method_name: str
 
-    def __init__(
-        self,
-        name: str,
-        description: str,
-        input_schema: dict,
-        handler: Callable,
-        input_type: str,
-        output_type: str,
-        service_full_name: str,
-        method_name: str,
-    ):
-        self.name = name
-        self.description = description
-        self.input_schema = input_schema
-        self.handler = handler
-        self.input_type = input_type
-        self.output_type = output_type
-        self.service_full_name = service_full_name
-        self.method_name = method_name
+
+def _is_async_callable(fn: Any) -> bool:
+    """Return True if calling fn(...) returns an awaitable."""
+    if inspect.iscoroutinefunction(fn):
+        return True
+    if not callable(fn):
+        return False
+    return inspect.iscoroutinefunction(fn.__call__)
+
+
+_SERVER_NAME = "invariant-protocol"
+_SERVER_VERSION = "0.1.0"
 
 
 class Server:
     """Holds parsed descriptors and registered tools, projects into MCP/CLI/HTTP/gRPC."""
 
+    name = _SERVER_NAME
+    version = _SERVER_VERSION
+
     def __init__(
         self,
         parsed: ParsedDescriptor,
         *,
-        name: str = "invariant-protocol",
-        version: str = "0.1.0",
         fds: descriptor_pb2.FileDescriptorSet | None = None,
     ):
         self.parsed = parsed
         self.schema_gen = SchemaGenerator(parsed)
         self.tools: dict[str, Tool] = {}
-        self.name = name
-        self.version = version
         self._fds = fds
-        self._grpc_server = None
-        self._http_server = None
-        self._channels: list[grpc.Channel] = []
+        self._channels: list[grpc.aio.Channel] = []
         self._interceptors: list[Interceptor] = []
         self._http_header_provider: HTTPHeaderProvider | None = None
         self._includes: list[str] = []
         self._excludes: list[str] = []
+        # Background server handles (test helpers / non-blocking serve).
+        self._http_uvicorn: Any = None
+        self._http_uvicorn_task: asyncio.Task | None = None
+        self._grpc_aio_server: grpc.aio.Server | None = None
+
+    # -- Public API: filtering --
 
     def include(self, *patterns: str) -> None:
         """Add glob patterns for methods to include. Only methods matching at
-        least one include pattern are registered. Patterns are matched against
-        the fully qualified method path: "service.full.Name.MethodName".
-        Use "*" to match any sequence of characters (including dots).
-        Examples: "temporal.api.workflowservice.v1.WorkflowService.*", "*.StartWorkflow*".
+        least one include pattern are registered. Patterns match the fully
+        qualified path: "service.full.Name.MethodName". "*" matches any chars.
         """
         self._includes.extend(patterns)
 
     def exclude(self, *patterns: str) -> None:
-        """Add glob patterns for methods to exclude. Methods matching any
-        exclude pattern are skipped during registration. Exclude is applied
-        after include. Patterns use the same syntax as include().
-        """
+        """Add glob patterns for methods to exclude. Applied after include."""
         self._excludes.extend(patterns)
 
     def _should_include(self, service_full_name: str, method_name: str) -> bool:
-        """Check if a method should be registered based on include/exclude patterns
-        and INVARIANT_INCLUDE/INVARIANT_EXCLUDE environment variables."""
         full_path = f"{service_full_name}.{method_name}"
 
         includes = list(self._includes)
@@ -144,21 +136,43 @@ class Server:
 
         return not any(_glob_match(p, full_path) for p in excludes)
 
-    def use(self, interceptor: Interceptor) -> None:
-        """Register an interceptor. Interceptors run in registration order
-        (first registered = outermost) on every tool invocation across all projections.
+    # -- Public API: middleware --
 
-        Equivalent to Go's Server.Use().
-        """
+    def use(self, interceptor: Interceptor) -> None:
+        """Register an async interceptor. First registered = outermost."""
+        if not _is_async_callable(interceptor):
+            raise TypeError(
+                f"Interceptor {interceptor!r} must be async (declared with `async def`). "
+                "invariant-protocol is async-native."
+            )
         self._interceptors.append(interceptor)
 
     def use_http_header_provider(self, provider: HTTPHeaderProvider | None) -> None:
         """Set optional dynamic headers for outbound ConnectHTTP requests."""
         self._http_header_provider = provider
 
-    def _invoke(self, tool: Tool, request: Any, context: Any) -> Any:
-        """Core proto-in/proto-out dispatch — the equivalent of Go's invoke().
-        Runs the interceptor chain then calls tool.handler.
+    # -- Public API: invocation core --
+
+    async def invoke(self, tool_name: str, request: Any, context: Any = None) -> Any:
+        """Dispatch a request to a registered tool by name. Async.
+
+        Returns the proto response. Useful for in-process callers (workflow
+        runtimes, tests) that don't need to spin up a projection.
+
+        Raises ``InvariantError(NOT_FOUND)`` if the tool is not registered, so
+        the error projects to the right status code through every projection.
+        """
+        from invariant.errors import InvariantError
+
+        tool = self.tools.get(tool_name)
+        if tool is None:
+            available = sorted(self.tools.keys())
+            raise InvariantError(grpc.StatusCode.NOT_FOUND, f"Unknown tool '{tool_name}'. Available: {available}")
+        return await self._invoke(tool, request, context)
+
+    async def _invoke(self, tool: Tool, request: Any, context: Any) -> Any:
+        """Core proto-in/proto-out dispatch. Runs the interceptor chain then
+        awaits tool.handler.
 
         Each projection converts at its boundary:
           - MCP, HTTP: JSON → proto → _invoke → proto → JSON
@@ -166,30 +180,21 @@ class Server:
           - gRPC:      bytes → proto → _invoke → proto → bytes
         """
         info = ServerCallInfo(full_method=f"/{tool.service_full_name}/{tool.method_name}")
+        return await self._chained_invoke(request, context, info, tool.handler)
 
-        def inner_handler(request, context):
-            return tool.handler(request, context)
-
-        return self._chained_invoke(request, context, info, inner_handler)
-
-    def _chained_invoke(
+    async def _chained_invoke(
         self,
         request: Any,
         context: Any,
         info: ServerCallInfo,
-        handler: Callable,
+        handler: Handler,
     ) -> Any:
-        """Run the interceptor chain then call the handler.
-
-        Chain ordering: first registered = outermost (A(B(C(handler)))).
-        """
         if not self._interceptors:
-            return handler(request, context)
+            return await handler(request, context)
 
-        # Build chain from inside out: wrap handler with interceptors in reverse order.
         def wrap(interceptor, next_handler):
-            def wrapped(request, context):
-                return interceptor(request, context, info, next_handler)
+            async def wrapped(request, context):
+                return await interceptor(request, context, info, next_handler)
 
             return wrapped
 
@@ -197,25 +202,32 @@ class Server:
         for interceptor in reversed(self._interceptors):
             current = wrap(interceptor, current)
 
-        return current(request, context)
+        return await current(request, context)
+
+    # -- Public API: construction --
 
     @classmethod
-    def from_descriptor(cls, path: str, *, name: str = "invariant-protocol", version: str = "0.1.0") -> Server:
+    def from_descriptor(cls, path: str) -> Server:
         """Read a descriptor file and return a configured Server."""
         with open(path, "rb") as f:
             data = f.read()
-        return cls.from_bytes(data, name=name, version=version)
+        return cls.from_bytes(data)
 
     @classmethod
-    def from_bytes(cls, data: bytes, *, name: str = "invariant-protocol", version: str = "0.1.0") -> Server:
+    def from_bytes(cls, data: bytes) -> Server:
         """Create a Server from raw FileDescriptorSet bytes."""
         fds = descriptor_pb2.FileDescriptorSet()
         fds.ParseFromString(data)
         parsed = ParsedDescriptor(fds)
-        return cls(parsed, name=name, version=version, fds=fds)
+        return cls(parsed, fds=fds)
+
+    # -- Public API: registration --
 
     def register(self, servicer: Any, service_name: str | None = None) -> None:
-        """Discover methods on servicer that match RPC definitions and register as tools."""
+        """Discover async methods on servicer that match RPC definitions and register as tools.
+
+        Sync handlers are rejected — declare methods as `async def`.
+        """
         if service_name is not None:
             svc_info = self.parsed.services.get(service_name)
             if svc_info is None:
@@ -237,19 +249,37 @@ class Server:
                 if handler is None:
                     continue
 
-                tool_name = f"{svc_info.name}.{method_name}"
-                description = method_info.comment or tool_name
+                if not _is_async_callable(handler):
+                    raise TypeError(
+                        f"{type(servicer).__name__}.{method_name} must be `async def`. "
+                        "invariant-protocol is async-native."
+                    )
 
-                self.tools[tool_name] = Tool(
-                    name=tool_name,
-                    description=description,
-                    input_schema=self.schema_gen.message_to_schema(method_info.input_type),
-                    handler=handler,
-                    input_type=method_info.input_type,
-                    output_type=method_info.output_type,
-                    service_full_name=svc_full_name,
-                    method_name=method_name,
+                tool_name = f"{svc_info.name}.{method_name}"
+                self._add_tool(
+                    Tool(
+                        name=tool_name,
+                        description=method_info.comment or tool_name,
+                        input_schema=self.schema_gen.message_to_schema(method_info.input_type),
+                        handler=handler,
+                        input_type=method_info.input_type,
+                        output_type=method_info.output_type,
+                        service_full_name=svc_full_name,
+                        method_name=method_name,
+                    )
                 )
+
+    def _add_tool(self, tool: Tool) -> None:
+        """Register a Tool, rejecting collisions with an already-registered tool name."""
+        existing = self.tools.get(tool.name)
+        if existing is not None and existing.service_full_name != tool.service_full_name:
+            raise ValueError(
+                f"Tool name collision: {tool.name!r} is registered by both "
+                f"{existing.service_full_name!r} and {tool.service_full_name!r}. "
+                "Two services in different packages share the same simple name; "
+                "use Server.include() to scope to one."
+            )
+        self.tools[tool.name] = tool
 
     def _match_servicer(self, servicer: Any) -> dict:
         """Auto-match a servicer to services by method names."""
@@ -268,9 +298,13 @@ class Server:
             raise ValueError(f"No matching service found for servicer. Available: {available}")
         return matched
 
-    def connect(self, target: str, service_name: str | None = None) -> None:
-        """Connect to a remote gRPC server and register its methods as tools."""
-        channel = grpc.insecure_channel(target)
+    def connect(self, channel: grpc.aio.Channel, service_name: str | None = None) -> None:
+        """Register methods on a remote gRPC server as tools.
+
+        Caller builds the channel — use ``grpc.aio.secure_channel`` for production
+        with TLS/auth, or ``grpc.aio.insecure_channel`` for local testing. The
+        Server takes ownership of closing the channel on ``stop()``.
+        """
         self._channels.append(channel)
 
         pool = descriptor_pool.Default()
@@ -303,23 +337,23 @@ class Server:
                 )
 
                 def _make_handler(s):
-                    def handler(request, context):
-                        return s(request)
+                    async def handler(request, context):
+                        return await s(request)
 
                     return handler
 
                 tool_name = f"{svc_info.name}.{method_name}"
-                description = method_info.comment or tool_name
-
-                self.tools[tool_name] = Tool(
-                    name=tool_name,
-                    description=description,
-                    input_schema=self.schema_gen.message_to_schema(method_info.input_type),
-                    handler=_make_handler(stub),
-                    input_type=method_info.input_type,
-                    output_type=method_info.output_type,
-                    service_full_name=svc_full_name,
-                    method_name=method_name,
+                self._add_tool(
+                    Tool(
+                        name=tool_name,
+                        description=method_info.comment or tool_name,
+                        input_schema=self.schema_gen.message_to_schema(method_info.input_type),
+                        handler=_make_handler(stub),
+                        input_type=method_info.input_type,
+                        output_type=method_info.output_type,
+                        service_full_name=svc_full_name,
+                        method_name=method_name,
+                    )
                 )
 
     def connect_http(
@@ -373,194 +407,221 @@ class Server:
                 )
 
                 tool_name = f"{svc_info.name}.{method_name}"
-                description = method_info.comment or tool_name
-
-                self.tools[tool_name] = Tool(
-                    name=tool_name,
-                    description=description,
-                    input_schema=self.schema_gen.message_to_schema(method_info.input_type),
-                    handler=handler,
-                    input_type=method_info.input_type,
-                    output_type=method_info.output_type,
-                    service_full_name=svc_full_name,
-                    method_name=method_name,
+                self._add_tool(
+                    Tool(
+                        name=tool_name,
+                        description=method_info.comment or tool_name,
+                        input_schema=self.schema_gen.message_to_schema(method_info.input_type),
+                        handler=handler,
+                        input_type=method_info.input_type,
+                        output_type=method_info.output_type,
+                        service_full_name=svc_full_name,
+                        method_name=method_name,
+                    )
                 )
 
-    # -- Public API: convenience entry point --
+    # -- Public API: tool catalog --
 
-    def serve_from_argv(self, argv: list[str] | None = None) -> None:
-        """Parse command-line flags and call :meth:`serve` accordingly.
+    def tool_catalog(self) -> list[dict]:
+        """Return the canonical tool catalog (same shape as MCP `tools/list`).
 
-        Recognised flags: ``--mcp``, ``--cli``, ``--http [port]``,
-        ``--grpc [port]``.  Defaults to MCP when no flags are given.
+        Used by both the HTTP `GET /` endpoint and MCP's `tools/list`.
         """
-        args = argv if argv is not None else sys.argv[1:]
+        return [
+            {
+                "name": t.name,
+                "description": t.description,
+                "inputSchema": t.input_schema,
+            }
+            for t in sorted(self.tools.values(), key=lambda t: t.name)
+        ]
 
-        if "--cli" in args:
-            idx = args.index("--cli")
-            # Rewrite sys.argv so the CLI projection sees only its args.
-            sys.argv = [sys.argv[0], *args[idx + 1 :]]
-            self.serve(cli=True)
-            return
+    # -- Public API: ASGI mounting --
 
-        http_port: int | None = None
-        grpc_port: int | None = None
+    def asgi_app(self):
+        """Return the ASGI application that serves all registered tools over HTTP.
 
-        if "--http" in args:
-            http_port = 8080
-            idx = args.index("--http")
-            if idx + 1 < len(args) and args[idx + 1].isdigit():
-                http_port = int(args[idx + 1])
+        Mount on an existing ASGI server (uvicorn, hypercorn, FastAPI, Starlette,
+        etc.) instead of binding a separate port::
 
-        if "--grpc" in args:
-            grpc_port = 50051
-            idx = args.index("--grpc")
-            if idx + 1 < len(args) and args[idx + 1].isdigit():
-                grpc_port = int(args[idx + 1])
+            app = server.asgi_app()
+            # or compose with another framework's router:
+            asgi_application.mount("/inv", app)
+        """
+        from invariant.projections.http import build_asgi_app
 
-        if http_port is not None or grpc_port is not None:
-            self.serve(http=http_port, grpc=grpc_port)
-        else:
-            self.serve(mcp=True)
+        return build_asgi_app(self)
 
-    # -- Public API: single serve method --
+    # -- Public API: serve --
 
-    def serve(
+    async def serve(
         self,
         *,
         mcp: bool = False,
         cli: bool = False,
         http: int | None = None,
         grpc: int | None = None,
-        grpc_options: list | None = None,
     ) -> None:
-        """Start the specified projections and block.
+        """Start the specified projections and block until cancelled.
 
-        Args:
-            grpc_options: Optional list of gRPC server options
-                (e.g. ``[("grpc.max_receive_message_length", 1024)]``),
-                passed to ``grpc.server()``.
+        Cancelling any projection (or the parent task) cancels all of them.
+        For custom gRPC ServerOptions, compose `build_grpc_server(self, options=...)`
+        and manage lifecycle yourself.
 
         Examples::
 
-            server.serve(mcp=True)
-            server.serve(cli=True)
-            server.serve(http=8080)
-            server.serve(http=8080, grpc=50051)
-            server.serve(grpc=50051, grpc_options=[("grpc.max_receive_message_length", 1024)])
+            asyncio.run(server.serve(mcp=True))
+            asyncio.run(server.serve(http=8080, grpc=50051))
         """
-        self._grpc_options = grpc_options
-        projections: list[tuple[str, int | None]] = []
+        coros: list[Awaitable[None]] = []
         if mcp:
-            projections.append(("mcp", None))
+            coros.append(self._serve_mcp())
         if cli:
-            projections.append(("cli", None))
+            coros.append(self._serve_cli())
         if http is not None:
-            projections.append(("http", http))
+            coros.append(self._serve_http(http))
         if grpc is not None:
-            projections.append(("grpc", grpc))
+            coros.append(self._serve_grpc(grpc))
 
-        if not projections:
+        if not coros:
             raise ValueError("No projections specified. Use serve(mcp=True), serve(http=8080), etc.")
 
-        if len(projections) == 1:
-            self._serve_one(*projections[0])
+        if len(coros) == 1:
+            await coros[0]
             return
 
-        import threading
-
-        done = threading.Event()
-
-        for kind, port in projections:
-
-            def run(k=kind, p=port):
-                self._serve_one(k, p)
-                done.set()
-
-            t = threading.Thread(target=run, daemon=True)
-            t.start()
-
+        tasks = [asyncio.create_task(c) for c in coros]
         try:
-            done.wait()
-        except KeyboardInterrupt:
-            pass
+            await asyncio.gather(*tasks)
+        except BaseException:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
-    def _serve_one(self, kind: str, port: int | None = None) -> None:
-        if kind == "mcp":
-            from invariant.projections.mcp import serve_mcp
+    # -- Per-projection serve coroutines --
 
-            serve_mcp(self)
-        elif kind == "cli":
-            from invariant.projections.cli import run_cli
+    async def _serve_mcp(self) -> None:
+        from invariant.projections.mcp import serve_mcp
 
-            result = run_cli(self, sys.argv[1:])
-            if isinstance(result, str):
-                print(result)
-            else:
-                # Boundary: proto → JSON (terminal output).
-                from google.protobuf import json_format as _jf
+        await serve_mcp(self)
 
-                print(_jf.MessageToJson(result, preserving_proto_field_name=True, indent=2))
-        elif kind == "http":
-            from invariant.projections.http import start_http
+    async def _serve_cli(self) -> None:
+        from invariant.projections.cli import run_cli
 
-            httpd, _ = start_http(self, port)
-            httpd.serve_forever()
-        elif kind == "grpc":
-            from invariant.projections.grpc import start_grpc
+        result = await run_cli(self, sys.argv[1:])
+        if isinstance(result, str):
+            print(result)
+        else:
+            from google.protobuf import json_format as _jf
 
-            grpc_server, _ = start_grpc(self, port, options=getattr(self, "_grpc_options", None))
-            grpc_server.wait_for_termination()
+            print(_jf.MessageToJson(result, preserving_proto_field_name=True, indent=2))
 
-    # -- Non-blocking start/stop (internal, used by tests) --
+    async def _serve_http(self, port: int) -> None:
+        import uvicorn
 
-    def _start_http(self, port: int = 8080) -> int:
-        from invariant.projections.http import start_http
+        config = uvicorn.Config(
+            self.asgi_app(),
+            host="0.0.0.0",  # noqa: S104
+            port=port,
+            log_level="warning",
+        )
+        server = uvicorn.Server(config)
+        self._http_uvicorn = server
+        try:
+            await server.serve()
+        finally:
+            self._http_uvicorn = None
 
-        self._http_server, actual_port = start_http(self, port)
+    async def _serve_grpc(self, port: int) -> None:
+        from invariant.projections.grpc import build_grpc_server
+
+        grpc_server = build_grpc_server(self)
+        grpc_server.add_insecure_port(f"[::]:{port}")
+        await grpc_server.start()
+        self._grpc_aio_server = grpc_server
+        try:
+            await grpc_server.wait_for_termination()
+        except asyncio.CancelledError:
+            # Graceful shutdown: let in-flight RPCs finish (5s grace) before
+            # closing the listening socket.
+            await grpc_server.stop(grace=5)
+            raise
+        finally:
+            self._grpc_aio_server = None
+
+    # -- Test helpers (non-blocking start/stop) --
+
+    async def _start_http(self, port: int = 0) -> int:
+        """Start an HTTP server in the background and return the bound port."""
+        import uvicorn
+
+        config = uvicorn.Config(
+            self.asgi_app(),
+            host="127.0.0.1",
+            port=port,
+            log_level="warning",
+        )
+        server = uvicorn.Server(config)
+        self._http_uvicorn = server
+        self._http_uvicorn_task = asyncio.create_task(server.serve())
+
+        # Wait for uvicorn to bind. server.servers is populated after bind.
+        for _ in range(200):
+            if server.started and server.servers:
+                socket = server.servers[0].sockets[0]
+                return socket.getsockname()[1]
+            await asyncio.sleep(0.01)
+        raise RuntimeError("HTTP server failed to bind within 2 seconds")
+
+    async def _stop_http(self) -> None:
+        if self._http_uvicorn is None:
+            return
+        self._http_uvicorn.should_exit = True
+        if self._http_uvicorn_task is not None:
+            await asyncio.gather(self._http_uvicorn_task, return_exceptions=True)
+            self._http_uvicorn_task = None
+        self._http_uvicorn = None
+
+    async def _start_grpc(self, port: int = 0, *, options: list | None = None) -> int:
+        """Start a gRPC server in the background and return the bound port."""
+        from invariant.projections.grpc import build_grpc_server
+
+        grpc_server = build_grpc_server(self, options=options)
+        actual_port = grpc_server.add_insecure_port(f"[::]:{port}")
+        await grpc_server.start()
+        self._grpc_aio_server = grpc_server
         return actual_port
 
-    def _stop_http(self) -> None:
-        if self._http_server is not None:
-            self._http_server.shutdown()
-            self._http_server = None
+    async def _stop_grpc(self) -> None:
+        if self._grpc_aio_server is not None:
+            await self._grpc_aio_server.stop(grace=0)
+            self._grpc_aio_server = None
 
-    def _start_grpc(self, port: int = 50051, *, options: list | None = None) -> int:
-        from invariant.projections.grpc import start_grpc
-
-        self._grpc_server, actual_port = start_grpc(self, port, options=options)
-        return actual_port
-
-    def _stop_grpc(self) -> None:
-        if self._grpc_server is not None:
-            self._grpc_server.stop(grace=0)
-            self._grpc_server = None
-
-    def _cli(self, args: list[str]) -> dict | str:
+    async def _cli(self, args: list[str]) -> dict | str:
         """Run CLI and convert proto result to dict at the boundary (for tests)."""
         from invariant.projections.cli import run_cli
 
-        result = run_cli(self, args)
+        result = await run_cli(self, args)
         if isinstance(result, str):
             return result
-        # Boundary: proto → dict.
         from google.protobuf import json_format as _jf
 
         return _jf.MessageToDict(result, preserving_proto_field_name=True)
 
-    def stop(self) -> None:
-        """Close all gRPC channels and stop background servers."""
-        self._stop_grpc()
-        self._stop_http()
+    async def stop(self) -> None:
+        """Close all gRPC channels, HTTP clients, and stop background servers."""
+        await self._stop_grpc()
+        await self._stop_http()
         for ch in self._channels:
-            ch.close()
+            await ch.close()
         self._channels.clear()
+        for tool in self.tools.values():
+            aclose = getattr(tool.handler, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
 
 def _glob_match(pattern: str, s: str) -> bool:
-    """Match pattern against string where '*' matches any characters including dots.
-
-    Uses fnmatch with '[.]' translation to allow '*' to match dots,
-    since fnmatch's '*' normally doesn't match '/' but does match '.'.
-    """
+    """Match pattern against string where '*' matches any chars including dots."""
     return fnmatch.fnmatch(s, pattern)

@@ -114,7 +114,7 @@ func TestCLIUnknownServiceMethod(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown service/method")
 }
 
-func TestCLIRequestYAMLFile(t *testing.T) {
+func TestCLIRequestUnsupportedExtension(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "*.yaml")
 	require.NoError(t, err)
 	defer os.Remove(f.Name())
@@ -123,12 +123,9 @@ func TestCLIRequestYAMLFile(t *testing.T) {
 	f.Close()
 
 	srv := cliServer(t)
-	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", f.Name()})
-	require.NoError(t, err)
-
-	var data map[string]any
-	require.NoError(t, json.Unmarshal([]byte(result), &data))
-	assert.Contains(t, data["message"], "FileTest")
+	_, err = srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", f.Name()})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported request file extension")
 }
 
 func TestCLIRequestJSONFile(t *testing.T) {

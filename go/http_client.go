@@ -176,26 +176,6 @@ func (h *httpDynamicHandler) applyDynamicHeaders(ctx context.Context, httpReq *h
 	return nil
 }
 
-func (h *httpDynamicHandler) CallJSON(ctx context.Context, argsJSON json.RawMessage) (string, error) {
-	req := dynamicpb.NewMessage(h.reqDesc)
-	if len(argsJSON) > 0 && string(argsJSON) != "null" {
-		if err := protojson.Unmarshal(argsJSON, req); err != nil {
-			return "", invalidArgumentFromJSONError(err)
-		}
-	}
-
-	resp, err := h.callProto(ctx, req)
-	if err != nil {
-		return "", err
-	}
-
-	out, err := (protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}).Marshal(resp)
-	if err != nil {
-		return "", status.Errorf(codes.Internal, "marshal response: %v", err)
-	}
-	return string(out), nil
-}
-
 // ConnectHTTP registers tools that proxy to a remote HTTP endpoint.
 // Routes are derived from google.api.http annotations when present, otherwise
 // fallback to canonical RPC route: POST /{serviceFullName}/{method}.
@@ -267,7 +247,7 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 				description = toolName
 			}
 
-			s.tools[toolName] = &Tool{
+			if err := s.addTool(&Tool{
 				Name:        toolName,
 				Description: description,
 				InputSchema: s.schemaGen.MessageToSchema(methodInfo.InputType),
@@ -286,6 +266,8 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 				OutputType:      methodInfo.OutputType,
 				ServiceFullName: svcFullName,
 				MethodName:      methodName,
+			}); err != nil {
+				return err
 			}
 		}
 	}
@@ -345,6 +327,28 @@ func newHTTPClientBinding(method, pattern, body, responseBody string) (*httpClie
 		responseBody: responseBody,
 		template:     template,
 	}, nil
+}
+
+func httpMethodAndPattern(rule *annotationspb.HttpRule) (string, string, error) {
+	switch pattern := rule.Pattern.(type) {
+	case *annotationspb.HttpRule_Get:
+		return http.MethodGet, pattern.Get, nil
+	case *annotationspb.HttpRule_Post:
+		return http.MethodPost, pattern.Post, nil
+	case *annotationspb.HttpRule_Put:
+		return http.MethodPut, pattern.Put, nil
+	case *annotationspb.HttpRule_Delete:
+		return http.MethodDelete, pattern.Delete, nil
+	case *annotationspb.HttpRule_Patch:
+		return http.MethodPatch, pattern.Patch, nil
+	case *annotationspb.HttpRule_Custom:
+		if pattern.Custom == nil {
+			return "", "", errors.New("custom pattern is nil")
+		}
+		return strings.ToUpper(pattern.Custom.Kind), pattern.Custom.Path, nil
+	default:
+		return "", "", errors.New("http rule missing pattern")
+	}
 }
 
 func (b *httpClientBinding) build(req proto.Message, baseURL *url.URL) ([]byte, string, error) {
@@ -668,23 +672,31 @@ func scalarToString(val any) (string, error) {
 	}
 }
 
+// httpClientError parses a remote error envelope. Accepts both Connect-style
+// (unwrapped, lowercase code) and the legacy wrapped format ({"error": {...}}).
 func httpClientError(statusCode int, body []byte) error {
 	code := grpcCodeFromHTTPStatus(statusCode)
 	msg := fmt.Sprintf("HTTP %d", statusCode)
 
+	type envelope struct {
+		Code    string           `json:"code"`
+		Message string           `json:"message"`
+		Details []map[string]any `json:"details"`
+	}
 	var payload struct {
-		Error struct {
-			Code    string           `json:"code"`
-			Message string           `json:"message"`
-			Details []map[string]any `json:"details"`
-		} `json:"error"`
+		envelope
+		Error envelope `json:"error"`
 	}
 	if err := json.Unmarshal(body, &payload); err == nil {
-		if payload.Error.Message != "" {
-			msg = payload.Error.Message
+		env := payload.envelope
+		if env.Code == "" && payload.Error.Code != "" {
+			env = payload.Error
 		}
-		if payload.Error.Code != "" {
-			code = grpcCodeFromName(payload.Error.Code)
+		if env.Message != "" {
+			msg = env.Message
+		}
+		if env.Code != "" {
+			code = grpcCodeFromName(env.Code)
 		}
 	}
 
@@ -722,9 +734,13 @@ func grpcCodeFromHTTPStatus(statusCode int) codes.Code {
 	}
 }
 
+// grpcCodeFromName matches either uppercase ("INVALID_ARGUMENT") or
+// Connect-style lowercase ("invalid_argument") since remote services may
+// emit either format. grpcCodeName is canonical lowercase.
 func grpcCodeFromName(name string) codes.Code {
+	lower := strings.ToLower(name)
 	for i := codes.OK; i <= codes.Unauthenticated; i++ {
-		if grpcCodeName(i) == name {
+		if grpcCodeName(i) == lower {
 			return i
 		}
 	}

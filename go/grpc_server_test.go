@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/reflection"
 )
 
 // grpcServerServicer implements GreetService RPCs using generated proto types.
@@ -68,6 +69,8 @@ func startServeGRPC(t *testing.T) (addr string, stop func()) {
 		}, struct{}{})
 	}
 
+	reflection.Register(gs)
+
 	go func() { _ = gs.Serve(lis) }()
 	return addr, gs.Stop
 }
@@ -98,7 +101,7 @@ func TestServeGRPCGreet(t *testing.T) {
 		respDesc:   respDesc,
 	}
 
-	result, err := handler.CallJSON(t.Context(), []byte(`{"name":"ServeGRPC"}`))
+	result, err := callDynamicJSON(t.Context(), handler, []byte(`{"name":"ServeGRPC"}`))
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, ServeGRPC")
 }
@@ -128,7 +131,7 @@ func TestServeGRPCGreetGroup(t *testing.T) {
 		respDesc:   respDesc,
 	}
 
-	result, err := handler.CallJSON(t.Context(), []byte(`{}`))
+	result, err := callDynamicJSON(t.Context(), handler, []byte(`{}`))
 	require.NoError(t, err)
 	assert.Contains(t, result, "Group hello")
 	assert.Contains(t, result, "count")
@@ -136,7 +139,7 @@ func TestServeGRPCGreetGroup(t *testing.T) {
 
 func TestServeGRPCRequiresFDS(t *testing.T) {
 	srv := newServer(mustParse(t))
-	err := srv.serveGRPC(0)
+	err := srv.serveGRPC(t.Context(), 0)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ServerFromDescriptor or ServerFromBytes")
 }

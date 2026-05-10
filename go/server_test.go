@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type testGreetServicer struct{}
@@ -35,6 +37,15 @@ type noMethodServicer struct{}
 func TestRegisterNoMatchingService(t *testing.T) {
 	srv := newServer(mustParse(t))
 	assert.Error(t, srv.Register(&noMethodServicer{}))
+}
+
+func TestInvokeUnknownToolReturnsNotFound(t *testing.T) {
+	srv := registeredServer(t)
+	_, err := srv.Invoke(t.Context(), "Nope.DoesNotExist", nil)
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.NotFound, st.Code())
 }
 
 func TestGlobMatch(t *testing.T) {

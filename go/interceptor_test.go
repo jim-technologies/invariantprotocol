@@ -71,26 +71,12 @@ func TestInterceptorFiresOnHTTP(t *testing.T) {
 	var log []string
 	srv := interceptorServer(t, trackingInterceptor("A", &log))
 
-	bindings, err := srv.buildHTTPBindings()
+	handler, err := srv.HTTPHandler()
 	require.NoError(t, err)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		binding, pathParams, methodMismatch := findHTTPBinding(bindings, r.Method, r.URL.Path)
-		if binding == nil {
-			if methodMismatch {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			http.NotFound(w, r)
-			return
-		}
-		srv.handleHTTP(w, r, binding, pathParams)
-	})
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
-	server := &http.Server{Handler: mux}
+	server := &http.Server{Handler: handler}
 	go func() { _ = server.Serve(lis) }()
 	defer server.Close()
 
@@ -177,7 +163,7 @@ func TestInterceptorFiresOnGRPC(t *testing.T) {
 	require.NoError(t, err)
 
 	dh := &grpcDynamicHandler{conn: conn, methodPath: "/greet.v1.GreetService/Greet", reqDesc: reqDesc, respDesc: respDesc}
-	result, err := dh.CallJSON(t.Context(), []byte(`{"name":"gRPC"}`))
+	result, err := callDynamicJSON(t.Context(), dh, []byte(`{"name":"gRPC"}`))
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, gRPC")
 	assert.Equal(t, []string{"A-before", "A-after"}, log)

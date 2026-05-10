@@ -1,12 +1,16 @@
-"""gRPC projection — serve registered tools as a gRPC server."""
+"""gRPC projection — async grpc.aio server serving registered tools.
+
+gRPC reflection is enabled by default so grpcurl, Buf Studio, and Connect
+debug clients work out of the box.
+"""
 
 from __future__ import annotations
 
-from concurrent import futures
 from typing import TYPE_CHECKING
 
 import grpc
 from google.protobuf import descriptor_pool, message_factory
+from grpc_reflection.v1alpha import reflection
 
 from invariant.errors import as_invariant_error
 
@@ -14,19 +18,20 @@ if TYPE_CHECKING:
     from invariant.server import Server, Tool
 
 
-def start_grpc(server: Server, port: int, *, options: list | None = None) -> tuple[grpc.Server, int]:
-    """Start a gRPC server on the given port and return (server, actual_port).
+def build_grpc_server(server: Server, *, options: list | None = None) -> grpc.aio.Server:
+    """Build an async gRPC server with all registered tools wired up.
 
-    Args:
-        options: Optional list of gRPC channel options
-            (e.g. ``[("grpc.max_receive_message_length", 1024)]``),
-            passed to ``grpc.server()``.
+    Caller is responsible for `add_insecure_port`, `start`, `wait_for_termination`.
     """
-    grpc_server = grpc.server(futures.ThreadPoolExecutor(max_workers=4), options=options)
+    grpc_server = grpc.aio.server(options=options)
     grpc_server.add_generic_rpc_handlers([_InvariantHandler(server)])
-    actual_port = grpc_server.add_insecure_port(f"[::]:{port}")
-    grpc_server.start()
-    return grpc_server, actual_port
+
+    # Enable reflection for the registered services.
+    service_names = sorted({tool.service_full_name for tool in server.tools.values()})
+    if service_names:
+        reflection.enable_server_reflection([*service_names, reflection.SERVICE_NAME], grpc_server)
+
+    return grpc_server
 
 
 class _InvariantHandler(grpc.GenericRpcHandler):
@@ -54,12 +59,12 @@ class _InvariantHandler(grpc.GenericRpcHandler):
         def serialize(msg) -> bytes:
             return msg.SerializeToString()
 
-        def handler(request, context):
+        async def handler(request, context):
             try:
-                return server._invoke(tool, request, context)
+                return await server._invoke(tool, request, context)
             except Exception as e:
                 err = as_invariant_error(e)
-                context.abort(err.code, err.message)
+                await context.abort(err.code, err.message)
 
         return grpc.unary_unary_rpc_method_handler(
             handler,

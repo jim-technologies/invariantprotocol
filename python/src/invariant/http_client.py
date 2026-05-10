@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -103,7 +104,7 @@ class HTTPClientBinding:
 
 
 class HTTPDynamicHandler:
-    """Callable tool handler that proxies to a remote HTTP endpoint."""
+    """Async callable tool handler that proxies to a remote HTTP endpoint."""
 
     def __init__(
         self,
@@ -122,20 +123,22 @@ class HTTPDynamicHandler:
         self._method_path = method_path
         self._header_provider = header_provider
         self._headers = _outbound_http_headers_from_env()
+        self._client: httpx.AsyncClient | None = None
         pool = descriptor_pool.Default()
         resp_desc = pool.FindMessageTypeByName(output_type)
         self._resp_class = message_factory.GetMessageClass(resp_desc)
 
-    def __call__(self, request, _context):
+    async def __call__(self, request, _context):
         args = json_format.MessageToDict(request, preserving_proto_field_name=True)
         body_bytes, target = self._binding.build(args, self._base_url)
         attempt = 0
+        client = self._ensure_client()
 
         while True:
             headers = self._build_headers(target, body_bytes)
 
             try:
-                response = httpx.request(
+                response = await client.request(
                     self._binding.method,
                     target,
                     content=body_bytes,
@@ -144,7 +147,7 @@ class HTTPDynamicHandler:
                 )
             except httpx.RequestError as e:
                 if self._should_retry(attempt, status_code=0):
-                    _sleep_seconds(_retry_delay_seconds(attempt, None))
+                    await asyncio.sleep(_retry_delay_seconds(attempt, None))
                     attempt += 1
                     continue
                 raise InvariantError(grpc.StatusCode.UNAVAILABLE, f"HTTP request failed: {e}") from None
@@ -152,7 +155,7 @@ class HTTPDynamicHandler:
             if response.status_code >= 400:
                 if self._should_retry(attempt, status_code=response.status_code):
                     delay = _retry_delay_seconds(attempt, response.headers.get("Retry-After"))
-                    _sleep_seconds(delay)
+                    await asyncio.sleep(delay)
                     attempt += 1
                     continue
                 raise _http_error(response.status_code, response.content) from None
@@ -165,6 +168,16 @@ class HTTPDynamicHandler:
                 except Exception as e:
                     raise InvariantError(grpc.StatusCode.INTERNAL, f"decode HTTP response JSON: {e}") from None
             return out
+
+    def _ensure_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient()
+        return self._client
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     def _parse_http_response(self, raw: bytes, out: Any) -> None:
         decoded = raw.decode()
@@ -410,9 +423,11 @@ def _scalar_to_string(value: Any) -> str:
 
 
 def _http_error(status_code: int, body: bytes) -> InvariantError:
+    """Parse a remote error envelope. Accepts both Connect-style (unwrapped,
+    lowercase code) and the legacy wrapped format ({"error": {...}}, uppercase)."""
     code = _grpc_code_from_http_status(status_code)
     message = f"HTTP {status_code}"
-    details = None
+    details: list[dict] | None = None
 
     try:
         payload = json.loads(body.decode() if isinstance(body, bytes) else body)
@@ -420,17 +435,21 @@ def _http_error(status_code: int, body: bytes) -> InvariantError:
         payload = {}
 
     if isinstance(payload, dict):
-        err = payload.get("error")
-        if isinstance(err, dict):
-            msg = err.get("message")
-            if isinstance(msg, str) and msg:
-                message = msg
-            name = err.get("code")
-            if isinstance(name, str):
-                code = _grpc_code_from_name(name)
-            maybe_details = err.get("details")
-            if isinstance(maybe_details, list):
-                details = [d for d in maybe_details if isinstance(d, dict)]
+        # Connect-style: {"code": "...", "message": "...", "details": [...]}
+        # Legacy wrapped: {"error": {"code": "...", ...}}
+        envelope = payload
+        if "code" not in envelope and isinstance(payload.get("error"), dict):
+            envelope = payload["error"]
+
+        msg = envelope.get("message")
+        if isinstance(msg, str) and msg:
+            message = msg
+        name = envelope.get("code")
+        if isinstance(name, str):
+            code = _grpc_code_from_name(name)
+        maybe_details = envelope.get("details")
+        if isinstance(maybe_details, list):
+            details = [d for d in maybe_details if isinstance(d, dict)]
 
     return InvariantError(code, message, details or None)
 
@@ -454,8 +473,10 @@ def _grpc_code_from_http_status(status_code: int) -> grpc.StatusCode:
 
 
 def _grpc_code_from_name(name: str) -> grpc.StatusCode:
+    """Match either uppercase ('INVALID_ARGUMENT') or Connect lowercase ('invalid_argument')."""
+    upper = name.upper()
     for code in grpc.StatusCode:
-        if code.name == name:
+        if code.name == upper:
             return code
     return grpc.StatusCode.UNKNOWN
 
@@ -524,11 +545,6 @@ def _parse_retry_after_seconds(value: str | None) -> float | None:
         return 0.0
     remaining = dt.timestamp() - time.time()
     return max(0.0, remaining)
-
-
-def _sleep_seconds(delay: float) -> None:
-    if delay > 0:
-        time.sleep(delay)
 
 
 def _is_safe_retry_method(method: str) -> bool:

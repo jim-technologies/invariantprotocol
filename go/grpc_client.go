@@ -34,19 +34,26 @@ func (h *grpcDynamicHandler) callProto(ctx context.Context, req proto.Message) (
 	return resp, nil
 }
 
-func (h *grpcDynamicHandler) CallJSON(ctx context.Context, argsJSON json.RawMessage) (string, error) {
-	req := dynamicpb.NewMessage(h.reqDesc)
+// dynamicJSONCaller is the shared protocol for proxy handlers that accept JSON
+// input and return JSON output via dynamicpb. Used by tests.
+type dynamicJSONCaller interface {
+	requestDescriptor() protoreflect.MessageDescriptor
+	callProto(context.Context, proto.Message) (proto.Message, error)
+}
+
+// callDynamicJSON deserializes JSON args into a dynamic proto, calls the
+// handler, and re-serializes the response as JSON.
+func callDynamicJSON(ctx context.Context, h dynamicJSONCaller, argsJSON json.RawMessage) (string, error) {
+	req := dynamicpb.NewMessage(h.requestDescriptor())
 	if len(argsJSON) > 0 && string(argsJSON) != "null" {
 		if err := protojson.Unmarshal(argsJSON, req); err != nil {
 			return "", invalidArgumentFromJSONError(err)
 		}
 	}
-
 	resp, err := h.callProto(ctx, req)
 	if err != nil {
 		return "", err
 	}
-
 	out, err := (protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}).Marshal(resp)
 	if err != nil {
 		return "", fmt.Errorf("marshal response: %w", err)

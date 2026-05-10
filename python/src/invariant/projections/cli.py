@@ -3,7 +3,7 @@
 Format: ServiceName Method [-r request]
 
 Values for -r are auto-detected:
-  - Existing file path → load by extension (.yaml/.yml, .json, .binpb/.pb)
+  - Existing file path → load by extension (.json, .binpb/.pb)
   - Otherwise → parse as inline JSON
 
 Internally proto-first: input is deserialized directly into a proto message,
@@ -17,7 +17,6 @@ import json
 import os
 from typing import TYPE_CHECKING, Any
 
-import yaml
 from google.protobuf import descriptor_pool, json_format, message_factory
 
 from invariant.errors import invalid_argument, invalid_argument_from_json_error
@@ -28,32 +27,27 @@ if TYPE_CHECKING:
     from invariant.server import Server
 
 
-def run_cli(server: Server, args: list[str]) -> Message | str:
+async def run_cli(server: Server, args: list[str]) -> Message | str:
     """Execute a CLI command and return the response as a proto Message (or help string).
 
     Format: ServiceName Method [-r request]
-
-    Equivalent to Go's Server.cli() — proto-first, JSON only at output boundary.
     """
     if not args or args[0] in ("--help", "-h"):
         return _cli_help(server)
 
     service_name, method_name, request_value = _split_args(args)
 
-    # Resolve tool
     tool_name = _resolve_tool(server, service_name, method_name)
     tool = server.tools.get(tool_name)
     if tool is None:
         available = list(server.tools.keys())
         raise ValueError(f"Unknown tool '{tool_name}'. Available: {available}")
 
-    # Build proto request directly from input.
     request = _new_request(tool.input_type)
     if request_value is not None:
         _load_into_proto(request, request_value)
 
-    # Core dispatch (proto in / proto out).
-    return server._invoke(tool, request, None)
+    return await server._invoke(tool, request, None)
 
 
 def _new_request(input_type: str) -> Message:
@@ -69,8 +63,6 @@ def _load_into_proto(msg: Any, value: str) -> None:
 
     File detection: if value is an existing file, load by extension.
     Inline: parse as JSON.
-
-    Equivalent to Go's loadIntoProto().
     """
     if os.path.isfile(value):
         _load_file_into_proto(msg, value)
@@ -89,7 +81,7 @@ def _load_into_proto(msg: Any, value: str) -> None:
 def _load_file_into_proto(msg: Any, path: str) -> None:
     """Read a file and deserialize it into a proto message.
 
-    Equivalent to Go's loadFileIntoProto().
+    Supported extensions: .json, .binpb, .pb.
     """
     ext = os.path.splitext(path)[1].lower()
 
@@ -98,12 +90,11 @@ def _load_file_into_proto(msg: Any, path: str) -> None:
             msg.ParseFromString(f.read())
         return
 
-    if ext == ".json":
-        with open(path) as f:
-            d = json.load(f)
-    else:  # .yaml, .yml
-        with open(path) as f:
-            d = yaml.safe_load(f)
+    if ext != ".json":
+        raise invalid_argument(f"unsupported request file extension: {ext} (use .json, .binpb, or .pb)")
+
+    with open(path) as f:
+        d = json.load(f)
 
     try:
         json_format.ParseDict(d, msg)

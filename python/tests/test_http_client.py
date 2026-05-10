@@ -62,7 +62,7 @@ def _start_annotated_http_backend() -> tuple[ThreadingHTTPServer, int]:
             self.end_headers()
             self.wfile.write(raw)
 
-        def log_message(self, format, *args):
+        def log_message(self, format, *args):  # noqa: A002
             pass
 
     httpd = ThreadingHTTPServer(("localhost", 0), Handler)
@@ -111,7 +111,7 @@ def test_http_client_binding_query_wrapper_does_not_override_explicit_fields():
     assert params["limit"] == ["3"]
 
 
-def test_connect_http_response_body_mapping():
+async def test_connect_http_response_body_mapping():
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path != "/v1/greet/World":
@@ -125,7 +125,7 @@ def test_connect_http_response_body_mapping():
             self.end_headers()
             self.wfile.write(raw)
 
-        def log_message(self, format, *args):
+        def log_message(self, format, *args):  # noqa: A002
             pass
 
     httpd = ThreadingHTTPServer(("localhost", 0), Handler)
@@ -141,43 +141,46 @@ def test_connect_http_response_body_mapping():
             timeout=5.0,
             method_path="/greet.v1.GreetService/Greet",
         )
-        resp = handler(greet_pb2.GreetRequest(name="World"), None)
-        assert resp.message == "Hello, World"
+        try:
+            resp = await handler(greet_pb2.GreetRequest(name="World"), None)
+            assert resp.message == "Hello, World"
+        finally:
+            await handler.aclose()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_registers_tools():
+async def test_connect_http_registers_tools():
     httpd, port = _start_annotated_http_backend()
     try:
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
             assert set(srv.tools.keys()) == {"GreetService.Greet", "GreetService.GreetGroup"}
         finally:
-            srv.stop()
+            await srv.stop()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_cli_greet():
+async def test_connect_http_cli_greet():
     httpd, port = _start_annotated_http_backend()
     try:
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
-            result = srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
         finally:
-            srv.stop()
+            await srv.stop()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_cli_greet_group():
+async def test_connect_http_cli_greet_group():
     httpd, port = _start_annotated_http_backend()
     try:
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
-            result = srv._cli(
+            result = await srv._cli(
                 [
                     "GreetService",
                     "GreetGroup",
@@ -188,36 +191,36 @@ def test_connect_http_cli_greet_group():
             assert result["messages"] == ["Hello, Alice", "Hello, Bob"]
             assert result["count"] == 2
         finally:
-            srv.stop()
+            await srv.stop()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_maps_remote_error():
+async def test_connect_http_maps_remote_error():
     httpd, port = _start_annotated_http_backend()
     try:
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
             with pytest.raises(InvariantError, match="bad name") as exc:
-                srv._cli(["GreetService", "Greet", "-r", '{"name":"bad"}'])
+                await srv._cli(["GreetService", "Greet", "-r", '{"name":"bad"}'])
             assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
-            assert exc.value.to_payload()["code"] == "INVALID_ARGUMENT"
+            assert exc.value.to_payload()["code"] == "invalid_argument"
         finally:
-            srv.stop()
+            await srv.stop()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_unknown_service():
+async def test_connect_http_unknown_service():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
     try:
         with pytest.raises(ValueError, match="not found"):
             srv.connect_http("http://localhost:1", service_name="does.not.ExistService")
     finally:
-        srv.stop()
+        await srv.stop()
 
 
-def test_connect_http_injects_headers_from_env(monkeypatch):
+async def test_connect_http_injects_headers_from_env(monkeypatch):
     monkeypatch.setenv("INVARIANT_HTTP_HEADER_AUTHORIZATION", "Bearer test-token")
 
     class Handler(BaseHTTPRequestHandler):
@@ -239,7 +242,7 @@ def test_connect_http_injects_headers_from_env(monkeypatch):
             self.end_headers()
             self.wfile.write(raw)
 
-        def log_message(self, format, *args):
+        def log_message(self, format, *args):  # noqa: A002
             pass
 
     httpd = ThreadingHTTPServer(("localhost", 0), Handler)
@@ -249,15 +252,15 @@ def test_connect_http_injects_headers_from_env(monkeypatch):
     try:
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
-            result = srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
         finally:
-            srv.stop()
+            await srv.stop()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_sets_default_user_agent(monkeypatch):
+async def test_connect_http_sets_default_user_agent(monkeypatch):
     monkeypatch.delenv("INVARIANT_HTTP_HEADER_USER_AGENT", raising=False)
     seen: dict[str, str | None] = {}
 
@@ -278,7 +281,7 @@ def test_connect_http_sets_default_user_agent(monkeypatch):
             self.end_headers()
             self.wfile.write(raw)
 
-        def log_message(self, format, *args):
+        def log_message(self, format, *args):  # noqa: A002
             pass
 
     httpd = ThreadingHTTPServer(("localhost", 0), Handler)
@@ -288,17 +291,17 @@ def test_connect_http_sets_default_user_agent(monkeypatch):
     try:
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
-            result = srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert seen["user_agent"] is not None
             assert seen["user_agent"].startswith("invariant-protocol/")
         finally:
-            srv.stop()
+            await srv.stop()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_user_agent_override_from_env(monkeypatch):
+async def test_connect_http_user_agent_override_from_env(monkeypatch):
     monkeypatch.setenv("INVARIANT_HTTP_HEADER_USER_AGENT", "custom-agent/9.9")
     seen: dict[str, str | None] = {}
 
@@ -319,7 +322,7 @@ def test_connect_http_user_agent_override_from_env(monkeypatch):
             self.end_headers()
             self.wfile.write(raw)
 
-        def log_message(self, format, *args):
+        def log_message(self, format, *args):  # noqa: A002
             pass
 
     httpd = ThreadingHTTPServer(("localhost", 0), Handler)
@@ -329,16 +332,16 @@ def test_connect_http_user_agent_override_from_env(monkeypatch):
     try:
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
-            result = srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert seen["user_agent"] == "custom-agent/9.9"
         finally:
-            srv.stop()
+            await srv.stop()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_retries_transient_get():
+async def test_connect_http_retries_transient_get():
     class Handler(BaseHTTPRequestHandler):
         attempts = 0
 
@@ -374,7 +377,7 @@ def test_connect_http_retries_transient_get():
             self.end_headers()
             self.wfile.write(raw)
 
-        def log_message(self, format, *args):
+        def log_message(self, format, *args):  # noqa: A002
             pass
 
     httpd = ThreadingHTTPServer(("localhost", 0), Handler)
@@ -385,16 +388,16 @@ def test_connect_http_retries_transient_get():
     try:
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
-            result = srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert Handler.attempts == 3
         finally:
-            srv.stop()
+            await srv.stop()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_does_not_retry_post():
+async def test_connect_http_does_not_retry_post():
     class Handler(BaseHTTPRequestHandler):
         attempts = 0
 
@@ -422,7 +425,7 @@ def test_connect_http_does_not_retry_post():
             self.end_headers()
             self.wfile.write(raw)
 
-        def log_message(self, format, *args):
+        def log_message(self, format, *args):  # noqa: A002
             pass
 
     httpd = ThreadingHTTPServer(("localhost", 0), Handler)
@@ -434,16 +437,16 @@ def test_connect_http_does_not_retry_post():
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
             with pytest.raises(InvariantError) as exc:
-                srv._cli(["GreetService", "GreetGroup", "-r", '{"people":[{"name":"Alice"}]}'])
+                await srv._cli(["GreetService", "GreetGroup", "-r", '{"people":[{"name":"Alice"}]}'])
             assert exc.value.code == grpc.StatusCode.UNAVAILABLE
             assert Handler.attempts == 1
         finally:
-            srv.stop()
+            await srv.stop()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_uses_dynamic_header_provider():
+async def test_connect_http_uses_dynamic_header_provider():
     seen = {}
 
     class Handler(BaseHTTPRequestHandler):
@@ -465,7 +468,7 @@ def test_connect_http_uses_dynamic_header_provider():
             self.end_headers()
             self.wfile.write(raw)
 
-        def log_message(self, format, *args):
+        def log_message(self, format, *args):  # noqa: A002
             pass
 
     httpd = ThreadingHTTPServer(("localhost", 0), Handler)
@@ -485,18 +488,18 @@ def test_connect_http_uses_dynamic_header_provider():
         srv.use_http_header_provider(provider)
         srv.connect_http(f"http://localhost:{port}")
         try:
-            result = srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert seen["method_path"] == "/greet.v1.GreetService/Greet"
             assert seen["method"] == "GET"
             assert seen["body"] == b""
         finally:
-            srv.stop()
+            await srv.stop()
     finally:
         httpd.shutdown()
 
 
-def test_connect_http_dynamic_header_provider_error():
+async def test_connect_http_dynamic_header_provider_error():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
 
     def provider(_req):
@@ -506,7 +509,7 @@ def test_connect_http_dynamic_header_provider_error():
     srv.connect_http("http://localhost:1")
     try:
         with pytest.raises(InvariantError, match="missing signing key") as exc:
-            srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
         assert exc.value.code == grpc.StatusCode.UNAUTHENTICATED
     finally:
-        srv.stop()
+        await srv.stop()

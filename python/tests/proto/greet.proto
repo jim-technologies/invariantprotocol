@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package greet.v1;
 
+import "buf/validate/validate.proto";
 import "google/api/annotations.proto";
 
 option go_package = "github.com/jim-technologies/invariantprotocol/go/tests/gen;greetpb";
@@ -41,7 +42,7 @@ service GreetService {
 // Request for the Greet RPC.
 message GreetRequest {
   // Name of the person to greet.
-  string name = 1;
+  string name = 1 [(buf.validate.field).string.min_len = 1];
   // Optional mood for the greeting.
   optional Mood mood = 2;
   // Optional metadata tags.

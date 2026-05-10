@@ -1,7 +1,7 @@
 import os
 import sys
 
-import pytest
+import pytest_asyncio
 
 # Add framework and generated stubs to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -15,14 +15,14 @@ DESCRIPTOR_PATH = os.path.join(os.path.dirname(__file__), "proto", "descriptor.b
 
 
 class GreetServicer:
-    def Greet(self, request, context):
+    async def Greet(self, request, context):
         return greet_pb2.GreetResponse(
             message=f"Hi {request.name}",
             mood=request.mood,
             tags=dict(request.tags),
         )
 
-    def GreetGroup(self, request, context):
+    async def GreetGroup(self, request, context):
         messages = [f"Hi {p.name}" for p in request.people]
         return greet_pb2.GreetGroupResponse(
             messages=messages,
@@ -30,9 +30,9 @@ class GreetServicer:
         )
 
 
-@pytest.fixture(scope="session")
-def server():
+@pytest_asyncio.fixture
+async def server():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
     srv.register(GreetServicer())
     yield srv
-    srv.stop()
+    await srv.stop()

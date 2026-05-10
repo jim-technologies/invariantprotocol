@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import Any
 
 import grpc
@@ -34,20 +33,31 @@ _HTTP_STATUS_BY_CODE = {
 }
 
 
-@dataclass
-class InvariantError(ValueError):
-    """gRPC-aligned runtime error with optional structured details."""
+class InvariantError(Exception):
+    """gRPC-aligned runtime error with optional structured details.
 
-    code: grpc.StatusCode
-    message: str
-    details: list[dict[str, Any]] | None = None
+    Connect-style payload: lowercase code, optional details, no wrapper.
+    """
+
+    __slots__ = ("code", "details", "message")
+
+    def __init__(
+        self,
+        code: grpc.StatusCode,
+        message: str,
+        details: list[dict[str, Any]] | None = None,
+    ):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = details
 
     def __str__(self) -> str:
         return self.message
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "code": self.code.name,
+            "code": self.code.name.lower(),
             "message": self.message,
         }
         if self.details:

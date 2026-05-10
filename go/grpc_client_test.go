@@ -249,7 +249,7 @@ func TestConnectdynamicHandlerDirect(t *testing.T) {
 	dh, ok := tool.Handler.(*grpcDynamicHandler)
 	require.True(t, ok, "handler should be *grpcDynamicHandler")
 
-	result, err := dh.CallJSON(t.Context(), []byte(`{"name": "Direct"}`))
+	result, err := callDynamicJSON(t.Context(), dh, []byte(`{"name": "Direct"}`))
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, Direct")
 }
@@ -264,7 +264,7 @@ func TestConnectdynamicHandlerDirectRejectsUnknownField(t *testing.T) {
 	dh, ok := tool.Handler.(*grpcDynamicHandler)
 	require.True(t, ok, "handler should be *grpcDynamicHandler")
 
-	_, err := dh.CallJSON(t.Context(), []byte(`{"name":"Direct","extra":"x"}`))
+	_, err := callDynamicJSON(t.Context(), dh, []byte(`{"name":"Direct","extra":"x"}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown field")
 

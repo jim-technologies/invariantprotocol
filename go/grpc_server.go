@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -14,9 +16,13 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// serveGRPC starts a blocking gRPC server on the given port.
-// Optional grpc.ServerOption values are passed to grpc.NewServer.
-func (s *Server) serveGRPC(port int, opts ...grpc.ServerOption) error {
+// gracefulStopTimeout caps the time GracefulStop is allowed to wait for in-flight
+// RPCs before forcing a hard stop on context cancellation.
+const gracefulStopTimeout = 5 * time.Second
+
+// serveGRPC starts a blocking gRPC server on the given port. Honors ctx for
+// graceful shutdown. Optional grpc.ServerOption values are passed to grpc.NewServer.
+func (s *Server) serveGRPC(ctx context.Context, port int, opts ...grpc.ServerOption) error {
 	if s.fds == nil {
 		return errors.New("serveGRPC requires a Server created via ServerFromDescriptor or ServerFromBytes")
 	}
@@ -69,11 +75,37 @@ func (s *Server) serveGRPC(port int, opts ...grpc.ServerOption) error {
 		}, struct{}{})
 	}
 
+	// gRPC reflection — grpcurl, Buf Studio, Connect debug clients work out of the box.
+	reflection.Register(gs)
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return fmt.Errorf("listen on port %d: %w", port, err)
 	}
-	return gs.Serve(lis)
+
+	errc := make(chan error, 1)
+	go func() { errc <- gs.Serve(lis) }()
+
+	select {
+	case <-ctx.Done():
+		// Bounded graceful shutdown: give in-flight RPCs up to gracefulStopTimeout
+		// to finish, then force-stop. Without the timeout a hung handler would
+		// block GracefulStop forever.
+		stopped := make(chan struct{})
+		go func() {
+			gs.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(gracefulStopTimeout):
+			gs.Stop()
+			<-stopped
+		}
+		return ctx.Err()
+	case err := <-errc:
+		return err
+	}
 }
 
 func (s *Server) grpcMethodHandler(tool *Tool, reqMD, respMD protoreflect.MessageDescriptor) func(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {

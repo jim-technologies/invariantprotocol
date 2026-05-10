@@ -9,11 +9,29 @@ import (
 	"net"
 	"net/http"
 	"testing"
+	"time"
 
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
+
+// slowGreetServicer is used to exercise Connect-Timeout-Ms handling.
+type slowGreetServicer struct{}
+
+func (s *slowGreetServicer) Greet(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	select {
+	case <-time.After(2 * time.Second):
+		return &greetpb.GreetResponse{Message: "Hello, " + req.Name}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *slowGreetServicer) GreetGroup(_ context.Context, _ *greetpb.GreetGroupRequest) (*greetpb.GreetGroupResponse, error) {
+	return &greetpb.GreetGroupResponse{}, nil
+}
 
 // httpTestServicer implements GreetService RPCs using generated proto types.
 type httpTestServicer struct{}
@@ -46,27 +64,13 @@ func startHTTPServer(t *testing.T) (port int, cancel context.CancelFunc) {
 	require.NoError(t, err)
 	require.NoError(t, srv.Register(&httpTestServicer{}))
 
-	bindings, err := srv.buildHTTPBindings()
+	handler, err := srv.HTTPHandler()
 	require.NoError(t, err)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		binding, pathParams, methodMismatch := findHTTPBinding(bindings, r.Method, r.URL.Path)
-		if binding == nil {
-			if methodMismatch {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			http.NotFound(w, r)
-			return
-		}
-		srv.handleHTTP(w, r, binding, pathParams)
-	})
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
 
-	server := &http.Server{Handler: mux}
+	server := &http.Server{Handler: handler}
 	go func() { _ = server.Serve(lis) }()
 
 	ctx, cancelFn := context.WithCancel(t.Context())
@@ -84,20 +88,6 @@ func TestHTTPGreet(t *testing.T) {
 
 	body := postJSON(t, port, "/greet.v1.GreetService/Greet", map[string]any{"name": "Alice"})
 	assert.Contains(t, body, "Hello, Alice")
-}
-
-func TestHTTPGreetViaAnnotatedRoute(t *testing.T) {
-	port, cancel := startHTTPServer(t)
-	defer cancel()
-
-	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/greet/Alice", port))
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, 200, resp.StatusCode)
-
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	assert.Contains(t, string(body), "Hello, Alice")
 }
 
 func TestHTTPGreetWithEnumAndTags(t *testing.T) {
@@ -134,39 +124,6 @@ func TestHTTPGreetGroup(t *testing.T) {
 	messages := data["messages"].([]any)
 	assert.Equal(t, "Hello, Alice", messages[0])
 	assert.Equal(t, "Hello, Bob", messages[1])
-}
-
-func TestHTTPGreetGroupViaAnnotatedRoute(t *testing.T) {
-	port, cancel := startHTTPServer(t)
-	defer cancel()
-
-	body := postJSON(t, port, "/v1/greet:group", map[string]any{
-		"people": []any{
-			map[string]any{"name": "Alice"},
-			map[string]any{"name": "Bob"},
-		},
-	})
-
-	var data map[string]any
-	require.NoError(t, json.Unmarshal([]byte(body), &data))
-	messages := data["messages"].([]any)
-	assert.Equal(t, "Hello, Alice", messages[0])
-	assert.Equal(t, "Hello, Bob", messages[1])
-}
-
-func TestHTTPGreetGroupViaAdditionalBinding(t *testing.T) {
-	port, cancel := startHTTPServer(t)
-	defer cancel()
-
-	body := postJSON(t, port, "/v1/group:greet", map[string]any{
-		"people": []any{
-			map[string]any{"name": "Alice"},
-		},
-	})
-
-	var data map[string]any
-	require.NoError(t, json.Unmarshal([]byte(body), &data))
-	assert.Equal(t, "Hello, Alice", data["messages"].([]any)[0])
 }
 
 func TestHTTPMethodNotAllowed(t *testing.T) {
@@ -226,9 +183,9 @@ func TestHTTPUnknownFieldRejected(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
 
-	errObj := payload["error"].(map[string]any)
-	assert.Equal(t, "INVALID_ARGUMENT", errObj["code"])
-	assert.Contains(t, errObj["message"], "unknown field")
+	// Connect-style: unwrapped, lowercase code
+	assert.Equal(t, "invalid_argument", payload["code"])
+	assert.Contains(t, payload["message"], "unknown field")
 }
 
 func TestHTTPEmptyBody(t *testing.T) {
@@ -263,4 +220,92 @@ func postJSON(t *testing.T, port int, path string, body map[string]any) string {
 	out, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	return string(out)
+}
+
+func TestHTTPGreetBinaryProto(t *testing.T) {
+	port, cancel := startHTTPServer(t)
+	defer cancel()
+
+	reqBytes, err := proto.Marshal(&greetpb.GreetRequest{Name: "Binary"})
+	require.NoError(t, err)
+
+	httpReq, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf("http://localhost:%d/greet.v1.GreetService/Greet", port),
+		bytes.NewReader(reqBytes),
+	)
+	require.NoError(t, err)
+	httpReq.Header.Set("Content-Type", "application/proto")
+	httpReq.Header.Set("Accept", "application/proto")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "application/proto", resp.Header.Get("Content-Type"))
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	var out greetpb.GreetResponse
+	require.NoError(t, proto.Unmarshal(body, &out))
+	assert.Equal(t, "Hello, Binary", out.Message)
+}
+
+func TestHTTPConnectTimeoutMsHonored(t *testing.T) {
+	// Servicer that sleeps longer than the requested timeout.
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	require.NoError(t, srv.Register(&slowGreetServicer{}))
+
+	handler, err := srv.HTTPHandler()
+	require.NoError(t, err)
+	lis, err := net.Listen("tcp", "localhost:0")
+	require.NoError(t, err)
+	httpServer := &http.Server{Handler: handler}
+	go func() { _ = httpServer.Serve(lis) }()
+	defer httpServer.Close()
+	port := lis.Addr().(*net.TCPAddr).Port
+
+	body := []byte(`{"name":"World"}`)
+	req, err := http.NewRequest(http.MethodPost,
+		fmt.Sprintf("http://localhost:%d/greet.v1.GreetService/Greet", port),
+		bytes.NewReader(body),
+	)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Connect-Timeout-Ms", "50")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, 504, resp.StatusCode) // DEADLINE_EXCEEDED → HTTP 504
+
+	var payload map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&payload))
+	assert.Equal(t, "deadline_exceeded", payload["code"])
+}
+
+func TestHTTPToolCatalog(t *testing.T) {
+	port, cancel := startHTTPServer(t)
+	defer cancel()
+
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/", port))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, 200, resp.StatusCode)
+
+	var body struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+
+	names := map[string]bool{}
+	for _, tool := range body.Tools {
+		names[tool.Name] = true
+	}
+	assert.True(t, names["GreetService.Greet"])
+	assert.True(t, names["GreetService.GreetGroup"])
 }

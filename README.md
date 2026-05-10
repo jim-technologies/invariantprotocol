@@ -111,43 +111,94 @@ Write the comment once. It appears everywhere — typed, validated, with enums, 
 from_descriptor("descriptor.binpb")   # load proto descriptor
 from_bytes(raw_bytes)                 # load from embedded bytes
 
-register(servicer)                    # wire your implementation
+register(servicer)                    # wire your implementation (Python: async)
 connect("host:port")                  # or proxy to a remote gRPC server
 connect_http("https://api.example")   # or proxy to a remote HTTP service
 
 use(interceptor)                      # add middleware (logging, auth, tracing)
 use_http_header_provider(fn)          # optional per-request outbound HTTP auth/signing
 
+invoke(name, request)                 # in-process dispatch by tool name
+asgi_app() / HTTPHandler()            # mount on an existing HTTP server
 serve(...)                            # start projections (blocking)
 stop()                                # cleanup
 ```
 
-Eight methods. Everything else is convention.
+The two implementations are **shape mirrors** — same surface, idiomatic per language. Python is async-native end-to-end (sync handlers are rejected at `register()` time). Go stays sync. There is no async/sync compatibility layer.
 
 ## Go
 
 ```go
+ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+defer cancel()
+
 srv, _ := invariant.ServerFromDescriptor("descriptor.binpb")
 srv.Register(&GreetServicer{})
 
-srv.Serve(invariant.MCP())                              // MCP over stdio
-srv.Serve(invariant.CLI())                              // CLI from os.Args
-srv.Serve(invariant.HTTP(8080))                         // HTTP server
-srv.Serve(invariant.GRPC(50051))                        // gRPC server
-srv.Serve(invariant.HTTP(8080), invariant.GRPC(50051))  // multiple at once
+srv.Serve(ctx, invariant.MCP())                              // MCP over stdio
+srv.Serve(ctx, invariant.CLI())                              // CLI from os.Args
+srv.Serve(ctx, invariant.HTTP(8080))                         // HTTP server
+srv.Serve(ctx, invariant.GRPC(50051))                        // gRPC server
+srv.Serve(ctx, invariant.HTTP(8080), invariant.GRPC(50051))  // multiple at once
 ```
 
-## Python
+`Serve` honors the context: cancellation triggers graceful shutdown of every projection.
+
+## Python (async-native)
 
 ```python
+import asyncio
+
+class GreetServicer:
+    async def Greet(self, request, context):
+        return GreetResponse(message=f"Hi {request.name}")
+
 server = Server.from_descriptor("descriptor.binpb")
 server.register(GreetServicer())
 
-server.serve(mcp=True)                            # MCP over stdio
-server.serve(cli=True)                            # CLI from sys.argv
-server.serve(http=8080)                           # HTTP server
-server.serve(grpc=50051)                          # gRPC server
-server.serve(http=8080, grpc=50051)               # multiple at once
+asyncio.run(server.serve(mcp=True))                # MCP over stdio
+asyncio.run(server.serve(cli=True))                # CLI from sys.argv
+asyncio.run(server.serve(http=8080))               # HTTP server (ASGI on uvicorn)
+asyncio.run(server.serve(grpc=50051))              # gRPC server (grpc.aio)
+asyncio.run(server.serve(http=8080, grpc=50051))   # multiple at once
+```
+
+Sync handlers are rejected at `register()`:
+
+```python
+class BadServicer:
+    def Greet(self, request, context):  # sync — TypeError at register time
+        ...
+```
+
+## Mount on an existing HTTP server
+
+If you already run an ASGI app or `http.Server`, mount the projection instead of binding a new port:
+
+```python
+# Python — invariant.asgi_app() returns an ASGI callable
+app = server.asgi_app()
+# e.g. mount on Starlette/FastAPI:
+asgi_application.mount("/inv", app)
+```
+
+```go
+// Go — server.HTTPHandler() returns an http.Handler
+mux := http.NewServeMux()
+h, _ := server.HTTPHandler()
+mux.Handle("/inv/", http.StripPrefix("/inv", h))
+```
+
+## Programmatic invocation
+
+Dispatch by tool name without spinning up a projection — useful for in-process workflow runtimes and tests.
+
+```go
+resp, err := server.Invoke(ctx, "GreetService.Greet", &GreetRequest{Name: "World"})
+```
+
+```python
+resp = await server.invoke("GreetService.Greet", GreetRequest(name="World"))
 ```
 
 ## Remote proxy (zero implementation)
@@ -191,15 +242,9 @@ def sign_headers(req):
 server.use_http_header_provider(sign_headers)
 ```
 
-## HTTP Transcoding (`google.api.http`)
+## Remote HTTP proxy (`connect_http`)
 
-Invariant always exposes the canonical RPC route:
-
-```text
-POST /{package.ServiceName}/{Method}
-```
-
-If you add `google.api.http` annotations, those routes are exposed too (including `additional_bindings`):
+When the remote service is a plain REST API (not yours), `connect_http` reads `google.api.http` annotations on your local `.proto` to know how to call it. Server-side, Invariant only exposes Connect — REST routes are not generated.
 
 ```protobuf
 import "google/api/annotations.proto";
@@ -209,67 +254,29 @@ service UserService {
     option (google.api.http) = {
       post: "/v1/users"
       body: "*"
-      additional_bindings {
-        post: "/v1/create-user"
-        body: "*"
-      }
     };
   }
 }
 ```
 
-To use `google/api/annotations.proto`, add the dependency in your `buf.yaml`:
+Add the dep in `buf.yaml`:
 
 ```yaml
-version: v2
-modules:
-  - path: .
 deps:
   - buf.build/googleapis/googleapis
 ```
 
-Then run:
+Then `buf dep update`. The client uses:
 
-```bash
-buf dep update
-```
-
-The same annotation metadata is also used by `ConnectHTTP`/`connect_http` when acting as a remote HTTP client proxy.
-
-## Supported `google.api.http` Subset
-
-Supported now:
-
-- HTTP methods: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, and `custom` method kinds.
-- Path templates: literal segments, `{field}`, `{field=*}`, `{field=**}` (only when `**` is the final segment).
-- Body mapping: `body: "*"`, `body: "field_path"`, or omitted body.
-- Canonical fallback route always available: `POST /{package.ServiceName}/{Method}`.
-- Strict request decoding (unknown fields rejected with gRPC-style `INVALID_ARGUMENT` errors).
-
-Server-side routing:
-
-- Uses primary `google.api.http` binding and all `additional_bindings`.
-
-Remote HTTP client proxy (`ConnectHTTP` / `connect_http`):
-
-- Uses the primary `google.api.http` binding when present.
-- Falls back to canonical RPC route if no annotation exists.
-- Uses a built-in timeout and safe retries for `GET`/`HEAD` on transient failures (`429`, `500`, `502`, `503`, `504`), including `Retry-After` when provided.
-- Optional dynamic outbound headers via `UseHTTPHeaderProvider` / `use_http_header_provider` (for signatures and per-request auth).
-- Injects outbound HTTP headers from environment variables using:
-  - `INVARIANT_HTTP_HEADER_<NAME>=value`
-  - Example: `INVARIANT_HTTP_HEADER_AUTHORIZATION="Bearer <token>"`
-  - Example: `INVARIANT_HTTP_HEADER_X_POLYMARKET_SIGNATURE="..."`
-
-Not yet implemented:
-
-- `response_body` mapping.
-- Full path-template grammar beyond the patterns above.
-- Client-side selection among `additional_bindings`.
+- The primary binding (or canonical fallback if no annotation).
+- Built-in timeout, safe retries on `429`/`5xx` for `GET`/`HEAD` (incl. `Retry-After`).
+- Optional `UseHTTPHeaderProvider` / `use_http_header_provider` for per-request signing.
+- `INVARIANT_HTTP_HEADER_<NAME>=value` env injection (e.g. `INVARIANT_HTTP_HEADER_AUTHORIZATION="Bearer ..."`).
+- Tolerant error parsing: accepts both Connect-style (`{"code": "invalid_argument", ...}`) and legacy wrapped (`{"error": {...}}`).
 
 ## Middleware
 
-gRPC-style unary interceptor pattern. Runs on every invocation across all projections.
+gRPC-style unary interceptors. Run on every invocation across all projections. First registered = outermost.
 
 ```go
 srv.Use(func(ctx context.Context, req any, info *invariant.ServerCallInfo, handler invariant.UnaryHandler) (any, error) {
@@ -281,48 +288,76 @@ srv.Use(func(ctx context.Context, req any, info *invariant.ServerCallInfo, handl
 ```
 
 ```python
-def logging_interceptor(request, context, info, handler):
+async def logging_interceptor(request, context, info, handler):
     print(f"→ {info.full_method}")
-    response = handler(request, context)
+    response = await handler(request, context)
     print(f"← {info.full_method}")
     return response
 
 server.use(logging_interceptor)
 ```
 
-First registered = outermost. Existing gRPC interceptors are usually a small adapter away in Go.
-
 ## Projections
 
 | Projection | What happens |
 |------------|-------------|
 | **MCP** | Each unary RPC becomes a tool. JSON Schema from proto types. Descriptions from proto comments. Served over stdio. |
-| **CLI** | `ServiceName Method -r request.yaml`. AI agents that prefer shell over MCP can call it directly. Humans get `--help` with field types and descriptions. |
-| **HTTP** | Canonical RPC route: `POST /{package.ServiceName}/{Method}`. Also supports `google.api.http` routes and `additional_bindings` when present. |
-| **gRPC** | Standard gRPC server. Dynamic dispatch from descriptor — no generated server stubs needed. |
+| **CLI** | `ServiceName Method -r request.json`. AI agents and humans alike call RPCs from the shell. `--help` lists tools with field types. |
+| **HTTP** | Connect-only. `POST /{package.Service}/{Method}` accepts `application/json` or `application/proto`. `GET /` returns the tool catalog (same shape as MCP `tools/list`). `GET /__invariant/descriptor.binpb` returns the raw FileDescriptorSet. |
+| **gRPC** | Standard gRPC server with reflection enabled by default — `grpcurl`, Buf Studio, Connect debug clients all work out of the box. |
 
-## Validation And Errors
+### Connect protocol
 
-- Parsing is strict by default across MCP/CLI/HTTP (unknown fields are rejected).
-- Errors are gRPC-code aligned (`INVALID_ARGUMENT`, `NOT_FOUND`, etc.).
-- HTTP maps gRPC status codes to HTTP status codes and returns:
+HTTP errors use the Connect error envelope:
 
 ```json
 {
-  "error": {
-    "code": "INVALID_ARGUMENT",
-    "message": "proto: (line 1:27): unknown field \"extra\"",
-    "details": [
-      {
-        "@type": "type.googleapis.com/google.rpc.BadRequest",
-        "fieldViolations": [
-          {"field": "extra", "description": "proto: (line 1:27): unknown field \"extra\""}
-        ]
-      }
-    ]
-  }
+  "code": "invalid_argument",
+  "message": "proto: (line 1:27): unknown field \"extra\"",
+  "details": [
+    {
+      "@type": "type.googleapis.com/google.rpc.BadRequest",
+      "fieldViolations": [
+        {"field": "extra", "description": "proto: (line 1:27): unknown field \"extra\""}
+      ]
+    }
+  ]
 }
 ```
+
+Code names follow Connect's lowercase convention (`invalid_argument`, `not_found`, etc.).
+
+### Validation
+
+Protovalidate constraints on your proto enforced via an opt-in interceptor:
+
+```go
+v, _ := invariant.Validation()
+server.Use(v)
+```
+
+```python
+server.use(invariant.validation())
+```
+
+Constraint violations short-circuit with `invalid_argument` and field-level `BadRequest` details.
+
+### gRPC reflection
+
+The gRPC projection registers reflection automatically. Try it:
+
+```bash
+grpcurl -plaintext localhost:50051 list
+grpcurl -plaintext -d '{"name":"World"}' localhost:50051 greet.v1.GreetService/Greet
+```
+
+### Production behavior
+
+- **Deadlines.** HTTP honors the Connect-Timeout-Ms request header — the server cancels in-flight work once the deadline elapses and returns `deadline_exceeded`. gRPC honors gRPC-native deadlines via `context.Context`.
+- **Cancellation.** MCP supports `notifications/cancelled` — clients can interrupt long-running `tools/call` invocations. `tools/call` runs concurrently so notifications are processed without waiting for the tool to finish; metadata methods (`initialize`, `tools/list`, `ping`) stay strictly ordered.
+- **Tool-name collisions.** If two services in different packages share the same simple name, registration fails with a clear error rather than silently overwriting.
+- **Unknown tools.** `Invoke()`/`invoke()` returns a `NOT_FOUND` status error that maps to the right code through every projection.
+- **Idempotent shutdown.** `stop()` is safe to call multiple times and before `serve()`.
 
 ## Install
 
@@ -338,10 +373,28 @@ pip install "invariant-protocol @ git+https://github.com/jim-technologies/invari
 
 ## Requirements
 
-- `buf build --include-source-info -o descriptor.binpb`
+- `buf build --as-file-descriptor-set -o descriptor.binpb` (source info included by default)
 - Generated stubs for your language (`buf generate`)
-- If you use `google.api.http`, add Buf dep `buf.build/googleapis/googleapis` and run `buf dep update`
-- No vendored `google/api/*.proto` files required
+- For `connect_http` proxy mode with `google.api.http`, add Buf dep `buf.build/googleapis/googleapis`
+- For `Validation()` / `validation()`, add Buf dep `buf.build/bufbuild/protovalidate`
+
+## Benchmarks
+
+Reference numbers on AMD Ryzen AI 9 365 (Linux, Go 1.25, Python 3.13):
+
+| Path                      | Go              | Python          |
+|---------------------------|-----------------|-----------------|
+| Direct `Invoke()`         | ~1 µs / op      | ~1 µs / op      |
+| HTTP JSON roundtrip       | ~30 µs / op     | ~540 µs / op    |
+| HTTP binary proto         | ~22 µs / op     | ~570 µs / op    |
+| gRPC unary                | ~46 µs / op     | ~83 µs / op     |
+
+Run yourself:
+
+```bash
+cd go && go test -bench=. -benchtime=2s -run=^$ ./...
+cd python && uv run python bench/bench.py
+```
 
 ## License
 

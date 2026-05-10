@@ -3,7 +3,7 @@
 // Format: ServiceName Method [-r request]
 //
 // Values for -r are auto-detected:
-//   - Existing file path → load by extension (.yaml/.yml, .json, .binpb/.pb)
+//   - Existing file path → load by extension (.json, .binpb, .pb)
 //   - Otherwise → parse as inline JSON
 //
 // Internally proto-first: input is deserialized directly into a proto.Message,
@@ -18,15 +18,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/dynamicpb"
-	"gopkg.in/yaml.v3"
 )
 
 func (s *Server) cli(ctx context.Context, args []string) (string, error) {
@@ -80,24 +76,12 @@ func (s *Server) cli(ctx context.Context, args []string) (string, error) {
 }
 
 // newRequest creates an empty proto.Message of the correct type for the tool's input.
+// Reflection happens once at addTool time; this is just a cached factory call.
 func (s *Server) newRequest(tool *Tool) (proto.Message, error) {
-	if provider, ok := tool.Handler.(interface {
-		requestDescriptor() protoreflect.MessageDescriptor
-	}); ok {
-		return dynamicpb.NewMessage(provider.requestDescriptor()), nil
+	if tool.newRequest == nil {
+		return nil, fmt.Errorf("tool %q has no usable request factory (bad handler signature)", tool.Name)
 	}
-
-	handlerVal := reflect.ValueOf(tool.Handler)
-	handlerType := handlerVal.Type()
-	if handlerType.NumIn() != 2 || handlerType.NumOut() != 2 {
-		return nil, fmt.Errorf("handler has unexpected signature (in=%d, out=%d)", handlerType.NumIn(), handlerType.NumOut())
-	}
-	reqType := handlerType.In(1)
-	reqMsg, ok := reflect.New(reqType.Elem()).Interface().(proto.Message)
-	if !ok {
-		return nil, fmt.Errorf("request type %s does not implement proto.Message", reqType)
-	}
-	return reqMsg, nil
+	return tool.newRequest(), nil
 }
 
 // loadIntoProto populates a proto.Message from a file path or inline JSON string.
@@ -119,6 +103,7 @@ func loadIntoProto(msg proto.Message, value string) error {
 }
 
 // loadFileIntoProto reads a file and deserializes it into a proto.Message.
+// Supported extensions: .json, .binpb, .pb.
 func loadFileIntoProto(msg proto.Message, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -134,19 +119,8 @@ func loadFileIntoProto(msg proto.Message, path string) error {
 			return invalidArgumentFromJSONError(err)
 		}
 		return nil
-	default: // .yaml, .yml
-		var m any
-		if err := yaml.Unmarshal(data, &m); err != nil {
-			return fmt.Errorf("parse YAML file %s: %w", path, err)
-		}
-		jsonBytes, err := json.Marshal(convertYAMLToJSON(m))
-		if err != nil {
-			return fmt.Errorf("convert YAML to JSON for %s: %w", path, err)
-		}
-		if err := protojson.Unmarshal(jsonBytes, msg); err != nil {
-			return invalidArgumentFromJSONError(err)
-		}
-		return nil
+	default:
+		return invalidArgumentError(fmt.Sprintf("unsupported request file extension %q (use .json, .binpb, or .pb)", ext))
 	}
 }
 
@@ -198,7 +172,7 @@ func splitCLIArgs(args []string) (serviceName, methodName, requestValue string, 
 // cliHelp returns a help string listing all registered tools and their fields.
 func (s *Server) cliHelp() string {
 	var b strings.Builder
-	b.WriteString("Usage: <binary> <ServiceName> <Method> [-r request.yaml|request.json|request.binpb|'{\"inline\":\"json\"}']\n\n")
+	b.WriteString("Usage: <binary> <ServiceName> <Method> [-r request.json|request.binpb|'{\"inline\":\"json\"}']\n\n")
 
 	if len(s.tools) == 0 {
 		b.WriteString("No tools registered.\n")
@@ -308,27 +282,3 @@ func (s *Server) resolveServiceMethod(service, method string) string {
 	return ""
 }
 
-// convertYAMLToJSON converts yaml.v3 decoded values to JSON-compatible types.
-// yaml.v3 decodes map keys as string, but nested structures may need conversion.
-func convertYAMLToJSON(v any) any {
-	switch v := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(v))
-		for k, val := range v {
-			out[k] = convertYAMLToJSON(val)
-		}
-		return out
-	case []any:
-		out := make([]any, len(v))
-		for i, val := range v {
-			out[i] = convertYAMLToJSON(val)
-		}
-		return out
-	case int:
-		return float64(v)
-	case int64:
-		return float64(v)
-	default:
-		return v
-	}
-}

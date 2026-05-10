@@ -23,6 +23,7 @@ def _run_mcp_session(messages: list[str]) -> list[dict]:
     descriptor = os.path.join(test_dir, "proto", "descriptor.binpb")
 
     script = f"""
+import asyncio
 import sys
 sys.path.insert(0, {src_dir!r})
 sys.path.insert(0, {gen_dir!r})
@@ -30,19 +31,22 @@ import greet_pb2
 from invariant import Server
 
 class GreetServicer:
-    def Greet(self, request, context):
+    async def Greet(self, request, context):
         return greet_pb2.GreetResponse(
             message=f"Hi {{request.name}}",
             mood=request.mood,
             tags=dict(request.tags),
         )
-    def GreetGroup(self, request, context):
+    async def GreetGroup(self, request, context):
         messages = [f"Hi {{p.name}}" for p in request.people]
         return greet_pb2.GreetGroupResponse(messages=messages, count=len(request.people))
 
-server = Server.from_descriptor({descriptor!r})
-server.register(GreetServicer())
-server.serve(mcp=True)
+async def main():
+    server = Server.from_descriptor({descriptor!r})
+    server.register(GreetServicer())
+    await server.serve(mcp=True)
+
+asyncio.run(main())
 """
     proc = subprocess.run(
         [sys.executable, "-c", script],
@@ -132,7 +136,7 @@ def test_mcp_tool_call_rejects_unknown_field():
     )
     result = responses[1]["result"]
     assert result["isError"] is True
-    assert result["error"]["code"] == "INVALID_ARGUMENT"
+    assert result["error"]["code"] == "invalid_argument"
     assert 'field named "extra"' in result["error"]["message"]
     assert result["error"]["details"][0]["fieldViolations"][0]["field"] == "extra"
 

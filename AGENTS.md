@@ -27,11 +27,39 @@ Both Go and Python implementations follow the same flow:
 4. **Invoke dispatch** (`mcp.go:invoke` / `server.py:_invoke`) — proto-in/proto-out core with interceptor chain
 5. **Projections** — boundary converters that translate each protocol's wire format to/from proto messages
 
+### Shape mirror, not literal mirror
+
+Go and Python share the same 8-method API and the same dispatch pipeline, but the implementations are **idiomatic per language**. Python is async end-to-end; Go is sync (goroutines + sync function signatures). Don't try to keep them literally identical when the language idiom differs. Prefer language-native patterns over forced symmetry.
+
+### Async-native Python (load-bearing)
+
+Python is async-only. `register()` rejects sync handlers via `inspect.iscoroutinefunction`. Interceptors must be async. All projections (HTTP/MCP/gRPC/CLI) and remote clients (`connect`, `connect_http`) are async. There is no sync-compat layer and no detect-and-await.
+
+- HTTP projection is an ASGI app served by uvicorn. Users mount it on their own ASGI app via `Server.asgi_app()`.
+- gRPC projection uses `grpc.aio.server`.
+- MCP reads stdin via `asyncio.StreamReader`.
+- HTTP client (`HTTPDynamicHandler`) uses `httpx.AsyncClient`.
+- `Server.serve(...)` is `async def`. Multi-projection uses `asyncio.gather` with cancel cascade.
+
+### Programmatic invocation
+
+`Server.Invoke(ctx, toolName, request)` (Go) and `await Server.invoke(tool_name, request)` (Python) dispatch a tool by name without binding a projection — useful for in-process callers (workflow runtimes, tests).
+
+### Graceful shutdown
+
+Go's `Server.Serve(ctx, projections...)` honors the context: cancellation triggers `http.Server.Shutdown` and `grpc.Server.GracefulStop` on every running projection. Python's `await server.serve(...)` propagates `asyncio.CancelledError` to all projection tasks.
+
 ## Convention over configuration
 
 - We do NOT support extensive configurability. Support common use cases well.
 - Don't add feature flags, options structs, or builder patterns for hypothetical needs.
 - If something works for 95% of cases, ship it. Don't add a knob for the other 5%.
+- **Cut before you add.** When a feature path doesn't pull its weight, drop it. The framework should always be getting smaller relative to its capability surface.
+
+## Stack stance
+
+- **gRPC-driven, protobuf-driven.** This is the design center. Connect-Web for browser clients, gRPC for service-to-service, MCP for AI agents, CLI for shell. There is no first-class REST surface — REST routes are only consumed (via `connect_http` proxying) and never served.
+- **No legacy compat.** Modern-forward. We pick one format and update tests instead of preserving the old one. Examples: Connect-style errors only (lowercase, unwrapped), `application/proto` only (no `application/x-protobuf`), Python is async-only.
 
 ## Code style
 
@@ -59,8 +87,24 @@ Both Go and Python support glob-based filtering of which methods get registered:
 - `*` matches any characters including dots
 - Exclude is applied after include
 
-### HTTP transcoding
-Invariant supports `google.api.http` annotations for REST routes. The canonical RPC route (`POST /{package.Service}/{Method}`) is always available as a fallback.
+### HTTP is Connect-only
+The HTTP projection serves only the canonical Connect route: `POST /{package.Service}/{Method}`. Body is `application/json` or `application/proto`. There is no server-side `google.api.http` REST routing — those annotations are still read by the `connect_http` *client* for proxying to legacy REST APIs we don't own.
+
+### HTTP error format
+Connect-style envelope only: `{"code": "invalid_argument", "message": "...", "details": [...]}`. Lowercase code, no wrapper, no toggle. The `connect_http` client is tolerant — accepts both this format and the legacy wrapped `{"error": {...}}` format from remote services.
+
+### Tool catalog and descriptor endpoints
+- `GET /` and `GET /__invariant/tools` → `{"tools": [...]}` (same shape as MCP `tools/list`).
+- `GET /__invariant/descriptor.binpb` → raw FileDescriptorSet bytes for tooling.
+
+### gRPC reflection
+Always registered. `grpcurl`, Buf Studio, and Connect debug clients work without extra setup. Don't gate this — it's table stakes for gRPC-driven workflows.
+
+### Validation
+`invariant.Validation()` (Go) / `invariant.validation()` (Python) — opt-in interceptor running `protovalidate`. Failures short-circuit with `invalid_argument` plus field-level `BadRequest` details.
+
+### Performance targets
+Both languages hit ~1 µs for direct `Invoke()`. The HTTP path stays under 30 µs (Go) and 600 µs (Python — uvicorn + httpx overhead dominates). The HTTPProto path caches descriptors and the typed `reflect.Type` at `HTTPHandler()` build time so per-request work stays minimal — never call `protodesc.NewFiles` per request. See `go/benchmarks_test.go` and `python/bench/bench.py`.
 
 ### Proto descriptor requirement
 `buf build --include-source-info -o descriptor.binpb` — the `--include-source-info` flag is critical, otherwise comments won't be available for tool descriptions.
@@ -68,11 +112,22 @@ Invariant supports `google.api.http` annotations for REST routes. The canonical 
 ## Running
 
 ```bash
+flox activate
 make test      # run all tests (Go + Python)
 make lint      # lint all code
 make fmt       # auto-format
 make generate  # regenerate proto stubs
 ```
+
+## Dependency boundaries
+
+Three lockfiles, three sources of truth — keep them clean:
+
+- **`.flox/env/manifest.toml`** — language toolchains and CLI tools only: `python3`, `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`. Do NOT install Python or Go libraries here.
+- **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev dep. `uv run` resolves against this.
+- **`go/go.mod` + `go/go.sum`** — every Go dep.
+
+CI (`.github/workflows/ci.yml`) runs everything inside `flox activate`, so contributors and CI hit the same toolchain by construction.
 
 ## Not yet implemented
 
