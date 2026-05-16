@@ -30,13 +30,58 @@ if TYPE_CHECKING:
 async def run_cli(server: Server, args: list[str]) -> Message | str:
     """Execute a CLI command and return the response as a proto Message (or help string).
 
-    Format: ServiceName Method [-r request]
+    Buffers stream output into a newline-delimited string. Useful for tests and
+    in-process use. For real-time piped output, use ``stream_cli`` with a writer.
     """
     if not args or args[0] in ("--help", "-h"):
         return _cli_help(server)
 
     service_name, method_name, request_value = _split_args(args)
+    tool, request = _prepare(server, service_name, method_name, request_value)
 
+    if tool.server_streaming:
+        lines: list[str] = []
+        async for msg in server._invoke_stream(tool, request, None):
+            lines.append(json_format.MessageToJson(msg, preserving_proto_field_name=True, indent=None))
+        return "\n".join(lines)
+
+    return await server._invoke(tool, request, None)
+
+
+async def stream_cli(server: Server, args: list[str], write) -> None:
+    """Execute a CLI command, calling ``write`` per output piece — streamed.
+
+    Use this when output must reach the user as soon as it is produced —
+    a long-running stream piped through CLI must not feel frozen. ``write``
+    is invoked:
+
+      - once for help text
+      - once for a unary response (pretty-printed JSON)
+      - once per chunk for server-streaming (compact JSON, newline-terminated)
+
+    ``write`` should be a sync callable like ``print``; we do not await it.
+    """
+    if not args or args[0] in ("--help", "-h"):
+        write(_cli_help(server))
+        return
+
+    service_name, method_name, request_value = _split_args(args)
+    tool, request = _prepare(server, service_name, method_name, request_value)
+
+    if tool.server_streaming:
+        async for msg in server._invoke_stream(tool, request, None):
+            write(json_format.MessageToJson(msg, preserving_proto_field_name=True, indent=None))
+        return
+
+    response = await server._invoke(tool, request, None)
+    if response is None:
+        write("{}")
+        return
+    write(json_format.MessageToJson(response, preserving_proto_field_name=True, indent=2))
+
+
+def _prepare(server: Server, service_name: str, method_name: str, request_value):
+    """Resolve the target tool and build its proto request."""
     tool_name = _resolve_tool(server, service_name, method_name)
     tool = server.tools.get(tool_name)
     if tool is None:
@@ -46,8 +91,7 @@ async def run_cli(server: Server, args: list[str]) -> Message | str:
     request = _new_request(tool.input_type)
     if request_value is not None:
         _load_into_proto(request, request_value)
-
-    return await server._invoke(tool, request, None)
+    return tool, request
 
 
 def _new_request(input_type: str) -> Message:

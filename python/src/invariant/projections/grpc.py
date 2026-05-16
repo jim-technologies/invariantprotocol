@@ -59,6 +59,22 @@ class _InvariantHandler(grpc.GenericRpcHandler):
         def serialize(msg) -> bytes:
             return msg.SerializeToString()
 
+        if tool.server_streaming:
+
+            async def stream_handler(request, context):
+                try:
+                    async for msg in server._invoke_stream(tool, request, context):
+                        yield msg
+                except Exception as e:
+                    err = as_invariant_error(e)
+                    await context.abort(err.code, err.message)
+
+            return grpc.unary_stream_rpc_method_handler(
+                stream_handler,
+                request_deserializer=deserialize,
+                response_serializer=serialize,
+            )
+
         async def handler(request, context):
             try:
                 return await server._invoke(tool, request, context)

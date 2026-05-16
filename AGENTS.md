@@ -97,6 +97,44 @@ Connect-style envelope only: `{"code": "invalid_argument", "message": "...", "de
 - `GET /` and `GET /__invariant/tools` → `{"tools": [...]}` (same shape as MCP `tools/list`).
 - `GET /__invariant/descriptor.binpb` → raw FileDescriptorSet bytes for tooling.
 
+### Health probes
+- `GET /healthz` and `GET /readyz` → `{"status":"ok"}`. Always 200 once the
+  HTTP handler is built — registration is synchronous, so by the time we
+  answer requests we are ready. Don't gate on app-level health (no liveness
+  signal hooks); users wanting that can register their own service.
+- No gRPC `grpc.health.v1.Health` service is auto-registered — adding it
+  for Python would pull a new dep. Users wanting it can register one as a
+  normal service. For most use cases a TCP healthcheck on the gRPC port is
+  enough.
+
+### Panic / exception recovery
+- Go: `chainedInvoke` and `invokeStream` install a `defer recover()` that
+  converts panics into `codes.Internal` status errors so a single goroutine
+  bug can't crash the server. The wrapped error names the method path for
+  triage.
+- Python: every projection wraps the dispatch in `try/except Exception` and
+  routes through `as_invariant_error`, so the wire response is always a
+  well-formed Connect error envelope. Mid-stream raises land in the Connect
+  end-stream envelope with the original code preserved. `asyncio.CancelledError`
+  intentionally **propagates** from `mcp_call_tool` instead of being swallowed
+  into a "cancelled" response — that lets the stdio task scheduler clean up
+  cancelled requests without a response (MCP spec) and lets `asyncio.timeout`
+  in the HTTP path convert cancellation to `deadline_exceeded`.
+
+### Resource limits
+- HTTP unary requests cap at 16 MiB (`httpMaxUnaryRequest` / `HTTP_MAX_UNARY_REQUEST`).
+  Exceeded → `resource_exhausted`. Set per-route via your own middleware if
+  you need different limits per tool.
+- Connect streaming request envelopes cap at 16 MiB
+  (`connectStreamMaxRequest` / `CONNECT_STREAM_MAX_REQUEST`). The framing
+  header is inspected before any data is read, so a forged size won't
+  allocate a giant buffer.
+- `Connect-Timeout-Ms` is honored on every HTTP path: unary, streaming, and
+  the `/mcp` JSON-RPC transport. On streaming, the deadline-exceeded error
+  is delivered in the end-stream envelope rather than HTTP status — that's
+  the Connect-correct shape (the response has already been started by the
+  time the deadline fires).
+
 ### gRPC reflection
 Always registered. `grpcurl`, Buf Studio, and Connect debug clients work without extra setup. Don't gate this — it's table stakes for gRPC-driven workflows.
 
@@ -129,9 +167,51 @@ Three lockfiles:
 
 CI (`.github/workflows/ci.yml`) runs everything inside `flox activate`, so contributors and CI hit the same toolchain by construction.
 
+## Streaming
+
+Server-streaming RPCs are projected across all four surfaces. Client-streaming
+and bidi are intentionally not — declared methods of those kinds are silently
+skipped at registration time.
+
+- **Handler shape (Go)**: `func(*Req, invariant.ServerStream) error`. Call
+  `stream.Send(resp)` per emitted message. Reflection auto-detects the shape.
+- **Handler shape (Python)**: `async def Method(self, request, context)` declared
+  as an async generator (`yield response`). Registration rejects coroutines
+  with a clear error so the mismatch is caught at startup.
+- **Wire formats**:
+  - gRPC: native server-streaming (`grpc.StreamDesc`).
+  - HTTP: Connect streaming envelopes (`application/connect+json` for
+    text, `application/connect+proto` for binary). Plain `application/json`
+    on a streaming endpoint is rejected — Connect splits unary and streaming
+    content types intentionally. End-stream envelope is always JSON (Connect
+    spec) regardless of the message content type.
+  - MCP: each emitted message becomes a text block in the `content` array.
+    Errors mid-stream surface as `isError` with the chunks already emitted
+    plus a trailing error text block.
+  - CLI: chunks are buffered and printed as newline-delimited JSON (one chunk
+    per line). Mirrors Go's CLI behaviour — no real-time output here, since
+    the `run_cli` contract returns a single string.
+- **Stream interceptors**: `UseStream` / `use_stream`. Separate from `Use` /
+  `use` because the wire signatures genuinely differ (returns a stream, not a
+  single value). Same registration order semantics — first registered =
+  outermost.
+- **Proxying**: `Connect` (gRPC proxy) and `ConnectHTTP` (REST proxy) skip
+  streaming methods. Forwarding a stream through a proxy duplicates what gRPC
+  already does, without adding value here.
+
+## MCP Streamable HTTP transport
+
+The HTTP projection also serves MCP at `POST /mcp` — one JSON-RPC request per
+POST, one JSON-RPC response back, `204 No Content` on notifications. Reuses
+the same `mcpDispatch` / `mcp_dispatch` helper as the stdio session so there
+is one source of truth for what each MCP method does. SSE-based streaming
+notifications are not implemented; users wanting `notifications/progress`
+during a long tool call should call the gRPC or HTTP-Connect projection
+directly.
+
 ## Not yet implemented
 
 - `response_body` mapping in server-side HTTP handler (client-side works)
 - Full path-template grammar beyond `{field}`, `{field=*}`, `{field=**}`
 - Client-side selection among `additional_bindings`
-- Streaming RPC support (only unary RPCs are projected)
+- Client-streaming and bidi RPCs (intentional — opinionated cut)

@@ -34,9 +34,11 @@ func (s *Server) serveGRPC(ctx context.Context, port int, opts ...grpc.ServerOpt
 
 	gs := grpc.NewServer(opts...)
 
-	// Group tools by service for ServiceDesc registration.
+	// Group tools by service for ServiceDesc registration. Unary and stream
+	// methods live in different slices on the same desc.
 	type svcEntry struct {
 		methods []grpc.MethodDesc
+		streams []grpc.StreamDesc
 	}
 	svcMap := make(map[string]*svcEntry)
 
@@ -59,8 +61,18 @@ func (s *Server) serveGRPC(ctx context.Context, port int, opts ...grpc.ServerOpt
 		t := tool // capture for closure
 		rmd := reqMD
 		rsmd := respMD
+
+		if t.ServerStreaming {
+			entry.streams = append(entry.streams, grpc.StreamDesc{
+				StreamName:    t.MethodName,
+				Handler:       s.grpcStreamHandler(t, rmd, rsmd),
+				ServerStreams: true,
+			})
+			continue
+		}
+
 		entry.methods = append(entry.methods, grpc.MethodDesc{
-			MethodName: tool.MethodName,
+			MethodName: t.MethodName,
 			Handler:    s.grpcMethodHandler(t, rmd, rsmd),
 		})
 	}
@@ -72,6 +84,7 @@ func (s *Server) serveGRPC(ctx context.Context, port int, opts ...grpc.ServerOpt
 			ServiceName: svcName,
 			HandlerType: (*grpcServicer)(nil),
 			Methods:     entry.methods,
+			Streams:     entry.streams,
 		}, struct{}{})
 	}
 
@@ -105,6 +118,29 @@ func (s *Server) serveGRPC(ctx context.Context, port int, opts ...grpc.ServerOpt
 		return ctx.Err()
 	case err := <-errc:
 		return err
+	}
+}
+
+// grpcStreamHandler bridges grpc-go's stream handler signature to the
+// framework's StreamHandler. The first message off the stream is the
+// request; each invariant.ServerStream.Send writes one gRPC stream frame.
+//
+// respMD is unused directly because the user's stream handler emits typed
+// proto.Message values — when those are *dynamicpb.Message (proxy mode,
+// future), the framework converter at the handler boundary handles it.
+func (s *Server) grpcStreamHandler(tool *Tool, reqMD, _ protoreflect.MessageDescriptor) func(srv any, stream grpc.ServerStream) error {
+	return func(_ any, stream grpc.ServerStream) error {
+		req := dynamicpb.NewMessage(reqMD)
+		if err := stream.RecvMsg(req); err != nil {
+			return err
+		}
+		ctx := stream.Context()
+		cb := newCallbackStream(ctx, func(msg proto.Message) error {
+			return stream.SendMsg(msg)
+		})
+		defer cb.close()
+
+		return s.invokeStream(tool, req, cb)
 	}
 }
 

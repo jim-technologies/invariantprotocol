@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sync"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -173,11 +176,16 @@ type jsonRPCError struct {
 // --- Dispatch ---
 
 func (m *mcpSession) dispatch(ctx context.Context, req *jsonRPCRequest) *jsonRPCResponse {
-	// Notifications (no id) get no response.
+	return m.server.mcpDispatch(ctx, req)
+}
+
+// mcpDispatch routes a single JSON-RPC request through MCP method handling.
+// Used by both the stdio session loop and the HTTP /mcp transport.
+// Returns nil for notifications (req.ID == nil).
+func (s *Server) mcpDispatch(ctx context.Context, req *jsonRPCRequest) *jsonRPCResponse {
 	if req.ID == nil {
 		return nil
 	}
-
 	switch req.Method {
 	case "initialize":
 		return mcpOK(req.ID, map[string]any{
@@ -186,9 +194,9 @@ func (m *mcpSession) dispatch(ctx context.Context, req *jsonRPCRequest) *jsonRPC
 			"serverInfo":      map[string]any{"name": serverName, "version": serverVersion},
 		})
 	case "tools/list":
-		return m.toolsList(req.ID)
+		return mcpOK(req.ID, map[string]any{"tools": s.ToolCatalog()})
 	case "tools/call":
-		return m.toolsCall(ctx, req.ID, req.Params)
+		return s.toolsCall(ctx, req.ID, req.Params)
 	case "ping":
 		return mcpOK(req.ID, map[string]any{})
 	default:
@@ -196,11 +204,7 @@ func (m *mcpSession) dispatch(ctx context.Context, req *jsonRPCRequest) *jsonRPC
 	}
 }
 
-func (m *mcpSession) toolsList(id json.RawMessage) *jsonRPCResponse {
-	return mcpOK(id, map[string]any{"tools": m.server.ToolCatalog()})
-}
-
-func (m *mcpSession) toolsCall(ctx context.Context, id, rawParams json.RawMessage) *jsonRPCResponse {
+func (s *Server) toolsCall(ctx context.Context, id, rawParams json.RawMessage) *jsonRPCResponse {
 	var p struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -209,14 +213,18 @@ func (m *mcpSession) toolsCall(ctx context.Context, id, rawParams json.RawMessag
 		return mcpErr(id, -32602, "Invalid params: "+err.Error())
 	}
 
-	tool, ok := m.server.tools[p.Name]
+	tool, ok := s.tools[p.Name]
 	if !ok {
 		return mcpErr(id, -32602, "Unknown tool: "+p.Name)
 	}
 
 	// Cancellation is wired up by run() before this goroutine started, so ctx
 	// already carries the per-request cancel.
-	text, err := m.server.invokeJSON(ctx, tool, p.Arguments)
+	if tool.ServerStreaming {
+		return s.toolsCallStream(ctx, id, tool, p.Arguments)
+	}
+
+	text, err := s.invokeJSON(ctx, tool, p.Arguments)
 	if err != nil {
 		payload := errorPayload(err)
 		return mcpOK(id, map[string]any{
@@ -229,6 +237,58 @@ func (m *mcpSession) toolsCall(ctx context.Context, id, rawParams json.RawMessag
 	return mcpOK(id, map[string]any{
 		"content": []any{map[string]any{"type": "text", "text": text}},
 	})
+}
+
+// toolsCallStream runs a server-streaming tool and collects each chunk into
+// the content array — one text block per emitted message. Errors short-circuit
+// and return an isError result with whatever chunks were already produced.
+func (s *Server) toolsCallStream(ctx context.Context, id json.RawMessage, tool *Tool, argsJSON json.RawMessage) *jsonRPCResponse {
+	req, err := s.newRequest(tool)
+	if err != nil {
+		return mcpOK(id, errorContent(err))
+	}
+	if len(argsJSON) > 0 && string(argsJSON) != "null" {
+		if err := protojson.Unmarshal(argsJSON, req); err != nil {
+			return mcpOK(id, errorContent(invalidArgumentFromJSONError(err)))
+		}
+	}
+
+	marshalOpts := protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}
+	var content []any
+	stream := newCallbackStream(ctx, func(msg proto.Message) error {
+		raw, err := marshalOpts.Marshal(msg)
+		if err != nil {
+			return fmt.Errorf("marshal stream chunk: %w", err)
+		}
+		content = append(content, map[string]any{"type": "text", "text": string(raw)})
+		return nil
+	})
+	defer stream.close()
+
+	if err := s.invokeStream(tool, req, stream); err != nil {
+		// Include any chunks that were already emitted before the error.
+		payload := errorPayload(err)
+		content = append(content, map[string]any{"type": "text", "text": errorMessage(err)})
+		return mcpOK(id, map[string]any{
+			"content": content,
+			"isError": true,
+			"error":   payload,
+		})
+	}
+
+	if len(content) == 0 {
+		content = []any{}
+	}
+	return mcpOK(id, map[string]any{"content": content})
+}
+
+// errorContent builds the standard MCP error content envelope from an error.
+func errorContent(err error) map[string]any {
+	return map[string]any{
+		"content": []any{map[string]any{"type": "text", "text": errorMessage(err)}},
+		"isError": true,
+		"error":   errorPayload(err),
+	}
 }
 
 // invoke is the core proto-in/proto-out dispatch.
@@ -288,15 +348,24 @@ func (s *Server) invokeJSON(ctx context.Context, tool *Tool, argsJSON json.RawMe
 
 // chainedInvoke runs the interceptor chain then calls the handler.
 // Chain ordering: first registered = outermost (A(B(C(handler)))).
-func (s *Server) chainedInvoke(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error) {
+//
+// Panics inside any interceptor or the handler are recovered and converted
+// to a codes.Internal status error — a single goroutine bug must not be
+// allowed to crash the whole server.
+func (s *Server) chainedInvoke(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (resp any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = status.Errorf(codes.Internal, "panic in %s: %v", info.FullMethod, r)
+		}
+	}()
+
 	if len(s.interceptors) == 0 {
 		return handler(ctx, req)
 	}
 
 	// Build chain from inside out: wrap handler with interceptors in reverse order.
 	current := handler
-	for i := len(s.interceptors) - 1; i >= 0; i-- {
-		interceptor := s.interceptors[i]
+	for _, interceptor := range slices.Backward(s.interceptors) {
 		next := current
 		current = func(ctx context.Context, req any) (any, error) {
 			return interceptor(ctx, req, info, next)

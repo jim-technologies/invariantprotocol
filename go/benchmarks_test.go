@@ -30,6 +30,21 @@ func (s *benchServicer) GreetGroup(_ context.Context, req *greetpb.GreetGroupReq
 	return &greetpb.GreetGroupResponse{Messages: msgs, Count: int32(len(req.People))}, nil
 }
 
+func (s *benchServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream ServerStream) error {
+	n := int(req.GetCount())
+	if n <= 0 {
+		n = 1
+	}
+	resp := &greetpb.GreetResponse{}
+	for range n {
+		resp.Message = "Hi " + req.GetName()
+		if err := stream.Send(resp); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func benchServer(b *testing.B) *Server {
 	b.Helper()
 	srv, err := ServerFromDescriptor(descriptorPath())
@@ -227,4 +242,23 @@ func startServeGRPCB(b *testing.B) (string, func()) {
 
 	go func() { _ = gs.Serve(lis) }()
 	return lis.Addr().String(), gs.Stop
+}
+
+// BenchmarkInvokeStreamDirect measures the in-process streaming path —
+// fanout cost per emitted message including the interceptor chain. With
+// no interceptors and a 10-chunk stream we expect order-of-magnitude
+// parity with BenchmarkInvokeDirect divided by 10.
+func BenchmarkInvokeStreamDirect(b *testing.B) {
+	srv := benchServer(b)
+	ctx := b.Context()
+	req := &greetpb.StreamGreetRequest{Name: "World", Count: 10}
+
+	b.ResetTimer()
+	for b.Loop() {
+		err := srv.InvokeStream(ctx, "GreetService.StreamGreet", req,
+			func(proto.Message) error { return nil })
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }

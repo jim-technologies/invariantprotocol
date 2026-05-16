@@ -6,6 +6,8 @@ from invariant.server import (
     OutboundHTTPRequest,
     Server,
     ServerCallInfo,
+    StreamHandler,
+    StreamInterceptor,
     Tool,
 )
 from invariant.validation import validation
@@ -18,6 +20,8 @@ __all__ = [
     "OutboundHTTPRequest",
     "Server",
     "ServerCallInfo",
+    "StreamHandler",
+    "StreamInterceptor",
     "Tool",
     "validation",
 ]

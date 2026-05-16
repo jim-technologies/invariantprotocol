@@ -11,7 +11,6 @@ import json
 import sys
 from typing import TYPE_CHECKING
 
-import grpc
 from google.protobuf import descriptor_pool, json_format, message_factory
 
 from invariant.errors import (
@@ -108,71 +107,121 @@ class _StdioMCP:
             task.cancel()
 
     async def _dispatch(self, msg: dict) -> dict | None:
-        method = msg.get("method", "")
-        msg_id = msg.get("id")
-        params = msg.get("params", {})
-
-        if method == "initialize":
-            return _ok(
-                msg_id,
-                {
-                    "protocolVersion": _PROTOCOL_VERSION,
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": self.server.name, "version": self.server.version},
-                },
-            )
-
-        if method == "tools/list":
-            return _ok(msg_id, {"tools": self.server.tool_catalog()})
-
-        if method == "tools/call":
-            return await self._call_tool(msg_id, params)
-
-        if method == "ping":
-            return _ok(msg_id, {})
-
-        return _err(msg_id, -32601, f"Method not found: {method}")
+        return await mcp_dispatch(self.server, msg)
 
     async def _call_tool(self, msg_id, params: dict) -> dict:
-        tool_name = params.get("name", "")
-        arguments = params.get("arguments", {})
+        return await mcp_call_tool(self.server, msg_id, params)
 
-        tool = self.server.tools.get(tool_name)
-        if tool is None:
-            return _err(msg_id, -32602, f"Unknown tool: {tool_name}")
 
-        try:
-            request = self._build_request(tool.input_type, arguments)
-            try:
-                response = await self.server._invoke(tool, request, None)
-            except asyncio.CancelledError:
-                return _error_result(msg_id, InvariantError(grpc.StatusCode.CANCELLED, "request cancelled"))
+_dispatch_pool = descriptor_pool.Default()
 
-            if response is not None:
-                result_dict = json_format.MessageToDict(response, preserving_proto_field_name=True)
-                text = json.dumps(result_dict, indent=2)
-            else:
-                text = "{}"
 
-            return _ok(msg_id, {"content": [{"type": "text", "text": text}]})
-        except Exception as e:
-            return _error_result(msg_id, as_invariant_error(e))
+def _build_request(type_name: str, arguments: dict):
+    """Construct a typed proto request from JSON args, raising InvariantError on schema mismatch."""
+    try:
+        desc = _dispatch_pool.FindMessageTypeByName(type_name)
+    except KeyError as e:
+        raise ValueError(
+            f"Message type '{type_name}' not found in descriptor pool. "
+            f"Make sure the corresponding _pb2 module is imported."
+        ) from e
+    msg_class = message_factory.GetMessageClass(desc)
+    msg = msg_class()
+    try:
+        json_format.ParseDict(arguments, msg)
+    except Exception as e:
+        raise invalid_argument_from_json_error(e) from None
+    return msg
 
-    def _build_request(self, type_name: str, arguments: dict):
-        try:
-            desc = self._pool.FindMessageTypeByName(type_name)
-        except KeyError as e:
-            raise ValueError(
-                f"Message type '{type_name}' not found in descriptor pool. "
-                f"Make sure the corresponding _pb2 module is imported."
-            ) from e
-        msg_class = message_factory.GetMessageClass(desc)
-        msg = msg_class()
-        try:
-            json_format.ParseDict(arguments, msg)
-        except Exception as e:
-            raise invalid_argument_from_json_error(e) from None
-        return msg
+
+async def mcp_dispatch(server: Server, msg: dict) -> dict | None:
+    """Dispatch a single MCP JSON-RPC request.
+
+    Shared by stdio and the HTTP /mcp transport. Returns None for
+    notifications (no id field); otherwise returns the JSON-RPC response dict.
+    """
+    method = msg.get("method", "")
+    msg_id = msg.get("id")
+    params = msg.get("params", {})
+
+    if msg_id is None:
+        # Notification — caller decides what to do (stdio: nothing; HTTP: 204).
+        return None
+
+    if method == "initialize":
+        return _ok(
+            msg_id,
+            {
+                "protocolVersion": _PROTOCOL_VERSION,
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": server.name, "version": server.version},
+            },
+        )
+
+    if method == "tools/list":
+        return _ok(msg_id, {"tools": server.tool_catalog()})
+
+    if method == "tools/call":
+        return await mcp_call_tool(server, msg_id, params)
+
+    if method == "ping":
+        return _ok(msg_id, {})
+
+    return _err(msg_id, -32601, f"Method not found: {method}")
+
+
+async def mcp_call_tool(server: Server, msg_id, params: dict) -> dict:
+    """Execute a tools/call — unary or server-streaming."""
+    tool_name = params.get("name", "")
+    arguments = params.get("arguments", {})
+
+    tool = server.tools.get(tool_name)
+    if tool is None:
+        return _err(msg_id, -32602, f"Unknown tool: {tool_name}")
+
+    if tool.server_streaming:
+        return await _call_stream_tool(server, msg_id, tool, arguments)
+
+    try:
+        request = _build_request(tool.input_type, arguments)
+        # Don't swallow CancelledError — let it propagate. Stdio's task scheduler
+        # cleans up cancelled requests without a response (per MCP spec); HTTP's
+        # asyncio.timeout converts it to deadline_exceeded.
+        response = await server._invoke(tool, request, None)
+
+        if response is not None:
+            result_dict = json_format.MessageToDict(response, preserving_proto_field_name=True)
+            text = json.dumps(result_dict, indent=2)
+        else:
+            text = "{}"
+
+        return _ok(msg_id, {"content": [{"type": "text", "text": text}]})
+    except Exception as e:
+        return _error_result(msg_id, as_invariant_error(e))
+
+
+async def _call_stream_tool(server: Server, msg_id, tool, arguments: dict) -> dict:
+    """Run a server-streaming tool, collecting each chunk as a text block in
+    the response content. Errors mid-stream become an isError result preserving
+    whatever chunks were emitted first. CancelledError propagates so callers
+    (stdio task scheduler, HTTP asyncio.timeout) can handle it correctly.
+    """
+    try:
+        request = _build_request(tool.input_type, arguments)
+    except Exception as e:
+        return _error_result(msg_id, as_invariant_error(e))
+
+    content: list[dict] = []
+    try:
+        async for response in server._invoke_stream(tool, request, None):
+            chunk = json_format.MessageToDict(response, preserving_proto_field_name=True)
+            content.append({"type": "text", "text": json.dumps(chunk, indent=2)})
+    except Exception as e:
+        err = as_invariant_error(e)
+        content.append({"type": "text", "text": err.message})
+        return _ok(msg_id, {"content": content, "isError": True, "error": err.to_payload()})
+
+    return _ok(msg_id, {"content": content})
 
 
 async def _stdin_reader() -> asyncio.StreamReader:

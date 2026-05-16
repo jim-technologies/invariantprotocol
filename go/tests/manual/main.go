@@ -82,7 +82,9 @@ func runMCP() error {
 		}
 	}
 
-	return server.Serve(invariant.MCP())
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return server.Serve(ctx, invariant.MCP())
 }
 
 func runGRPC() error {
@@ -212,7 +214,7 @@ func runCLI() error {
 		}
 	}
 
-	return server.Serve(invariant.CLI())
+	return server.Serve(context.Background(), invariant.CLI())
 }
 
 func main() {

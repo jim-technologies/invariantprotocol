@@ -20,8 +20,15 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// protoContentType is the Connect-standard binary proto content type.
-const protoContentType = "application/proto"
+// Connect content types.
+const (
+	protoContentType        = "application/proto"
+	connectStreamJSONType   = "application/connect+json"
+	connectStreamProtoType  = "application/connect+proto"
+	connectEndStreamFlag    = byte(0x02)
+	connectStreamMaxRequest = 16 << 20 // 16 MiB safety cap on streaming request envelopes
+	httpMaxUnaryRequest     = 16 << 20 // 16 MiB safety cap on unary request bodies
+)
 
 // httpToolEntry caches per-tool state used by the HTTP handler — built once at
 // HTTPHandler() time so per-request work stays minimal.
@@ -93,8 +100,15 @@ func (s *Server) HTTPHandler() (http.Handler, error) {
 		switch {
 		case r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/__invariant/tools"):
 			s.handleToolCatalog(w)
+		case r.Method == http.MethodGet && (r.URL.Path == "/healthz" || r.URL.Path == "/readyz"):
+			s.handleHealth(w)
 		case r.Method == http.MethodGet && r.URL.Path == "/__invariant/descriptor.binpb":
 			s.handleDescriptor(w)
+		case r.Method == http.MethodPost && r.URL.Path == "/mcp":
+			// MCP Streamable HTTP transport — accepts a single JSON-RPC request
+			// per POST and returns one JSON-RPC response. Lets remote agent
+			// platforms speak MCP without a stdio process.
+			s.handleMCPHTTP(w, r)
 		case r.Method == http.MethodPost:
 			entry, ok := entries[r.URL.Path]
 			if !ok {
@@ -149,15 +163,24 @@ func (s *Server) serveHTTP(ctx context.Context, port int) error {
 }
 
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, entry *httpToolEntry) {
-	body, err := io.ReadAll(r.Body)
+	ctx, cancel := applyConnectTimeout(r)
+	defer cancel()
+	r = r.WithContext(ctx)
+
+	// Streaming tools speak Connect's streaming protocol (envelope frames).
+	// They never accept plain application/json on the wire — Connect splits
+	// stream and unary content types intentionally so clients don't accidentally
+	// expect a single response.
+	if entry.tool.ServerStreaming {
+		s.handleHTTPStream(w, r, entry)
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httpMaxUnaryRequest))
 	if err != nil {
 		httpError(w, invalidArgumentError("read body: "+err.Error()))
 		return
 	}
-
-	ctx, cancel := applyConnectTimeout(r)
-	defer cancel()
-	r = r.WithContext(ctx)
 
 	if isProtoContentType(r.Header.Get("Content-Type")) {
 		s.handleHTTPProto(w, r, entry, body)
@@ -177,6 +200,187 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, entry *httpT
 
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(resp)) //nolint:gosec // server-generated JSON
+}
+
+// handleHTTPStream serves a server-streaming RPC over Connect's streaming
+// wire format. Request body is a single Connect envelope wrapping the
+// request (JSON or binary proto). Response body is a series of message
+// envelopes followed by one end-of-stream envelope.
+//
+// Envelope: [flags:1byte] [size:uint32 BE] [data]
+// Flags bit 0x02 marks the end-of-stream envelope; its payload is ALWAYS
+// JSON regardless of the message content type — per the Connect spec.
+func (s *Server) handleHTTPStream(w http.ResponseWriter, r *http.Request, entry *httpToolEntry) {
+	ct := r.Header.Get("Content-Type")
+	binary := isConnectStreamProto(ct)
+	if !binary && !isConnectStreamJSON(ct) {
+		httpError(w, invalidArgumentError("streaming tools require Content-Type: "+connectStreamJSONType+" or "+connectStreamProtoType))
+		return
+	}
+
+	reqBytes, err := readConnectEnvelope(r.Body, connectStreamMaxRequest)
+	if err != nil {
+		httpError(w, invalidArgumentError("read request envelope: "+err.Error()))
+		return
+	}
+
+	req, err := s.newRequest(entry.tool)
+	if err != nil {
+		httpError(w, err)
+		return
+	}
+	if len(reqBytes) > 0 {
+		if binary {
+			if err := proto.Unmarshal(reqBytes, req); err != nil {
+				httpError(w, invalidArgumentError("decode binary proto: "+err.Error()))
+				return
+			}
+		} else if err := protojson.Unmarshal(reqBytes, req); err != nil {
+			httpError(w, invalidArgumentFromJSONError(err))
+			return
+		}
+	}
+
+	respCT := connectStreamJSONType
+	if binary {
+		respCT = connectStreamProtoType
+	}
+	w.Header().Set("Content-Type", respCT)
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+
+	jsonOpts := protojson.MarshalOptions{UseProtoNames: true}
+	stream := newCallbackStream(r.Context(), func(msg proto.Message) error {
+		var payload []byte
+		var marshalErr error
+		if binary {
+			payload, marshalErr = proto.Marshal(msg)
+		} else {
+			payload, marshalErr = jsonOpts.Marshal(msg)
+		}
+		if marshalErr != nil {
+			return fmt.Errorf("marshal stream chunk: %w", marshalErr)
+		}
+		if err := writeConnectEnvelope(w, 0, payload); err != nil {
+			return err
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	})
+	defer stream.close()
+
+	streamErr := s.invokeStream(entry.tool, req, stream)
+	// End-of-stream envelope: empty JSON on success, error envelope on failure.
+	endPayload := []byte("{}")
+	if streamErr != nil {
+		buf, encErr := json.Marshal(map[string]any{"error": errorPayload(streamErr)})
+		if encErr == nil {
+			endPayload = buf
+		}
+	}
+	_ = writeConnectEnvelope(w, connectEndStreamFlag, endPayload)
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+// handleMCPHTTP serves a single JSON-RPC request over HTTP as the MCP
+// Streamable HTTP transport. Request body is one JSON-RPC envelope; response
+// body is one JSON-RPC envelope (or 204 for notifications).
+//
+// We don't accept multiple JSON-RPC messages per POST or open an SSE stream
+// here — keep the transport minimal and shaped like the rest of the framework.
+func (s *Server) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := applyConnectTimeout(r)
+	defer cancel()
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httpMaxUnaryRequest))
+	if err != nil {
+		httpError(w, invalidArgumentError("read body: "+err.Error()))
+		return
+	}
+
+	var req jsonRPCRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mcpErr(nil, -32700, "Parse error: "+err.Error()))
+		return
+	}
+
+	resp := s.mcpDispatch(ctx, &req)
+	if resp == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// isConnectStreamJSON reports whether ct is application/connect+json (with
+// optional parameters).
+func isConnectStreamJSON(ct string) bool {
+	return matchContentType(ct, connectStreamJSONType)
+}
+
+// isConnectStreamProto reports whether ct is application/connect+proto (with
+// optional parameters).
+func isConnectStreamProto(ct string) bool {
+	return matchContentType(ct, connectStreamProtoType)
+}
+
+func matchContentType(ct, want string) bool {
+	if ct == "" {
+		return false
+	}
+	if i := strings.Index(ct, ";"); i >= 0 {
+		ct = ct[:i]
+	}
+	return strings.TrimSpace(ct) == want
+}
+
+// readConnectEnvelope reads a single Connect envelope frame from r. The
+// envelope header (flags+length) must be present; data is read up to size.
+// maxSize is enforced to avoid unbounded allocations from a hostile client.
+func readConnectEnvelope(r io.Reader, maxSize int) ([]byte, error) {
+	var hdr [5]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return nil, err
+	}
+	size := uint32(hdr[1])<<24 | uint32(hdr[2])<<16 | uint32(hdr[3])<<8 | uint32(hdr[4])
+	if maxSize > 0 && size > uint32(maxSize) {
+		return nil, fmt.Errorf("envelope size %d exceeds max %d", size, maxSize)
+	}
+	if size == 0 {
+		return nil, nil
+	}
+	buf := make([]byte, size)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// writeConnectEnvelope writes one Connect envelope frame to w.
+func writeConnectEnvelope(w io.Writer, flags byte, payload []byte) error {
+	var hdr [5]byte
+	hdr[0] = flags
+	size := uint32(len(payload))
+	hdr[1] = byte(size >> 24)
+	hdr[2] = byte(size >> 16)
+	hdr[3] = byte(size >> 8)
+	hdr[4] = byte(size)
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	if len(payload) > 0 {
+		if _, err := w.Write(payload); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // applyConnectTimeout honors the Connect-Timeout-Ms request header. Returns
@@ -270,6 +474,14 @@ func (s *Server) writeProtoResponse(w http.ResponseWriter, entry *httpToolEntry,
 func (s *Server) handleToolCatalog(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"tools": s.ToolCatalog()})
+}
+
+// handleHealth answers k8s-style liveness/readiness probes. Always 200 once
+// the server is serving — registration is synchronous and complete before
+// HTTPHandler returns, so by the time a request lands we are ready.
+func (s *Server) handleHealth(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
 func (s *Server) handleDescriptor(w http.ResponseWriter) {

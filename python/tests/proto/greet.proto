@@ -37,6 +37,9 @@ service GreetService {
       }
     };
   }
+
+  // Stream greetings — one response message per chunk.
+  rpc StreamGreet(StreamGreetRequest) returns (stream GreetResponse);
 }
 
 // Request for the Greet RPC.
@@ -78,5 +81,13 @@ message GreetGroupResponse {
   // Individual greetings.
   repeated string messages = 1;
   // Number of people greeted.
+  int32 count = 2;
+}
+
+// Request for the StreamGreet RPC.
+message StreamGreetRequest {
+  // Name of the person to greet.
+  string name = 1;
+  // Number of greetings to emit (default 1).
   int32 count = 2;
 }

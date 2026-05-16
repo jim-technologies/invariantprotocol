@@ -23,6 +23,10 @@ _BASE_HTTP_RETRY_DELAY_SECONDS = 0.1
 _MAX_HTTP_RETRY_DELAY_SECONDS = 2.0
 _RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 _DEFAULT_USER_AGENT = "invariant-protocol/0.1"
+# Cap response bodies from upstream services we proxy through. A hostile or
+# buggy upstream could otherwise stream gigabytes back and OOM us. Same
+# 16 MiB shape as the inbound caps.
+_HTTP_CLIENT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 
 @dataclass
@@ -160,8 +164,14 @@ class HTTPDynamicHandler:
                     continue
                 raise _http_error(response.status_code, response.content) from None
 
-            out = self._resp_class()
             raw = response.content
+            if len(raw) > _HTTP_CLIENT_MAX_RESPONSE_BYTES:
+                raise InvariantError(
+                    grpc.StatusCode.RESOURCE_EXHAUSTED,
+                    f"upstream HTTP response exceeds {_HTTP_CLIENT_MAX_RESPONSE_BYTES} byte limit",
+                )
+
+            out = self._resp_class()
             if raw.strip():
                 try:
                     self._parse_http_response(raw, out)

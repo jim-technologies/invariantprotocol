@@ -144,9 +144,7 @@ async def test_no_interceptors(server):
 def test_interceptor_rejects_sync():
     from invariant import Server
 
-    srv = Server.from_descriptor(
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "proto", "descriptor.binpb")
-    )
+    srv = Server.from_descriptor(os.path.join(os.path.dirname(os.path.abspath(__file__)), "proto", "descriptor.binpb"))
 
     def sync_interceptor(request, context, info, handler):
         return handler(request, context)

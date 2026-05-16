@@ -12,10 +12,13 @@
 package invariant
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -25,14 +28,29 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// cli runs one CLI invocation and returns its complete output as a string.
+// Internally calls cliWrite into a buffer — convenient for tests; serveCLI uses
+// cliWrite directly with os.Stdout so streaming output reaches the user in
+// real time.
 func (s *Server) cli(ctx context.Context, args []string) (string, error) {
+	var buf bytes.Buffer
+	if err := s.cliWrite(ctx, args, &buf); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(buf.String(), "\n"), nil
+}
+
+// cliWrite is the streaming-aware CLI executor. Each chunk of a server-
+// streaming response is flushed to w as it arrives.
+func (s *Server) cliWrite(ctx context.Context, args []string, w io.Writer) error {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		return s.cliHelp(), nil
+		_, err := io.WriteString(w, s.cliHelp())
+		return err
 	}
 
 	serviceName, methodName, requestValue, err := splitCLIArgs(args)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	toolName := s.resolveServiceMethod(serviceName, methodName)
@@ -41,38 +59,93 @@ func (s *Server) cli(ctx context.Context, args []string) (string, error) {
 		for k := range s.tools {
 			available = append(available, k)
 		}
-		return "", fmt.Errorf("unknown service/method: %s %s. Available: %v", serviceName, methodName, available)
+		return fmt.Errorf("unknown service/method: %s %s. Available: %v", serviceName, methodName, available)
 	}
 
 	tool := s.tools[toolName]
 
-	// Build proto request directly from input.
 	req, err := s.newRequest(tool)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	if requestValue != "" {
 		if err := loadIntoProto(req, requestValue); err != nil {
-			return "", fmt.Errorf("load request: %w", err)
+			return fmt.Errorf("load request: %w", err)
 		}
 	}
 
-	// Core dispatch (proto in / proto out).
-	resp, err := s.invoke(ctx, tool, req)
-	if err != nil {
-		return "", err
+	if tool.ServerStreaming {
+		return s.cliStream(ctx, tool, req, w)
 	}
 
-	// Boundary: proto → JSON (terminal output).
+	resp, err := s.invoke(ctx, tool, req)
+	if err != nil {
+		return err
+	}
+
 	if resp == nil {
-		return "{}", nil
+		_, err := io.WriteString(w, "{}")
+		return err
 	}
 	out, err := (protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}).Marshal(resp)
 	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
+		return fmt.Errorf("marshal response: %w", err)
 	}
-	return string(out), nil
+	_, err = w.Write(out)
+	return err
+}
+
+// cliStream runs a server-streaming tool, writing each chunk as a JSON line
+// to w as it arrives. The writer is flushed after every chunk so an
+// unbuffered consumer (`./app StreamGreet | jq`) sees output in real time.
+func (s *Server) cliStream(ctx context.Context, tool *Tool, req proto.Message, w io.Writer) error {
+	flusher := newAutoFlushWriter(w)
+	marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
+	stream := newCallbackStream(ctx, func(msg proto.Message) error {
+		raw, err := marshalOpts.Marshal(msg)
+		if err != nil {
+			return fmt.Errorf("marshal stream chunk: %w", err)
+		}
+		if _, err := flusher.Write(raw); err != nil {
+			return err
+		}
+		if _, err := flusher.Write([]byte{'\n'}); err != nil {
+			return err
+		}
+		return flusher.Flush()
+	})
+	defer stream.close()
+	return s.invokeStream(tool, req, stream)
+}
+
+// autoFlushWriter writes through to an underlying writer, flushing to either
+// http.Flusher or *bufio.Writer if the underlying writer supports it.
+type autoFlushWriter struct {
+	w   io.Writer
+	buf *bufio.Writer
+}
+
+func newAutoFlushWriter(w io.Writer) *autoFlushWriter {
+	if b, ok := w.(*bufio.Writer); ok {
+		return &autoFlushWriter{w: w, buf: b}
+	}
+	return &autoFlushWriter{w: w}
+}
+
+func (a *autoFlushWriter) Write(p []byte) (int, error) { return a.w.Write(p) }
+
+func (a *autoFlushWriter) Flush() error {
+	if a.buf != nil {
+		return a.buf.Flush()
+	}
+	if f, ok := a.w.(interface{ Flush() error }); ok {
+		return f.Flush()
+	}
+	if f, ok := a.w.(interface{ Sync() error }); ok {
+		return f.Sync()
+	}
+	return nil
 }
 
 // newRequest creates an empty proto.Message of the correct type for the tool's input.
@@ -124,7 +197,9 @@ func loadFileIntoProto(msg proto.Message, path string) error {
 	}
 }
 
-// serveCLI reads args from os.Args and prints the result to stdout.
+// serveCLI reads args from os.Args and writes the result(s) to stdout.
+// For streaming tools, chunks are flushed as they arrive — `./app Stream | jq`
+// works as a real pipeline rather than blocking until the stream ends.
 func (s *Server) serveCLI(ctx context.Context) error {
 	args := os.Args[1:]
 	for i, arg := range os.Args {
@@ -134,11 +209,11 @@ func (s *Server) serveCLI(ctx context.Context) error {
 		}
 	}
 
-	result, err := s.cli(ctx, args)
-	if err != nil {
+	if err := s.cliWrite(ctx, args, os.Stdout); err != nil {
 		return err
 	}
-	fmt.Println(result)
+	// Trailing newline so the next prompt lands on a fresh line.
+	_, _ = os.Stdout.WriteString("\n")
 	return nil
 }
 

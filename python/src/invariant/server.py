@@ -11,7 +11,7 @@ import fnmatch
 import inspect
 import os
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,6 +30,16 @@ Handler = Callable[[Any, Any], Awaitable[Any]]
 #: Interceptor intercepts unary RPCs across all projections (MCP, HTTP, gRPC, CLI).
 #: Async-only — must be awaitable.
 Interceptor = Callable[[Any, Any, "ServerCallInfo", Handler], Awaitable[Any]]
+
+#: StreamHandler is the async-generator counterpart to Handler — returns an
+#: async iterator of response protos for a server-streaming RPC.
+StreamHandler = Callable[[Any, Any], AsyncIterator[Any]]
+
+#: StreamInterceptor wraps server-streaming RPCs. Mirrors Interceptor but
+#: returns an async iterator instead of a single value. First registered =
+#: outermost. Must be declared as `async def` with `yield` so calling it
+#: produces an async iterator.
+StreamInterceptor = Callable[[Any, Any, "ServerCallInfo", StreamHandler], AsyncIterator[Any]]
 
 
 @dataclass
@@ -64,6 +74,7 @@ class Tool:
     output_type: str
     service_full_name: str
     method_name: str
+    server_streaming: bool = False
 
 
 def _is_async_callable(fn: Any) -> bool:
@@ -97,6 +108,7 @@ class Server:
         self._fds = fds
         self._channels: list[grpc.aio.Channel] = []
         self._interceptors: list[Interceptor] = []
+        self._stream_interceptors: list[StreamInterceptor] = []
         self._http_header_provider: HTTPHeaderProvider | None = None
         self._includes: list[str] = []
         self._excludes: list[str] = []
@@ -139,13 +151,30 @@ class Server:
     # -- Public API: middleware --
 
     def use(self, interceptor: Interceptor) -> None:
-        """Register an async interceptor. First registered = outermost."""
+        """Register an async unary interceptor. First registered = outermost.
+        Does not apply to server-streaming RPCs — register a stream interceptor
+        separately via ``use_stream``.
+        """
         if not _is_async_callable(interceptor):
             raise TypeError(
                 f"Interceptor {interceptor!r} must be async (declared with `async def`). "
                 "invariant-protocol is async-native."
             )
         self._interceptors.append(interceptor)
+
+    def use_stream(self, interceptor: StreamInterceptor) -> None:
+        """Register a server-streaming interceptor. Must be an async generator
+        function (``async def`` with ``yield``). First registered = outermost.
+
+        Mirrors ``Use`` but for streams — separate because the unary signature
+        returns a single value while the stream signature yields multiple.
+        """
+        if not inspect.isasyncgenfunction(interceptor):
+            raise TypeError(
+                f"Stream interceptor {interceptor!r} must be an async generator "
+                "(declared with `async def` and `yield`)."
+            )
+        self._stream_interceptors.append(interceptor)
 
     def use_http_header_provider(self, provider: HTTPHeaderProvider | None) -> None:
         """Set optional dynamic headers for outbound ConnectHTTP requests."""
@@ -154,13 +183,15 @@ class Server:
     # -- Public API: invocation core --
 
     async def invoke(self, tool_name: str, request: Any, context: Any = None) -> Any:
-        """Dispatch a request to a registered tool by name. Async.
+        """Dispatch a unary request to a registered tool by name. Async.
 
         Returns the proto response. Useful for in-process callers (workflow
         runtimes, tests) that don't need to spin up a projection.
 
-        Raises ``InvariantError(NOT_FOUND)`` if the tool is not registered, so
-        the error projects to the right status code through every projection.
+        Raises ``InvariantError(NOT_FOUND)`` if the tool is not registered or
+        ``InvariantError(FAILED_PRECONDITION)`` if the tool is server-streaming
+        (use ``invoke_stream`` for those). Both errors project to the right
+        status code through every projection.
         """
         from invariant.errors import InvariantError
 
@@ -168,7 +199,32 @@ class Server:
         if tool is None:
             available = sorted(self.tools.keys())
             raise InvariantError(grpc.StatusCode.NOT_FOUND, f"Unknown tool '{tool_name}'. Available: {available}")
+        if tool.server_streaming:
+            raise InvariantError(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                f"Tool '{tool_name}' is server-streaming — use invoke_stream",
+            )
         return await self._invoke(tool, request, context)
+
+    async def invoke_stream(self, tool_name: str, request: Any, context: Any = None) -> AsyncIterator[Any]:
+        """Dispatch a server-streaming tool by name. Yields each response message.
+
+        Mirrors ``invoke`` for the streaming case. Same in-process entry point
+        used by workflow runtimes and tests — no projection required.
+        """
+        from invariant.errors import InvariantError
+
+        tool = self.tools.get(tool_name)
+        if tool is None:
+            available = sorted(self.tools.keys())
+            raise InvariantError(grpc.StatusCode.NOT_FOUND, f"Unknown tool '{tool_name}'. Available: {available}")
+        if not tool.server_streaming:
+            raise InvariantError(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                f"Tool '{tool_name}' is unary — use invoke",
+            )
+        async for msg in self._invoke_stream(tool, request, context):
+            yield msg
 
     async def _invoke(self, tool: Tool, request: Any, context: Any) -> Any:
         """Core proto-in/proto-out dispatch. Runs the interceptor chain then
@@ -203,6 +259,37 @@ class Server:
             current = wrap(interceptor, current)
 
         return await current(request, context)
+
+    async def _invoke_stream(
+        self,
+        tool: Tool,
+        request: Any,
+        context: Any,
+    ) -> AsyncIterator[Any]:
+        """Server-streaming dispatch — yields each response message in order.
+
+        Wraps the tool's async-generator handler in the registered stream
+        interceptors and yields each emitted proto message. Errors raised
+        inside the handler or any interceptor propagate to the caller; it
+        is the caller's job to translate them to its wire format.
+        """
+        info = ServerCallInfo(full_method=f"/{tool.service_full_name}/{tool.method_name}")
+        handler = tool.handler
+
+        if not self._stream_interceptors:
+            async for msg in handler(request, context):
+                yield msg
+            return
+
+        # Build the chain inside-out: each interceptor wraps the next handler.
+        # The interceptor is itself an async-gen function, so calling it returns
+        # an async iterator we yield from.
+        current = handler
+        for interceptor in reversed(self._stream_interceptors):
+            current = _wrap_stream_interceptor(interceptor, current, info)
+
+        async for msg in current(request, context):
+            yield msg
 
     # -- Public API: construction --
 
@@ -239,7 +326,8 @@ class Server:
 
         for svc_full_name, svc_info in services.items():
             for method_name, method_info in svc_info.methods.items():
-                if method_info.client_streaming or method_info.server_streaming:
+                # Client-streaming and bidi are out of scope — opinionated.
+                if method_info.client_streaming:
                     continue
 
                 if not self._should_include(svc_full_name, method_name):
@@ -249,7 +337,13 @@ class Server:
                 if handler is None:
                     continue
 
-                if not _is_async_callable(handler):
+                if method_info.server_streaming:
+                    if not inspect.isasyncgenfunction(handler):
+                        raise TypeError(
+                            f"{type(servicer).__name__}.{method_name} is a server-streaming RPC "
+                            "and must be an async generator (`async def` with `yield`)."
+                        )
+                elif not _is_async_callable(handler):
                     raise TypeError(
                         f"{type(servicer).__name__}.{method_name} must be `async def`. "
                         "invariant-protocol is async-native."
@@ -266,6 +360,7 @@ class Server:
                         output_type=method_info.output_type,
                         service_full_name=svc_full_name,
                         method_name=method_name,
+                        server_streaming=method_info.server_streaming,
                     )
                 )
 
@@ -282,15 +377,16 @@ class Server:
         self.tools[tool.name] = tool
 
     def _match_servicer(self, servicer: Any) -> dict:
-        """Auto-match a servicer to services by method names."""
+        """Auto-match a servicer to services by method names.
+
+        Considers unary and server-streaming methods — both are supported tool
+        shapes. Client-streaming and bidi RPCs are filtered out at registration
+        time anyway, so we don't gate matching on them either.
+        """
         servicer_methods = {m for m in dir(servicer) if not m.startswith("_") and callable(getattr(servicer, m))}
         matched = {}
         for svc_full_name, svc_info in self.parsed.services.items():
-            rpc_names = {
-                name
-                for name, info in svc_info.methods.items()
-                if not info.client_streaming and not info.server_streaming
-            }
+            rpc_names = {name for name, info in svc_info.methods.items() if not info.client_streaming}
             if rpc_names and rpc_names & servicer_methods:
                 matched[svc_full_name] = svc_info
         if not matched:
@@ -426,15 +522,22 @@ class Server:
         """Return the canonical tool catalog (same shape as MCP `tools/list`).
 
         Used by both the HTTP `GET /` endpoint and MCP's `tools/list`.
+
+        Streaming tools carry ``_meta.streaming: True`` so clients can render
+        and consume them differently from unary tools. The MCP spec reserves
+        ``_meta`` for exactly this kind of server-specific annotation.
         """
-        return [
-            {
+        out: list[dict] = []
+        for t in sorted(self.tools.values(), key=lambda t: t.name):
+            entry: dict = {
                 "name": t.name,
                 "description": t.description,
                 "inputSchema": t.input_schema,
             }
-            for t in sorted(self.tools.values(), key=lambda t: t.name)
-        ]
+            if t.server_streaming:
+                entry["_meta"] = {"streaming": True}
+            out.append(entry)
+        return out
 
     # -- Public API: ASGI mounting --
 
@@ -507,15 +610,14 @@ class Server:
         await serve_mcp(self)
 
     async def _serve_cli(self) -> None:
-        from invariant.projections.cli import run_cli
+        from invariant.projections.cli import stream_cli
 
-        result = await run_cli(self, sys.argv[1:])
-        if isinstance(result, str):
-            print(result)
-        else:
-            from google.protobuf import json_format as _jf
+        def write(piece: str) -> None:
+            # flush=True so streamed chunks reach the consumer immediately —
+            # without it Python buffers stdout when piped, defeating streaming.
+            print(piece, flush=True)
 
-            print(_jf.MessageToJson(result, preserving_proto_field_name=True, indent=2))
+        await stream_cli(self, sys.argv[1:], write)
 
     async def _serve_http(self, port: int) -> None:
         import uvicorn
@@ -625,3 +727,17 @@ class Server:
 def _glob_match(pattern: str, s: str) -> bool:
     """Match pattern against string where '*' matches any chars including dots."""
     return fnmatch.fnmatch(s, pattern)
+
+
+def _wrap_stream_interceptor(
+    interceptor: StreamInterceptor,
+    next_handler: StreamHandler,
+    info: ServerCallInfo,
+) -> StreamHandler:
+    """Wrap next_handler with interceptor — both are async-gen functions."""
+
+    async def wrapped(request, context):
+        async for msg in interceptor(request, context, info, next_handler):
+            yield msg
+
+    return wrapped

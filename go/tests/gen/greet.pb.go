@@ -360,6 +360,61 @@ func (x *GreetGroupResponse) GetCount() int32 {
 	return 0
 }
 
+// Request for the StreamGreet RPC.
+type StreamGreetRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Name of the person to greet.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Number of greetings to emit (default 1).
+	Count         int32 `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StreamGreetRequest) Reset() {
+	*x = StreamGreetRequest{}
+	mi := &file_greet_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StreamGreetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamGreetRequest) ProtoMessage() {}
+
+func (x *StreamGreetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_greet_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamGreetRequest.ProtoReflect.Descriptor instead.
+func (*StreamGreetRequest) Descriptor() ([]byte, []int) {
+	return file_greet_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *StreamGreetRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *StreamGreetRequest) GetCount() int32 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
 var File_greet_proto protoreflect.FileDescriptor
 
 const file_greet_proto_rawDesc = "" +
@@ -387,16 +442,20 @@ const file_greet_proto_rawDesc = "" +
 	"\x06people\x18\x01 \x03(\v2\x10.greet.v1.PersonR\x06people\"F\n" +
 	"\x12GreetGroupResponse\x12\x1a\n" +
 	"\bmessages\x18\x01 \x03(\tR\bmessages\x12\x14\n" +
+	"\x05count\x18\x02 \x01(\x05R\x05count\">\n" +
+	"\x12StreamGreetRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05count\x18\x02 \x01(\x05R\x05count*:\n" +
 	"\x04Mood\x12\x14\n" +
 	"\x10MOOD_UNSPECIFIED\x10\x00\x12\x0e\n" +
 	"\n" +
 	"MOOD_HAPPY\x10\x01\x12\f\n" +
-	"\bMOOD_SAD\x10\x022\xdd\x01\n" +
+	"\bMOOD_SAD\x10\x022\xa5\x02\n" +
 	"\fGreetService\x12R\n" +
 	"\x05Greet\x12\x16.greet.v1.GreetRequest\x1a\x17.greet.v1.GreetResponse\"\x18\x82\xd3\xe4\x93\x02\x12\x12\x10/v1/greet/{name}\x12y\n" +
 	"\n" +
-	"GreetGroup\x12\x1b.greet.v1.GreetGroupRequest\x1a\x1c.greet.v1.GreetGroupResponse\"0\x82\xd3\xe4\x93\x02*:\x01*Z\x14:\x01*\"\x0f/v1/group:greet\"\x0f/v1/greet:groupBDZBgithub.com/jim-technologies/invariantprotocol/go/tests/gen;greetpbb\x06proto3"
+	"GreetGroup\x12\x1b.greet.v1.GreetGroupRequest\x1a\x1c.greet.v1.GreetGroupResponse\"0\x82\xd3\xe4\x93\x02*:\x01*Z\x14:\x01*\"\x0f/v1/group:greet\"\x0f/v1/greet:group\x12F\n" +
+	"\vStreamGreet\x12\x1c.greet.v1.StreamGreetRequest\x1a\x17.greet.v1.GreetResponse0\x01BDZBgithub.com/jim-technologies/invariantprotocol/go/tests/gen;greetpbb\x06proto3"
 
 var (
 	file_greet_proto_rawDescOnce sync.Once
@@ -411,7 +470,7 @@ func file_greet_proto_rawDescGZIP() []byte {
 }
 
 var file_greet_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_greet_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_greet_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_greet_proto_goTypes = []any{
 	(Mood)(0),                  // 0: greet.v1.Mood
 	(*GreetRequest)(nil),       // 1: greet.v1.GreetRequest
@@ -419,22 +478,25 @@ var file_greet_proto_goTypes = []any{
 	(*Person)(nil),             // 3: greet.v1.Person
 	(*GreetGroupRequest)(nil),  // 4: greet.v1.GreetGroupRequest
 	(*GreetGroupResponse)(nil), // 5: greet.v1.GreetGroupResponse
-	nil,                        // 6: greet.v1.GreetRequest.TagsEntry
-	nil,                        // 7: greet.v1.GreetResponse.TagsEntry
+	(*StreamGreetRequest)(nil), // 6: greet.v1.StreamGreetRequest
+	nil,                        // 7: greet.v1.GreetRequest.TagsEntry
+	nil,                        // 8: greet.v1.GreetResponse.TagsEntry
 }
 var file_greet_proto_depIdxs = []int32{
 	0, // 0: greet.v1.GreetRequest.mood:type_name -> greet.v1.Mood
-	6, // 1: greet.v1.GreetRequest.tags:type_name -> greet.v1.GreetRequest.TagsEntry
+	7, // 1: greet.v1.GreetRequest.tags:type_name -> greet.v1.GreetRequest.TagsEntry
 	0, // 2: greet.v1.GreetResponse.mood:type_name -> greet.v1.Mood
-	7, // 3: greet.v1.GreetResponse.tags:type_name -> greet.v1.GreetResponse.TagsEntry
+	8, // 3: greet.v1.GreetResponse.tags:type_name -> greet.v1.GreetResponse.TagsEntry
 	0, // 4: greet.v1.Person.mood:type_name -> greet.v1.Mood
 	3, // 5: greet.v1.GreetGroupRequest.people:type_name -> greet.v1.Person
 	1, // 6: greet.v1.GreetService.Greet:input_type -> greet.v1.GreetRequest
 	4, // 7: greet.v1.GreetService.GreetGroup:input_type -> greet.v1.GreetGroupRequest
-	2, // 8: greet.v1.GreetService.Greet:output_type -> greet.v1.GreetResponse
-	5, // 9: greet.v1.GreetService.GreetGroup:output_type -> greet.v1.GreetGroupResponse
-	8, // [8:10] is the sub-list for method output_type
-	6, // [6:8] is the sub-list for method input_type
+	6, // 8: greet.v1.GreetService.StreamGreet:input_type -> greet.v1.StreamGreetRequest
+	2, // 9: greet.v1.GreetService.Greet:output_type -> greet.v1.GreetResponse
+	5, // 10: greet.v1.GreetService.GreetGroup:output_type -> greet.v1.GreetGroupResponse
+	2, // 11: greet.v1.GreetService.StreamGreet:output_type -> greet.v1.GreetResponse
+	9, // [9:12] is the sub-list for method output_type
+	6, // [6:9] is the sub-list for method input_type
 	6, // [6:6] is the sub-list for extension type_name
 	6, // [6:6] is the sub-list for extension extendee
 	0, // [0:6] is the sub-list for field type_name
@@ -452,7 +514,7 @@ func file_greet_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_greet_proto_rawDesc), len(file_greet_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -112,13 +112,15 @@ from_descriptor("descriptor.binpb")   # load proto descriptor
 from_bytes(raw_bytes)                 # load from embedded bytes
 
 register(servicer)                    # wire your implementation (Python: async)
-connect("host:port")                  # or proxy to a remote gRPC server
-connect_http("https://api.example")   # or proxy to a remote HTTP service
+connect("host:port")                  # or proxy to a remote gRPC server (unary only)
+connect_http("https://api.example")   # or proxy to a remote HTTP service (unary only)
 
-use(interceptor)                      # add middleware (logging, auth, tracing)
+use(interceptor)                      # add middleware on unary RPCs
+use_stream(interceptor)               # add middleware on server-streaming RPCs
 use_http_header_provider(fn)          # optional per-request outbound HTTP auth/signing
 
-invoke(name, request)                 # in-process dispatch by tool name
+invoke(name, request)                 # in-process unary dispatch by tool name
+invoke_stream(name, request)          # in-process server-streaming dispatch
 asgi_app() / HTTPHandler()            # mount on an existing HTTP server
 serve(...)                            # start projections (blocking)
 stop()                                # cleanup
@@ -194,11 +196,21 @@ mux.Handle("/inv/", http.StripPrefix("/inv", h))
 Dispatch by tool name without spinning up a projection — useful for in-process workflow runtimes and tests.
 
 ```go
+// Unary
 resp, err := server.Invoke(ctx, "GreetService.Greet", &GreetRequest{Name: "World"})
+
+// Streaming — send is invoked once per emitted message
+err = server.InvokeStream(ctx, "GreetService.Watch", &WatchRequest{...},
+    func(msg proto.Message) error { fmt.Println(msg); return nil })
 ```
 
 ```python
+# Unary
 resp = await server.invoke("GreetService.Greet", GreetRequest(name="World"))
+
+# Streaming
+async for msg in server.invoke_stream("GreetService.Watch", WatchRequest(...)):
+    print(msg)
 ```
 
 ## Remote proxy (zero implementation)
@@ -274,6 +286,38 @@ Then `buf dep update`. The client uses:
 - `INVARIANT_HTTP_HEADER_<NAME>=value` env injection (e.g. `INVARIANT_HTTP_HEADER_AUTHORIZATION="Bearer ..."`).
 - Tolerant error parsing: accepts both Connect-style (`{"code": "invalid_argument", ...}`) and legacy wrapped (`{"error": {...}}`).
 
+## Server-streaming
+
+Declare `stream` in the `.proto` and write the handler as a yield/Send loop. Every projection adapts to its native stream form — gRPC native, Connect envelope frames over HTTP, MCP `content` array, NDJSON over CLI.
+
+```protobuf
+service Tail {
+  rpc Watch(WatchRequest) returns (stream Event);
+}
+```
+
+```go
+func (s *TailServicer) Watch(req *WatchRequest, stream invariant.ServerStream) error {
+    for ev := range events(req) {
+        if err := stream.Send(ev); err != nil { return err }
+    }
+    return nil
+}
+```
+
+```python
+class TailServicer:
+    async def Watch(self, request, context):
+        async for ev in events(request):
+            yield ev
+```
+
+Stream-aware middleware is registered separately with `UseStream` / `use_stream` — mirrors gRPC's split between `UnaryServerInterceptor` and `StreamServerInterceptor`. Client-streaming and bidi RPCs are intentionally not projected.
+
+## MCP over HTTP
+
+If you're already serving the HTTP projection, MCP is also available at `POST /mcp` (Streamable HTTP transport): one JSON-RPC request per POST, one JSON-RPC response back. Use it to point Claude.ai, agent platforms, and any remote MCP client at your server without a stdio process. The stdio MCP transport (`MCP()` / `mcp=True`) still works for local clients.
+
 ## Middleware
 
 gRPC-style unary interceptors. Run on every invocation across all projections. First registered = outermost.
@@ -301,10 +345,10 @@ server.use(logging_interceptor)
 
 | Projection | What happens |
 |------------|-------------|
-| **MCP** | Each unary RPC becomes a tool. JSON Schema from proto types. Descriptions from proto comments. Served over stdio. |
-| **CLI** | `ServiceName Method -r request.json`. AI agents and humans alike call RPCs from the shell. `--help` lists tools with field types. |
-| **HTTP** | Connect-only. `POST /{package.Service}/{Method}` accepts `application/json` or `application/proto`. `GET /` returns the tool catalog (same shape as MCP `tools/list`). `GET /__invariant/descriptor.binpb` returns the raw FileDescriptorSet. |
-| **gRPC** | Standard gRPC server with reflection enabled by default — `grpcurl`, Buf Studio, Connect debug clients all work out of the box. |
+| **MCP** | Each RPC becomes a tool. JSON Schema from proto types. Descriptions from proto comments. Served over stdio, or over HTTP at `POST /mcp` (Streamable HTTP transport — single JSON-RPC request per call). |
+| **CLI** | `ServiceName Method -r request.json`. AI agents and humans alike call RPCs from the shell. `--help` lists tools with field types. Streaming RPCs emit newline-delimited JSON. |
+| **HTTP** | Connect-only. Unary: `POST /{package.Service}/{Method}` with `application/json` or `application/proto`. Server-streaming: same path with `application/connect+json` or `application/connect+proto` (one request envelope → stream of response envelopes + end-stream marker). Request bodies capped at 16 MiB. `GET /` returns the tool catalog. `GET /healthz` (and `/readyz`) returns `{"status":"ok"}` for k8s probes. `GET /__invariant/descriptor.binpb` returns the raw FileDescriptorSet. |
+| **gRPC** | Standard gRPC server with reflection enabled by default — `grpcurl`, Buf Studio, Connect debug clients all work out of the box. Unary and server-streaming RPCs are projected. |
 
 ### Connect protocol
 

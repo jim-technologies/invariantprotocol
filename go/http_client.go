@@ -53,6 +53,10 @@ const (
 	maxHTTPClientRetryDelay      = 2 * time.Second
 	retryAfterHeader             = "Retry-After"
 	defaultOutboundHTTPUserAgent = "invariant-protocol/0.1"
+	// Cap response bodies from upstream services we proxy through. A hostile
+	// or buggy upstream could otherwise stream gigabytes back and OOM us.
+	// Same 16 MiB shape as the inbound caps; users wanting more can wrap.
+	httpClientMaxResponseBytes = 16 << 20
 )
 
 func (h *httpDynamicHandler) requestDescriptor() protoreflect.MessageDescriptor {
@@ -97,8 +101,12 @@ func (h *httpDynamicHandler) callProto(ctx context.Context, req proto.Message) (
 			return nil, status.Errorf(codes.Unavailable, "http call %s %s failed: %v", h.binding.method, endpointURL, err)
 		}
 
-		rawResp, readErr := io.ReadAll(httpResp.Body)
+		rawResp, readErr := io.ReadAll(io.LimitReader(httpResp.Body, httpClientMaxResponseBytes+1))
 		_ = httpResp.Body.Close()
+		if readErr == nil && int64(len(rawResp)) > httpClientMaxResponseBytes {
+			return nil, status.Errorf(codes.ResourceExhausted,
+				"upstream HTTP response exceeds %d byte limit", httpClientMaxResponseBytes)
+		}
 		if readErr != nil {
 			if h.shouldRetry(attempt, httpResp.StatusCode) {
 				if sleepErr := sleepWithContext(ctx, httpRetryDelay(attempt, httpResp.Header.Get(retryAfterHeader))); sleepErr != nil {
@@ -530,8 +538,8 @@ func wrapResponseBody(payload any, fieldPath string) map[string]any {
 	}
 
 	out := payload
-	for i := len(filtered) - 1; i >= 0; i-- {
-		out = map[string]any{filtered[i]: out}
+	for _, v := range slices.Backward(filtered) {
+		out = map[string]any{v: out}
 	}
 	wrapped, _ := out.(map[string]any)
 	return wrapped

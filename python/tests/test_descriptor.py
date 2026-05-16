@@ -16,7 +16,7 @@ def test_parse_services():
     assert svc.name == "GreetService"
     assert svc.full_name == "greet.v1.GreetService"
     assert "simple greeting service" in svc.comment.lower()
-    assert set(svc.methods.keys()) == {"Greet", "GreetGroup"}
+    assert set(svc.methods.keys()) == {"Greet", "GreetGroup", "StreamGreet"}
 
     greet = svc.methods["Greet"]
     assert greet.input_type == "greet.v1.GreetRequest"
@@ -28,6 +28,12 @@ def test_parse_services():
     group = svc.methods["GreetGroup"]
     assert group.input_type == "greet.v1.GreetGroupRequest"
     assert group.output_type == "greet.v1.GreetGroupResponse"
+
+    stream = svc.methods["StreamGreet"]
+    assert stream.input_type == "greet.v1.StreamGreetRequest"
+    assert stream.output_type == "greet.v1.GreetResponse"
+    assert stream.server_streaming
+    assert not stream.client_streaming
 
 
 def test_parse_messages():

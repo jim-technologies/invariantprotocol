@@ -31,9 +31,10 @@ func TestParseServices(t *testing.T) {
 	assert.Equal(t, "GreetService", svc.Name)
 	assert.Equal(t, "greet.v1.GreetService", svc.FullName)
 	assert.Contains(t, strings.ToLower(svc.Comment), "simple greeting service")
-	assert.Len(t, svc.Methods, 2)
+	assert.Len(t, svc.Methods, 3)
 	assert.Contains(t, svc.Methods, "Greet")
 	assert.Contains(t, svc.Methods, "GreetGroup")
+	assert.Contains(t, svc.Methods, "StreamGreet")
 
 	greet := svc.Methods["Greet"]
 	assert.Equal(t, "greet.v1.GreetRequest", greet.InputType)
@@ -45,6 +46,12 @@ func TestParseServices(t *testing.T) {
 	group := svc.Methods["GreetGroup"]
 	assert.Equal(t, "greet.v1.GreetGroupRequest", group.InputType)
 	assert.Equal(t, "greet.v1.GreetGroupResponse", group.OutputType)
+
+	stream := svc.Methods["StreamGreet"]
+	assert.Equal(t, "greet.v1.StreamGreetRequest", stream.InputType)
+	assert.Equal(t, "greet.v1.GreetResponse", stream.OutputType)
+	assert.True(t, stream.ServerStreaming)
+	assert.False(t, stream.ClientStreaming)
 }
 
 func TestParseMessages(t *testing.T) {

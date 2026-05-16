@@ -37,6 +37,26 @@ type UnaryHandler func(ctx context.Context, req any) (any, error)
 // gRPC, CLI). Same signature as grpc.UnaryServerInterceptor but framework-native.
 type UnaryServerInterceptor func(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error)
 
+// ServerStream is the streaming counterpart to UnaryHandler — passed to
+// server-streaming RPC handlers and to StreamServerInterceptor. Send delivers
+// one response message. Context returns the per-call context.
+//
+// Mirrors grpc.ServerStream's minimum surface so users can move handlers
+// between Invariant and grpc-go with one rename.
+type ServerStream interface {
+	Send(msg proto.Message) error
+	Context() context.Context
+}
+
+// StreamHandler is the handler at the end of the streaming interceptor chain.
+type StreamHandler func(req any, stream ServerStream) error
+
+// StreamServerInterceptor wraps server-streaming RPCs. Separate from
+// UnaryServerInterceptor to match gRPC's split — a unary interceptor cannot
+// observe the response stream, and a stream interceptor doesn't see a single
+// returned value.
+type StreamServerInterceptor func(req any, stream ServerStream, info *ServerCallInfo, handler StreamHandler) error
+
 // OutboundHTTPRequest describes an HTTP request that will be sent by ConnectHTTP.
 // It is passed to HTTPHeaderProvider so callers can compute dynamic auth headers.
 type OutboundHTTPRequest struct {
@@ -60,9 +80,11 @@ type Tool struct {
 	OutputType      string
 	ServiceFullName string
 	MethodName      string
+	ServerStreaming bool
 
 	// Cached at addTool time so the hot path doesn't reflect on every call.
-	invokeHandler UnaryHandler
+	invokeHandler UnaryHandler  // non-nil when !ServerStreaming
+	streamHandler StreamHandler // non-nil when ServerStreaming
 	callInfo      *ServerCallInfo
 	newRequest    func() proto.Message
 }
@@ -79,15 +101,23 @@ type Server struct {
 	tools              map[string]*Tool
 	fds                *descriptorpb.FileDescriptorSet // original FDS for dynamic message creation
 	interceptors       []UnaryServerInterceptor
+	streamInterceptors []StreamServerInterceptor
 	httpHeaderProvider HTTPHeaderProvider
 	includes           []string // glob patterns for methods to include
 	excludes           []string // glob patterns for methods to exclude
 }
 
-// Use registers an interceptor. Interceptors run in registration order
-// (first registered = outermost) on every tool invocation across all projections.
+// Use registers a unary interceptor. Runs in registration order (first registered
+// = outermost) on every unary tool invocation across all projections. Stream RPCs
+// are not affected — use UseStream for those.
 func (s *Server) Use(interceptor UnaryServerInterceptor) {
 	s.interceptors = append(s.interceptors, interceptor)
+}
+
+// UseStream registers a server-streaming interceptor. Mirrors Use but for
+// server-streaming RPCs. Same registration-order semantics.
+func (s *Server) UseStream(interceptor StreamServerInterceptor) {
+	s.streamInterceptors = append(s.streamInterceptors, interceptor)
 }
 
 // UseHTTPHeaderProvider sets an optional outbound header provider for ConnectHTTP.
@@ -255,7 +285,8 @@ func (s *Server) Register(servicer any, serviceName ...string) error {
 
 	for svcFullName, svcInfo := range services {
 		for methodName, methodInfo := range svcInfo.Methods {
-			if methodInfo.ClientStreaming || methodInfo.ServerStreaming {
+			// Client-streaming and bidi are out of scope — opinionated.
+			if methodInfo.ClientStreaming {
 				continue
 			}
 
@@ -283,6 +314,7 @@ func (s *Server) Register(servicer any, serviceName ...string) error {
 				OutputType:      methodInfo.OutputType,
 				ServiceFullName: svcFullName,
 				MethodName:      methodName,
+				ServerStreaming: methodInfo.ServerStreaming,
 			}); err != nil {
 				return err
 			}
@@ -306,11 +338,20 @@ func (s *Server) addTool(t *Tool) error {
 			t.Name, existing.ServiceFullName, t.ServiceFullName,
 		)
 	}
-	if handler, err := buildInvokeHandler(t.Handler); err == nil {
-		t.invokeHandler = handler
+	if t.ServerStreaming {
+		if handler, err := buildStreamHandler(t.Handler); err == nil {
+			t.streamHandler = handler
+		} else {
+			buildErr := err
+			t.streamHandler = func(any, ServerStream) error { return buildErr }
+		}
 	} else {
-		buildErr := err
-		t.invokeHandler = func(context.Context, any) (any, error) { return nil, buildErr }
+		if handler, err := buildInvokeHandler(t.Handler); err == nil {
+			t.invokeHandler = handler
+		} else {
+			buildErr := err
+			t.invokeHandler = func(context.Context, any) (any, error) { return nil, buildErr }
+		}
 	}
 	t.newRequest = buildRequestFactory(t.Handler)
 	t.callInfo = &ServerCallInfo{FullMethod: "/" + t.ServiceFullName + "/" + t.MethodName}
@@ -320,6 +361,11 @@ func (s *Server) addTool(t *Tool) error {
 
 // buildRequestFactory returns a closure that produces an empty proto.Message
 // of the handler's request type. Reflection runs once at registration.
+//
+// Handles three handler shapes:
+//   - unary local servicer:   func(ctx, *Req) (*Resp, error)  → req is In(1)
+//   - server-streaming:       func(*Req, ServerStream) error  → req is In(0)
+//   - proxy handler:          satisfies requestDescriptor()
 func buildRequestFactory(handler any) func() proto.Message {
 	if provider, ok := handler.(interface {
 		requestDescriptor() protoreflect.MessageDescriptor
@@ -335,16 +381,84 @@ func buildRequestFactory(handler any) func() proto.Message {
 	if ht.NumIn() != 2 {
 		return nil
 	}
-	reqType := ht.In(1)
-	if reqType.Kind() != reflect.Ptr {
+	// Stream signature: func(*Req, ServerStream) error → req is In(0).
+	// Unary signature:  func(ctx, *Req) (*Resp, error)  → req is In(1).
+	reqIdx := 1
+	if isStreamHandlerType(ht) {
+		reqIdx = 0
+	}
+	reqType := ht.In(reqIdx)
+	if reqType.Kind() != reflect.Pointer {
 		return nil
 	}
 	elem := reqType.Elem()
-	// Verify the pointer-to type implements proto.Message.
 	if _, ok := reflect.New(elem).Interface().(proto.Message); !ok {
 		return nil
 	}
 	return func() proto.Message { return reflect.New(elem).Interface().(proto.Message) }
+}
+
+var (
+	serverStreamType = reflect.TypeFor[ServerStream]()
+	errorType        = reflect.TypeFor[error]()
+	protoMsgType     = reflect.TypeFor[proto.Message]()
+)
+
+// isStreamHandlerType reports whether ht is `func(*Req, ServerStream) error`.
+func isStreamHandlerType(ht reflect.Type) bool {
+	return ht.NumIn() == 2 &&
+		ht.NumOut() == 1 &&
+		ht.In(0).Kind() == reflect.Pointer &&
+		reflect.New(ht.In(0).Elem()).Type().Implements(protoMsgType) &&
+		ht.In(1) == serverStreamType &&
+		ht.Out(0) == errorType
+}
+
+// buildStreamHandler reflects on a server-streaming handler and returns a
+// proto-in/stream-out closure. Reflection runs once at registration.
+func buildStreamHandler(handler any) (StreamHandler, error) {
+	hv := reflect.ValueOf(handler)
+	ht := hv.Type()
+	if !isStreamHandlerType(ht) {
+		return nil, errors.New("stream handler has unexpected signature (expected func(*Req, ServerStream) error)")
+	}
+	reqType := ht.In(0)
+	return func(req any, stream ServerStream) error {
+		reqMsg, ok := req.(proto.Message)
+		if !ok {
+			return fmt.Errorf("stream request does not implement proto.Message: %T", req)
+		}
+		// Convert dynamicpb (gRPC proxy ingress) to the handler's typed request.
+		if dynMsg, isDyn := reqMsg.(*dynamicpb.Message); isDyn {
+			typed := reflect.New(reqType.Elem()).Interface().(proto.Message)
+			if dynMsg.ProtoReflect().Descriptor().FullName() == typed.ProtoReflect().Descriptor().FullName() {
+				b, err := proto.Marshal(reqMsg)
+				if err != nil {
+					return fmt.Errorf("marshal dynamic to binary: %w", err)
+				}
+				if err := proto.Unmarshal(b, typed); err != nil {
+					return fmt.Errorf("unmarshal binary to typed: %w", err)
+				}
+			} else {
+				b, err := protojson.Marshal(reqMsg)
+				if err != nil {
+					return fmt.Errorf("marshal dynamic to JSON: %w", err)
+				}
+				if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, typed); err != nil {
+					return fmt.Errorf("unmarshal JSON to typed: %w", err)
+				}
+			}
+			reqMsg = typed
+		}
+		results := hv.Call([]reflect.Value{
+			reflect.ValueOf(reqMsg),
+			reflect.ValueOf(stream),
+		})
+		if !results[0].IsNil() {
+			return results[0].Interface().(error)
+		}
+		return nil
+	}, nil
 }
 
 // buildInvokeHandler returns the proto-in/proto-out closure for a tool's handler.
@@ -451,6 +565,8 @@ func (s *Server) Connect(conn *grpc.ClientConn) error {
 
 	for svcFullName, svcInfo := range services {
 		for methodName, methodInfo := range svcInfo.Methods {
+			// Streaming RPCs aren't proxied — opinionated. Proxy-streaming would
+			// duplicate gRPC's own forwarding story without adding value.
 			if methodInfo.ClientStreaming || methodInfo.ServerStreaming {
 				continue
 			}
@@ -559,12 +675,13 @@ func (s *Server) serveOne(ctx context.Context, p Projection) error {
 	}
 }
 
-// Invoke dispatches a request to a registered tool by name. Useful for
+// Invoke dispatches a unary request to a registered tool by name. Useful for
 // in-process callers (workflow runtimes, tests) that don't need to spin up
 // a projection.
 //
-// Returns a NOT_FOUND status error if the tool is not registered, so the
-// error projects to the right code through every projection.
+// Returns NOT_FOUND if the tool is unknown, and FAILED_PRECONDITION if the
+// tool is server-streaming — use InvokeStream for those. Both errors project
+// to the right code through every projection.
 func (s *Server) Invoke(ctx context.Context, toolName string, req proto.Message) (proto.Message, error) {
 	tool, ok := s.tools[toolName]
 	if !ok {
@@ -574,7 +691,32 @@ func (s *Server) Invoke(ctx context.Context, toolName string, req proto.Message)
 		}
 		return nil, status.Errorf(codes.NotFound, "unknown tool %q. Available: %v", toolName, available)
 	}
+	if tool.ServerStreaming {
+		return nil, status.Errorf(codes.FailedPrecondition, "tool %q is server-streaming — use InvokeStream", toolName)
+	}
 	return s.invoke(ctx, tool, req)
+}
+
+// InvokeStream dispatches a server-streaming tool by name. Each emitted
+// response message is delivered to send; the call returns once the handler
+// returns or send returns an error.
+//
+// Like Invoke, this is the in-process entry point — no projection required.
+func (s *Server) InvokeStream(ctx context.Context, toolName string, req proto.Message, send func(proto.Message) error) error {
+	tool, ok := s.tools[toolName]
+	if !ok {
+		var available []string
+		for name := range s.tools {
+			available = append(available, name)
+		}
+		return status.Errorf(codes.NotFound, "unknown tool %q. Available: %v", toolName, available)
+	}
+	if !tool.ServerStreaming {
+		return status.Errorf(codes.FailedPrecondition, "tool %q is unary — use Invoke", toolName)
+	}
+	stream := newCallbackStream(ctx, send)
+	defer stream.close()
+	return s.invokeStream(tool, req, stream)
 }
 
 // Tools returns a snapshot of the registered tool names to their Tool metadata.
@@ -586,6 +728,10 @@ func (s *Server) Tools() map[string]*Tool {
 
 // ToolCatalog returns the canonical tool catalog (same shape as MCP `tools/list`).
 // Used by both the HTTP `GET /` endpoint and MCP's `tools/list`.
+//
+// Streaming tools carry `_meta.streaming: true` so clients can render and
+// consume them differently from unary tools. The MCP spec reserves `_meta`
+// for exactly this kind of server-specific annotation.
 func (s *Server) ToolCatalog() []map[string]any {
 	names := make([]string, 0, len(s.tools))
 	for name := range s.tools {
@@ -596,11 +742,15 @@ func (s *Server) ToolCatalog() []map[string]any {
 	out := make([]map[string]any, 0, len(s.tools))
 	for _, name := range names {
 		t := s.tools[name]
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"name":        t.Name,
 			"description": t.Description,
 			"inputSchema": t.InputSchema,
-		})
+		}
+		if t.ServerStreaming {
+			entry["_meta"] = map[string]any{"streaming": true}
+		}
+		out = append(out, entry)
 	}
 	return out
 }
