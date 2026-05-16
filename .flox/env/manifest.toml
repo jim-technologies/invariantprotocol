@@ -44,21 +44,19 @@ protoc.version = ">=33.5"
 ##      as well as [hook], [profile] scripts and [services] below.
 ## -------------------------------------------------------------------
 [vars]
-# INTRO_MESSAGE = "It's gettin' Flox in here"
+# Pin uv to flox's Python 3.13. Without this, uv downloads its own Python
+# (3.14 by default), builds C extensions like grpcio's cygrpc against that
+# ABI, and the resulting .so cannot load when run via flox-activated python.
+UV_PYTHON_DOWNLOADS = "never"
 
 
 ## Activation Hook ---------------------------------------------------
 ##  ... run by _bash_ shell when you run 'flox activate'.
 ## -------------------------------------------------------------------
 [hook]
-# on-activate = '''
-#   # -> Set variables, create files and directories
-#   # -> Perform initialization steps, e.g. create a python venv
-#   # -> Useful environment variables:
-#   #      - FLOX_ENV_PROJECT=/home/user/example
-#   #      - FLOX_ENV=/home/user/example/.flox/run
-#   #      - FLOX_ENV_CACHE=/home/user/example/.flox/cache
-# '''
+on-activate = '''
+  export UV_PYTHON="$(command -v python3.13)"
+'''
 
 
 ## Profile script ----------------------------------------------------

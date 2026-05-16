@@ -50,7 +50,12 @@
         "pkg-path": "uv"
       }
     },
-    "hook": {},
+    "vars": {
+      "UV_PYTHON_DOWNLOADS": "never"
+    },
+    "hook": {
+      "on-activate": "  export UV_PYTHON=\"$(command -v python3.13)\"\n"
+    },
     "profile": {},
     "options": {}
   },
