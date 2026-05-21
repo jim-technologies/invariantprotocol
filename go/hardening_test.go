@@ -43,6 +43,30 @@ func TestHTTPUnaryRejectsOversizedBody(t *testing.T) {
 	require.GreaterOrEqual(t, resp.StatusCode, 400)
 }
 
+// SetMaxUnaryRequestBytes raises the cap for apps that legitimately accept
+// large unary bodies (object stores, file servers). After raising, a body
+// that would have been rejected at the default cap must now succeed.
+func TestHTTPUnaryRespectsRaisedBodyCap(t *testing.T) {
+	srv := streamServer(t, &streamServicer{})
+	srv.SetMaxUnaryRequestBytes(int64(httpMaxUnaryRequest) * 4) // 64 MiB
+	handler, err := srv.HTTPHandler()
+	require.NoError(t, err)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// 1 MiB beyond the default cap — would 400 before the override.
+	huge := strings.Repeat("a", httpMaxUnaryRequest+1<<20)
+	body := `{"name":"` + huge + `"}`
+
+	req, _ := http.NewRequestWithContext(t.Context(), "POST",
+		ts.URL+"/greet.v1.GreetService/Greet", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
 // -- application/connect+proto streaming: binary envelopes for performance. --
 
 func TestStreamingHTTPConnectProto(t *testing.T) {

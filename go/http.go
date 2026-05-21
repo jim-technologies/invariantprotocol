@@ -22,12 +22,22 @@ import (
 
 // Connect content types.
 const (
-	protoContentType        = "application/proto"
-	connectStreamJSONType   = "application/connect+json"
-	connectStreamProtoType  = "application/connect+proto"
-	connectEndStreamFlag    = byte(0x02)
-	connectStreamMaxRequest = 16 << 20 // 16 MiB safety cap on streaming request envelopes
-	httpMaxUnaryRequest     = 16 << 20 // 16 MiB safety cap on unary request bodies
+	protoContentType       = "application/proto"
+	connectStreamJSONType  = "application/connect+json"
+	connectStreamProtoType = "application/connect+proto"
+	connectEndStreamFlag   = byte(0x02)
+
+	// Default body-size safety caps. Per-Server overrides via
+	// SetMaxUnaryRequestBytes / SetMaxStreamRequestBytes — useful for apps
+	// (e.g. an object store) that legitimately need larger payloads. The
+	// defaults stay tight so a misconfigured server doesn't accept
+	// arbitrarily large bodies.
+	defaultHTTPMaxUnaryRequest     = 16 << 20
+	defaultConnectStreamMaxRequest = 16 << 20
+
+	// Kept for tests that exercise the default-cap behavior.
+	httpMaxUnaryRequest     = defaultHTTPMaxUnaryRequest
+	connectStreamMaxRequest = defaultConnectStreamMaxRequest
 )
 
 // httpToolEntry caches per-tool state used by the HTTP handler — built once at
@@ -176,7 +186,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, entry *httpT
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httpMaxUnaryRequest))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.httpMaxUnaryRequest))
 	if err != nil {
 		httpError(w, invalidArgumentError("read body: "+err.Error()))
 		return
@@ -218,7 +228,7 @@ func (s *Server) handleHTTPStream(w http.ResponseWriter, r *http.Request, entry 
 		return
 	}
 
-	reqBytes, err := readConnectEnvelope(r.Body, connectStreamMaxRequest)
+	reqBytes, err := readConnectEnvelope(r.Body, int(s.connectStreamMaxRequest))
 	if err != nil {
 		httpError(w, invalidArgumentError("read request envelope: "+err.Error()))
 		return
@@ -296,7 +306,7 @@ func (s *Server) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := applyConnectTimeout(r)
 	defer cancel()
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, httpMaxUnaryRequest))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.httpMaxUnaryRequest))
 	if err != nil {
 		httpError(w, invalidArgumentError("read body: "+err.Error()))
 		return

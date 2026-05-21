@@ -105,6 +105,30 @@ type Server struct {
 	httpHeaderProvider HTTPHeaderProvider
 	includes           []string // glob patterns for methods to include
 	excludes           []string // glob patterns for methods to exclude
+
+	// Body-size safety caps for the HTTP projection. Defaults are tight;
+	// raise per-server when the application has a legitimate need (e.g. an
+	// object store accepting multi-hundred-megabyte uploads).
+	httpMaxUnaryRequest     int64
+	connectStreamMaxRequest int64
+}
+
+// SetMaxUnaryRequestBytes overrides the HTTP unary body-size cap. Pass 0 to
+// reset to the default (16 MiB).
+func (s *Server) SetMaxUnaryRequestBytes(n int64) {
+	if n <= 0 {
+		n = defaultHTTPMaxUnaryRequest
+	}
+	s.httpMaxUnaryRequest = n
+}
+
+// SetMaxStreamRequestBytes overrides the Connect streaming request envelope
+// cap. Pass 0 to reset to the default (16 MiB).
+func (s *Server) SetMaxStreamRequestBytes(n int64) {
+	if n <= 0 {
+		n = defaultConnectStreamMaxRequest
+	}
+	s.connectStreamMaxRequest = n
 }
 
 // Use registers a unary interceptor. Runs in registration order (first registered
@@ -221,9 +245,11 @@ func splitPatterns(s string) []string {
 
 func newServer(parsed *invpb.ParsedDescriptor) *Server {
 	return &Server{
-		parsed:    parsed,
-		schemaGen: newSchemaGenerator(parsed),
-		tools:     make(map[string]*Tool),
+		parsed:                  parsed,
+		schemaGen:               newSchemaGenerator(parsed),
+		tools:                   make(map[string]*Tool),
+		httpMaxUnaryRequest:     defaultHTTPMaxUnaryRequest,
+		connectStreamMaxRequest: defaultConnectStreamMaxRequest,
 	}
 }
 
