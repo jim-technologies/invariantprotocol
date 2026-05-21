@@ -94,7 +94,7 @@ async fn not_found() -> impl IntoResponse {
 }
 
 async fn mcp_http_handler(State(server): State<Arc<Server>>, req: Request) -> Response {
-    let body = match read_limited_body(req, HTTP_MAX_UNARY_REQUEST).await {
+    let body = match read_limited_body(req, server.max_unary_request_bytes()).await {
         Ok(b) => b,
         Err(s) => return error_response(&s),
     };
@@ -132,7 +132,7 @@ async fn tool_handler(State(server): State<Arc<Server>>, req: Request) -> Respon
     let headers = req.headers().clone();
     let timeout = parse_connect_timeout(&headers);
 
-    let body_limit = HTTP_MAX_UNARY_REQUEST;
+    let body_limit = server.max_unary_request_bytes();
     let body = match read_limited_body(req, body_limit).await {
         Ok(b) => b,
         Err(s) => return error_response(&s),
@@ -188,7 +188,8 @@ async fn stream_tool_handler(
         )));
     }
 
-    let body = match read_limited_body(req, CONNECT_STREAM_MAX_REQUEST).await {
+    let stream_cap = server.max_stream_request_bytes();
+    let body = match read_limited_body(req, stream_cap).await {
         Ok(b) => b,
         Err(s) => return error_response(&s),
     };

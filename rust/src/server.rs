@@ -101,6 +101,12 @@ pub struct Server {
     tools: RwLock<BTreeMap<String, Arc<Tool>>>,
     interceptors: RwLock<Vec<UnaryInterceptor>>,
     stream_interceptors: RwLock<Vec<StreamInterceptor>>,
+    // Body-size safety caps for HTTP / Connect projections. Defaults are
+    // tight; raise per-server via the setters when the application has a
+    // legitimate need. Mirrors Go's `httpMaxUnaryRequest` /
+    // `connectStreamMaxRequest` fields.
+    http_max_unary_request: RwLock<usize>,
+    connect_stream_max_request: RwLock<usize>,
 }
 
 impl Server {
@@ -120,7 +126,46 @@ impl Server {
             tools: RwLock::new(BTreeMap::new()),
             interceptors: RwLock::new(Vec::new()),
             stream_interceptors: RwLock::new(Vec::new()),
+            http_max_unary_request: RwLock::new(
+                crate::projections::http::HTTP_MAX_UNARY_REQUEST,
+            ),
+            connect_stream_max_request: RwLock::new(
+                crate::projections::http::CONNECT_STREAM_MAX_REQUEST,
+            ),
         }
+    }
+
+    /// Override the HTTP unary body-size cap. Pass 0 to reset to the 16 MiB
+    /// default. Mirrors Go's `SetMaxUnaryRequestBytes` and Python's
+    /// `set_max_unary_request_bytes`.
+    pub fn set_max_unary_request_bytes(&self, n: usize) {
+        let value = if n == 0 {
+            crate::projections::http::HTTP_MAX_UNARY_REQUEST
+        } else {
+            n
+        };
+        *self.http_max_unary_request.write() = value;
+    }
+
+    /// Override the Connect streaming request envelope cap. Pass 0 to reset
+    /// to the 16 MiB default.
+    pub fn set_max_stream_request_bytes(&self, n: usize) {
+        let value = if n == 0 {
+            crate::projections::http::CONNECT_STREAM_MAX_REQUEST
+        } else {
+            n
+        };
+        *self.connect_stream_max_request.write() = value;
+    }
+
+    /// Current HTTP unary body-size cap.
+    pub fn max_unary_request_bytes(&self) -> usize {
+        *self.http_max_unary_request.read()
+    }
+
+    /// Current Connect streaming request envelope cap.
+    pub fn max_stream_request_bytes(&self) -> usize {
+        *self.connect_stream_max_request.read()
     }
 
     /// Register a unary handler against a tool name (`"GreetService.Greet"`).

@@ -219,6 +219,55 @@ async fn serve_runs_multiple_projections_and_shuts_down_on_cancel() {
     assert!(result.is_ok());
 }
 
+// ---------- Configurable body caps ----------
+
+#[tokio::test]
+async fn set_max_unary_request_bytes_lifts_cap() {
+    use invariant::projections::http::http_router;
+    let srv = Server::from_descriptor(DESCRIPTOR_PATH).unwrap();
+    srv.register_unary("GreetService.Greet", |req: greet::GreetRequest| async move {
+        Ok::<_, Status>(greet::GreetResponse {
+            message: format!("Hi {}", req.name.len()),
+            ..Default::default()
+        })
+    });
+    // Raise the default 16 MiB cap to 64 MiB.
+    srv.set_max_unary_request_bytes(64 * 1024 * 1024);
+    let server = Arc::new(srv);
+    assert_eq!(server.max_unary_request_bytes(), 64 * 1024 * 1024);
+
+    let app = http_router(server);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move { let _ = axum::serve(listener, app).await; });
+    tokio::task::yield_now().await;
+
+    // 17 MiB body — bigger than default cap, smaller than override.
+    let big = "a".repeat(17 * 1024 * 1024);
+    let r = reqwest::Client::new()
+        .post(format!("http://{addr}/greet.v1.GreetService/Greet"))
+        .json(&serde_json::json!({"name": big}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn set_max_request_bytes_zero_resets_to_default() {
+    let srv = Arc::new(Server::from_descriptor(DESCRIPTOR_PATH).unwrap());
+    srv.set_max_unary_request_bytes(1024);
+    assert_eq!(srv.max_unary_request_bytes(), 1024);
+    srv.set_max_unary_request_bytes(0);
+    assert_eq!(srv.max_unary_request_bytes(), 16 * 1024 * 1024);
+
+    srv.set_max_stream_request_bytes(2048);
+    assert_eq!(srv.max_stream_request_bytes(), 2048);
+    srv.set_max_stream_request_bytes(0);
+    assert_eq!(srv.max_stream_request_bytes(), 16 * 1024 * 1024);
+}
+
 // ---------- MCP stdio cancellation via notifications/cancelled ----------
 
 #[tokio::test]

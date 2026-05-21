@@ -447,6 +447,23 @@ async def test_connect_http_rejects_oversized_upstream_response():
         await task
 
 
+async def test_set_max_unary_request_bytes_lifts_cap(basic_server):
+    """A server with the cap raised must accept a body that exceeds the default."""
+    basic_server.set_max_unary_request_bytes(64 * 1024 * 1024)
+    port = await basic_server._start_http(port=0)
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            # 17 MiB — bigger than the default cap, smaller than the override.
+            big_name = "a" * (17 * 1024 * 1024)
+            r = await client.post(
+                "/greet.v1.GreetService/Greet",
+                json={"name": big_name},
+            )
+        assert r.status_code == 200
+    finally:
+        await basic_server._stop_http()
+
+
 async def test_mcp_http_rejects_oversized_body(stream_server):
     from invariant.projections.http import HTTP_MAX_UNARY_REQUEST
 

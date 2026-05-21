@@ -106,7 +106,7 @@ def build_asgi_app(server: Server):
             return
 
         try:
-            body_bytes = await _read_body(receive)
+            body_bytes = await _read_body(receive, max_bytes=server._http_max_unary_request)
             request = req_class()
 
             if _is_proto(headers.get("content-type", "")):
@@ -283,7 +283,7 @@ def _pack_envelope(flags: int, payload: bytes) -> bytes:
     return bytes([flags & 0xFF, (size >> 24) & 0xFF, (size >> 16) & 0xFF, (size >> 8) & 0xFF, size & 0xFF]) + payload
 
 
-def _unpack_envelope(data: bytes) -> tuple[int, bytes]:
+def _unpack_envelope(data: bytes, max_size: int = CONNECT_STREAM_MAX_REQUEST) -> tuple[int, bytes]:
     """Decode one envelope from data. Raises if too short or oversized."""
     if len(data) < 5:
         raise InvariantError(
@@ -292,10 +292,10 @@ def _unpack_envelope(data: bytes) -> tuple[int, bytes]:
         )
     flags = data[0]
     size = (data[1] << 24) | (data[2] << 16) | (data[3] << 8) | data[4]
-    if size > CONNECT_STREAM_MAX_REQUEST:
+    if size > max_size:
         raise InvariantError(
             grpc.StatusCode.INVALID_ARGUMENT,
-            f"envelope size {size} exceeds max {CONNECT_STREAM_MAX_REQUEST}",
+            f"envelope size {size} exceeds max {max_size}",
         )
     if len(data) < 5 + size:
         raise InvariantError(
@@ -326,14 +326,14 @@ async def _serve_stream(send, receive, server: Server, tool, req_class, headers:
         return
 
     try:
-        body = await _read_body(receive, max_bytes=CONNECT_STREAM_MAX_REQUEST)
+        body = await _read_body(receive, max_bytes=server._connect_stream_max_request)
     except InvariantError as e:
         await _send_error(send, e)
         return
 
     request = req_class()
     try:
-        _, payload = _unpack_envelope(body)
+        _, payload = _unpack_envelope(body, max_size=server._connect_stream_max_request)
         if binary:
             if payload:
                 request.ParseFromString(payload)
@@ -411,7 +411,7 @@ async def _serve_mcp_http(send, receive, server: Server, headers: dict[str, str]
     from invariant.projections.mcp import mcp_dispatch  # local import to avoid cycle on module load
 
     try:
-        body = await _read_body(receive)
+        body = await _read_body(receive, max_bytes=server._http_max_unary_request)
     except InvariantError as e:
         await _send_error(send, e)
         return

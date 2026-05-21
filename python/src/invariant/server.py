@@ -110,6 +110,14 @@ class Server:
         self._interceptors: list[Interceptor] = []
         self._stream_interceptors: list[StreamInterceptor] = []
         self._http_header_provider: HTTPHeaderProvider | None = None
+        # Body-size safety caps. Defaults are tight; raise per-server when the
+        # application has a legitimate need (e.g. accepting large uploads).
+        # Mirrors Go's `httpMaxUnaryRequest` / `connectStreamMaxRequest` fields.
+        from invariant.projections.http import CONNECT_STREAM_MAX_REQUEST as _STREAM_DEFAULT
+        from invariant.projections.http import HTTP_MAX_UNARY_REQUEST as _UNARY_DEFAULT
+
+        self._http_max_unary_request: int = _UNARY_DEFAULT
+        self._connect_stream_max_request: int = _STREAM_DEFAULT
         self._includes: list[str] = []
         self._excludes: list[str] = []
         # Background server handles (test helpers / non-blocking serve).
@@ -161,6 +169,27 @@ class Server:
                 "invariant-protocol is async-native."
             )
         self._interceptors.append(interceptor)
+
+    def set_max_unary_request_bytes(self, n: int) -> None:
+        """Override the HTTP unary body-size cap. Pass 0 to reset to the
+        16 MiB default. Mirrors Go's ``Server.SetMaxUnaryRequestBytes``.
+        """
+        if n <= 0:
+            from invariant.projections.http import HTTP_MAX_UNARY_REQUEST as _UNARY_DEFAULT
+
+            n = _UNARY_DEFAULT
+        self._http_max_unary_request = n
+
+    def set_max_stream_request_bytes(self, n: int) -> None:
+        """Override the Connect streaming request envelope cap. Pass 0 to
+        reset to the 16 MiB default. Mirrors Go's
+        ``Server.SetMaxStreamRequestBytes``.
+        """
+        if n <= 0:
+            from invariant.projections.http import CONNECT_STREAM_MAX_REQUEST as _STREAM_DEFAULT
+
+            n = _STREAM_DEFAULT
+        self._connect_stream_max_request = n
 
     def use_stream(self, interceptor: StreamInterceptor) -> None:
         """Register a server-streaming interceptor. Must be an async generator
