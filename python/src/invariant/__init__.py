@@ -10,7 +10,7 @@ from invariant.server import (
     StreamInterceptor,
     Tool,
 )
-from invariant.validation import validation
+from invariant.validation import validation, validation_stream
 
 __all__ = [
     "HTTPHeaderProvider",
@@ -24,4 +24,5 @@ __all__ = [
     "StreamInterceptor",
     "Tool",
     "validation",
+    "validation_stream",
 ]

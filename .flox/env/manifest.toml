@@ -35,6 +35,16 @@ golangci-lint.pkg-path = "golangci-lint"
 ruff.pkg-path = "ruff"
 protoc.pkg-path = "protobuf"
 protoc.version = ">=33.5"
+
+# Rust toolchain. Lock to a stable channel via flox-provided rustc/cargo so
+# nothing pulls a different toolchain at build time. clippy + rustfmt mirror
+# the lint/format role of golangci-lint + ruff in the other two languages.
+rustc.pkg-path = "rustc"
+cargo.pkg-path = "cargo"
+clippy.pkg-path = "clippy"
+rustfmt.pkg-path = "rustfmt"
+# rust-analyzer for editor integration; not used by CI but harmless.
+rust-analyzer.pkg-path = "rust-analyzer"
 # gum.pkg-path = "gum"
 # gum.version = "^0.14.5"
 

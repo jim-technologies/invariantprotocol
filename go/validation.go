@@ -24,6 +24,10 @@ import (
 //	    return err
 //	}
 //	server.Use(v)
+//
+// Streaming RPCs are not covered by the unary interceptor — pair it with
+// ValidationStream and “server.UseStream(vs)“ when you have streaming
+// methods with protovalidate constraints.
 func Validation() (UnaryServerInterceptor, error) {
 	validator, err := protovalidate.New()
 	if err != nil {
@@ -39,6 +43,26 @@ func Validation() (UnaryServerInterceptor, error) {
 			return nil, validationToInvariantError(err)
 		}
 		return handler(ctx, req)
+	}, nil
+}
+
+// ValidationStream returns a stream interceptor that runs protovalidate on
+// the request before opening the stream. Failures short-circuit with
+// INVALID_ARGUMENT and never produce any response messages — the same
+// guarantee callers expect from the unary variant.
+func ValidationStream() (StreamServerInterceptor, error) {
+	validator, err := protovalidate.New()
+	if err != nil {
+		return nil, fmt.Errorf("create protovalidate validator: %w", err)
+	}
+
+	return func(req any, stream ServerStream, _ *ServerCallInfo, handler StreamHandler) error {
+		if msg, ok := req.(proto.Message); ok {
+			if err := validator.Validate(msg); err != nil {
+				return validationToInvariantError(err)
+			}
+		}
+		return handler(req, stream)
 	}, nil
 }
 

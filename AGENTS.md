@@ -120,6 +120,23 @@ Connect-style envelope only: `{"code": "invalid_argument", "message": "...", "de
   into a "cancelled" response — that lets the stdio task scheduler clean up
   cancelled requests without a response (MCP spec) and lets `asyncio.timeout`
   in the HTTP path convert cancellation to `deadline_exceeded`.
+- Rust: `chained_invoke` and `chained_invoke_stream` wrap the entire chain
+  in `AssertUnwindSafe(...).catch_unwind()` — panics become `Code::Internal`
+  status errors with the panic message + method path. Mirrors Go's behaviour.
+
+### Rust gRPC trailers
+- `grpc::grpc_stream_response` returns `Body::new(StreamBody::new(stream))`
+  yielding `Frame::data(...)` per emitted message and a final `Frame::trailers(...)`
+  carrying `grpc-status` + `grpc-message`. That's the gRPC-spec-correct shape
+  (status in trailers, not headers). End-to-end test asserts a tonic client
+  surfaces the `FailedPrecondition` code from a mid-stream error.
+
+### Multi-projection serve (Rust)
+- `projections::serve::serve(server, projections, cancel)` runs an iterable
+  of `Projection::{Http, Grpc, McpStdio}` in parallel. The first projection
+  to complete (or the cancellation token firing) signals the rest to shut
+  down. Mirrors Go's `Server.Serve(ctx, projections...)` and Python's
+  `await server.serve(http=..., grpc=..., mcp=True)`.
 
 ### Resource limits
 - HTTP unary requests cap at 16 MiB (`httpMaxUnaryRequest` / `HTTP_MAX_UNARY_REQUEST`).

@@ -87,7 +87,7 @@ message GreetGroupResponse {
 // Request for the StreamGreet RPC.
 message StreamGreetRequest {
   // Name of the person to greet.
-  string name = 1;
+  string name = 1 [(buf.validate.field).string.min_len = 1];
   // Number of greetings to emit (default 1).
   int32 count = 2;
 }

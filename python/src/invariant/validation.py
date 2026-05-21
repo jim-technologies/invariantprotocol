@@ -3,6 +3,7 @@
 Usage::
 
     server.use(invariant.validation())
+    server.use_stream(invariant.validation_stream())  # for server-streaming RPCs
 """
 
 from __future__ import annotations
@@ -14,14 +15,18 @@ import protovalidate
 from invariant.errors import InvariantError, invalid_argument
 
 if TYPE_CHECKING:
-    from invariant.server import Interceptor
+    from invariant.server import Interceptor, StreamInterceptor
 
 
 def validation() -> Interceptor:
-    """Return an interceptor that runs protovalidate on each request.
+    """Return a unary interceptor that runs protovalidate on each request.
 
     Validation failures raise INVALID_ARGUMENT with field-level details.
     Requests of types without protovalidate constraints pass through unchanged.
+
+    Streaming RPCs are not covered — pair with ``validation_stream`` and
+    ``server.use_stream(vs)`` when you have streaming methods with
+    protovalidate constraints.
     """
     validator = protovalidate.Validator()
 
@@ -31,6 +36,24 @@ def validation() -> Interceptor:
         except protovalidate.ValidationError as e:
             raise _to_invariant_error(e) from None
         return await handler(request, context)
+
+    return interceptor
+
+
+def validation_stream() -> StreamInterceptor:
+    """Return a stream interceptor that runs protovalidate on the request
+    before opening the response stream. Failures short-circuit with
+    INVALID_ARGUMENT and never produce any response messages.
+    """
+    validator = protovalidate.Validator()
+
+    async def interceptor(request, context, info, handler):
+        try:
+            validator.validate(request)
+        except protovalidate.ValidationError as e:
+            raise _to_invariant_error(e) from None
+        async for msg in handler(request, context):
+            yield msg
 
     return interceptor
 

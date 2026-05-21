@@ -1,6 +1,6 @@
 # Invariant Protocol
 
-Comment your protobuf. Get AI-ready tools for free.
+**A gRPC-first, opinionated, thin framework.** Write one `.proto` — the gRPC contract — and the framework projects it onto MCP, CLI, HTTP/Connect, and gRPC itself. Every projection is a translation of the same gRPC service: same method paths, same error codes, same interceptor model. gRPC is the foundation; the other surfaces are views.
 
 ```protobuf
 // Manages user accounts.
@@ -36,6 +36,21 @@ enum Role {
 ```
 
 Those comments — the ones you'd write anyway for good documentation — are all an AI agent needs to discover, understand, and call your service. The types, enums, and descriptions flow directly into JSON Schema that any LLM can read. Invariant projects your services into MCP tools, CLI commands, HTTP endpoints, and gRPC servers. Same comments, same types, same code. Zero glue.
+
+## Why gRPC-first
+
+The framework treats **gRPC as the canonical surface** and every other protocol as a translation of it:
+
+- **Source of truth**: the proto descriptor. Service names, method names, types, comments — all gRPC's vocabulary.
+- **Method paths**: `/{package.Service}/{Method}`. gRPC's canonical path shape. Connect uses the same, by spec. MCP uses `ServiceName.MethodName` which is the same identity in dot-notation.
+- **Error codes**: `grpc.StatusCode` (Go), `grpc.StatusCode` (Python), `tonic::Code`-equivalent (Rust). Connect's HTTP error envelope translates these by name. MCP wraps them. CLI propagates them.
+- **Interceptor model**: `UnaryServerInterceptor` / `StreamServerInterceptor` — same signatures gRPC uses. First registered = outermost, like gRPC.
+- **Reflection**: `grpc.reflection.v1.ServerReflection` auto-registered in all three languages. `grpcurl`, Buf Studio, Connect debug clients all work out of the box.
+- **Deadlines + cancellation**: gRPC-native via context (Go / Rust) / asyncio (Python). Connect-Timeout-Ms is just the HTTP carrier for the same deadline.
+
+ConnectRPC is the **first-class HTTP translation** of gRPC — same semantics, just over plain HTTP/1.1 or HTTP/2 instead of strict HTTP/2-with-prior-knowledge. We hand-roll the Connect protocol on top of axum/Go's net-http/Python's ASGI because (a) it's small, and (b) we want the same descriptor-driven dispatch that drives gRPC. We do NOT depend on any per-service codegen Connect library (`connectrpc` crate in Rust, etc.) — that would contradict the descriptor-driven stance.
+
+MCP and CLI are also gRPC translations: MCP `tools/call` is unary gRPC dispatch with a JSON envelope; CLI is unary or streaming gRPC dispatch with stdout output. Switching transports is a client config change, not a code change.
 
 ```
 .proto                    descriptor.binpb                your code
@@ -373,18 +388,22 @@ Code names follow Connect's lowercase convention (`invalid_argument`, `not_found
 
 ### Validation
 
-Protovalidate constraints on your proto enforced via an opt-in interceptor:
+Protovalidate constraints on your proto enforced via opt-in interceptors:
 
 ```go
 v, _ := invariant.Validation()
 server.Use(v)
+
+vs, _ := invariant.ValidationStream()       // server-streaming RPCs
+server.UseStream(vs)
 ```
 
 ```python
 server.use(invariant.validation())
+server.use_stream(invariant.validation_stream())   # server-streaming RPCs
 ```
 
-Constraint violations short-circuit with `invalid_argument` and field-level `BadRequest` details.
+Constraint violations short-circuit with `invalid_argument` and field-level `BadRequest` details. Streaming variants validate the request before the response stream opens, so failures never produce any messages.
 
 ### gRPC reflection
 
@@ -415,6 +434,47 @@ go get github.com/jim-technologies/invariantprotocol/go
 pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git#subdirectory=python"
 ```
 
+**Rust:**
+```toml
+# Cargo.toml
+[dependencies]
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", branch = "main" }
+```
+
+## Rust
+
+The Rust implementation is descriptor-driven like the Go and Python ones — no per-service codegen, no generated traits. We do **not** depend on the `connectrpc` crate because its model is codegen-per-service, which conflicts with this stance. The Connect protocol is hand-rolled on top of `axum` + `tower`, exactly the way the Go and Python projections are.
+
+```rust
+use invariant::{Server, Status, projections::http::serve_http};
+use std::sync::Arc;
+
+// Your prost-generated types, same as you'd use with tonic.
+async fn greet(req: GreetRequest) -> Result<GreetResponse, Status> {
+    Ok(GreetResponse { message: format!("Hi {}", req.name), ..Default::default() })
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let server = Server::from_descriptor("descriptor.binpb")?;
+    server.register_unary("GreetService.Greet", greet);
+    serve_http(Arc::new(server), 8080).await?;
+    Ok(())
+}
+```
+
+Rust has no runtime method-name reflection, so registration is per-method (`register_unary` / `register_stream`). Every other surface matches the Go and Python implementations:
+
+- **Unary + server-streaming RPCs** (`register_unary`, `register_stream`, `ServerStreamTx<T>`)
+- **HTTP / Connect** — unary `application/json` + `application/proto`, streaming `application/connect+json` + `application/connect+proto`, envelope framing, `Connect-Timeout-Ms`, 16 MiB body cap
+- **MCP** — stdio transport + `POST /mcp` HTTP transport, `tools/list` with `_meta.streaming`, streaming `tools/call` collects chunks into the content array
+- **CLI** — `cli_write(server, args, writer)`, real-time flush per chunk on streams
+- **gRPC** — descriptor-driven dispatch via `Routes::from(axum::Router)` (modern tonic 0.12+ API), HTTP/2 prior-knowledge via `tonic::transport::Server::add_routes`
+
+Streaming, unary interceptors, and stream interceptors all flow through `use_interceptor` / `use_stream_interceptor` with the same first-registered-outermost ordering as the Go and Python ports.
+
+**No middleware ships in Rust beyond the dispatch core.** The framework's stance is thin: validation, auth, observability, retries — users compose their own interceptors and call whatever libraries they want (`protovalidate-rs`, `tower-http`, `tracing`, etc.). Go and Python ship a `validation()` interceptor for protovalidate; Rust intentionally doesn't, because shipping a stub that doesn't validate is misleading and shipping a real wrapper would pull a new dep.
+
 ## Requirements
 
 - `buf build --as-file-descriptor-set -o descriptor.binpb` (source info included by default)
@@ -424,20 +484,25 @@ pip install "invariant-protocol @ git+https://github.com/jim-technologies/invari
 
 ## Benchmarks
 
-Reference numbers on AMD Ryzen AI 9 365 (Linux, Go 1.25, Python 3.13):
+Reference numbers, Intel Xeon E5-2696 v4 (Linux, Go 1.25, Python 3.14, Rust 1.94):
 
-| Path                      | Go              | Python          |
-|---------------------------|-----------------|-----------------|
-| Direct `Invoke()`         | ~1 µs / op      | ~1 µs / op      |
-| HTTP JSON roundtrip       | ~30 µs / op     | ~540 µs / op    |
-| HTTP binary proto         | ~22 µs / op     | ~570 µs / op    |
-| gRPC unary                | ~46 µs / op     | ~83 µs / op     |
+| Path                                  | Go             | Python          | Rust            |
+|---------------------------------------|----------------|-----------------|-----------------|
+| Direct `Invoke()`                     | 2.9 µs / op    | 2.0 µs / op     | 0.8 µs / op     |
+| Direct `InvokeStream()` (10 msgs)     | 3.7 µs / call  | —               | 42.9 µs / call  |
+| Direct `InvokeStream()` (per chunk)   | ~374 ns        | —               | ~4.3 µs         |
+| HTTP JSON unary                       | 282 µs / op    | 1677 µs / op    | 206 µs / op     |
+| HTTP binary proto unary               | 261 µs / op    | 1641 µs / op    | 199 µs / op     |
+| gRPC unary                            | 318 µs / op    | 509 µs / op     | (pending)       |
+
+Reading: Rust is fastest on unary (direct + HTTP). Go is fastest per-chunk on streaming because the framework uses a sync callback — Rust's streaming hop is an `mpsc` channel send, which costs ~4 µs/chunk but decouples producer + consumer cleanly across projections. For typical LLM-token-stream workloads (~50 tok/s) the per-chunk overhead is negligible.
 
 Run yourself:
 
 ```bash
 cd go && go test -bench=. -benchtime=2s -run=^$ ./...
 cd python && uv run python bench/bench.py
+cd rust && cargo bench --bench bench
 ```
 
 ## License

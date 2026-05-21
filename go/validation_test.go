@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type validatingGreetServicer struct{}
@@ -51,4 +52,50 @@ func TestValidationRejectsConstraintViolation(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 	assert.Contains(t, st.Message(), "name")
+}
+
+// -- ValidationStream covers server-streaming RPCs. --
+
+func TestValidationStreamRejectsConstraintViolation(t *testing.T) {
+	srv := streamServer(t, &streamServicer{})
+
+	vs, err := ValidationStream()
+	require.NoError(t, err)
+	srv.UseStream(vs)
+
+	// Empty name violates string.min_len = 1 on StreamGreetRequest.name.
+	var emitted int
+	err = srv.InvokeStream(t.Context(), "GreetService.StreamGreet",
+		&greetpb.StreamGreetRequest{Name: "", Count: 3},
+		func(proto.Message) error {
+			emitted++
+			return nil
+		},
+	)
+	require.Error(t, err)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+	assert.Contains(t, st.Message(), "name")
+	assert.Zero(t, emitted, "no messages should be emitted on validation failure")
+}
+
+func TestValidationStreamPassesWhenSatisfied(t *testing.T) {
+	srv := streamServer(t, &streamServicer{})
+
+	vs, err := ValidationStream()
+	require.NoError(t, err)
+	srv.UseStream(vs)
+
+	var emitted int
+	err = srv.InvokeStream(t.Context(), "GreetService.StreamGreet",
+		&greetpb.StreamGreetRequest{Name: "ok", Count: 2},
+		func(proto.Message) error {
+			emitted++
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 2, emitted)
 }
