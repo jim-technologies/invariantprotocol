@@ -33,12 +33,7 @@ pub mod projections;
 pub mod schema;
 pub mod server;
 pub mod stream;
-
-// No `validation` module — Go and Python ship a protovalidate wrapper, but
-// the framework's stance is "thin"; users compose their own validation
-// interceptor via `use_interceptor` / `use_stream_interceptor` and call
-// `protovalidate` (or any validator) directly. Shipping a stub that doesn't
-// validate would be misleading, and a real wrapper would pull a new dep.
+pub mod validation;
 
 pub use descriptor::{MethodInfo, ParsedDescriptor, ServiceInfo};
 pub use errors::{Code, Status};

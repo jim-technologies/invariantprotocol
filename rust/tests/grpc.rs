@@ -70,6 +70,32 @@ async fn stream_greet(
     Ok(())
 }
 
+#[test]
+fn grpc_timeout_parser_covers_all_spec_units() {
+    // Per the gRPC HTTP/2 spec the header format is `<digits><unit>` where
+    // unit is one of n/u/m/S/M/H. Our hand-rolled gRPC path is the only
+    // place that has to parse this — grpc-go and grpcio do it for us.
+    use axum::http::{HeaderMap, HeaderValue};
+    use invariant::projections::grpc;
+
+    fn parse(raw: &str) -> Option<std::time::Duration> {
+        let mut h = HeaderMap::new();
+        h.insert("grpc-timeout", HeaderValue::from_str(raw).unwrap());
+        grpc::__test_parse_grpc_timeout(&h)
+    }
+
+    assert_eq!(parse("100n"), Some(std::time::Duration::from_nanos(100)));
+    assert_eq!(parse("100u"), Some(std::time::Duration::from_micros(100)));
+    assert_eq!(parse("100m"), Some(std::time::Duration::from_millis(100)));
+    assert_eq!(parse("5S"), Some(std::time::Duration::from_secs(5)));
+    assert_eq!(parse("2M"), Some(std::time::Duration::from_secs(120)));
+    assert_eq!(parse("1H"), Some(std::time::Duration::from_secs(3600)));
+    // Malformed → None (treat as no deadline, don't fail the request).
+    assert!(parse("bogus").is_none());
+    assert!(parse("100").is_none());
+    assert!(parse("100Z").is_none());
+}
+
 #[tokio::test]
 async fn grpc_reflection_lists_registered_service() {
     // gRPC reflection (grpc.reflection.v1.ServerReflection) must surface our

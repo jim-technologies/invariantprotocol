@@ -91,7 +91,7 @@ type Tool struct {
 
 const (
 	serverName    = "invariant-protocol"
-	serverVersion = "0.2.1"
+	serverVersion = "0.2.2"
 )
 
 // Server holds parsed descriptors and registered tools.

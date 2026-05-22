@@ -108,6 +108,12 @@ async fn grpc_handler(State(server): State<Arc<Server>>, req: Request) -> Respon
         return grpc_error(Code::Unimplemented, "unknown gRPC method");
     };
 
+    // gRPC clients carry their deadline in the `grpc-timeout` header. We
+    // parse it and apply via tokio::time::timeout so server-side work stops
+    // when the client's deadline elapses — same semantics Go's grpc-go and
+    // Python's grpcio give for free, and that our Connect path achieves via
+    // `Connect-Timeout-Ms`.
+    let timeout = parse_grpc_timeout(req.headers());
     let body_bytes = match read_body_capped(req).await {
         Ok(b) => b,
         Err(s) => return grpc_status_response(&s),
@@ -118,13 +124,55 @@ async fn grpc_handler(State(server): State<Arc<Server>>, req: Request) -> Respon
     };
 
     if tool.server_streaming {
-        return grpc_stream_response(server, tool, dyn_req).await;
+        return grpc_stream_response(server, tool, dyn_req, timeout).await;
     }
 
-    match server.invoke(&tool.name, dyn_req).await {
+    let invoke = server.invoke(&tool.name, dyn_req);
+    let result = match timeout {
+        Some(d) => match tokio::time::timeout(d, invoke).await {
+            Ok(r) => r,
+            Err(_) => Err(Status::deadline_exceeded(format!(
+                "deadline exceeded after {}ms",
+                d.as_millis()
+            ))),
+        },
+        None => invoke.await,
+    };
+    match result {
         Ok(resp) => grpc_unary_response(&resp),
         Err(s) => grpc_status_response(&s),
     }
+}
+
+/// Test-only re-export of `parse_grpc_timeout` so unit tests can exercise
+/// the parser without spinning up an HTTP/2 server.
+#[doc(hidden)]
+pub fn __test_parse_grpc_timeout(
+    headers: &axum::http::HeaderMap,
+) -> Option<std::time::Duration> {
+    parse_grpc_timeout(headers)
+}
+
+/// Parse the gRPC `grpc-timeout` header per the gRPC HTTP/2 spec. Format is
+/// `<positive integer><unit>` where unit is one of:
+/// `n` nanoseconds, `u` microseconds, `m` milliseconds, `S` seconds,
+/// `M` minutes, `H` hours. Returns `None` if absent or malformed (treat as
+/// no deadline rather than fail the request).
+fn parse_grpc_timeout(headers: &axum::http::HeaderMap) -> Option<std::time::Duration> {
+    let raw = headers.get("grpc-timeout")?.to_str().ok()?;
+    let raw = raw.trim();
+    let (value, unit) = raw.split_at(raw.len().checked_sub(1)?);
+    let value: u64 = value.parse().ok()?;
+    let dur = match unit {
+        "n" => std::time::Duration::from_nanos(value),
+        "u" => std::time::Duration::from_micros(value),
+        "m" => std::time::Duration::from_millis(value),
+        "S" => std::time::Duration::from_secs(value),
+        "M" => std::time::Duration::from_secs(value.checked_mul(60)?),
+        "H" => std::time::Duration::from_secs(value.checked_mul(3600)?),
+        _ => return None,
+    };
+    Some(dur)
 }
 
 /// Collect the request body, enforcing the 16 MiB cap so a hostile client
@@ -147,8 +195,10 @@ async fn grpc_stream_response(
     server: Arc<Server>,
     tool: Arc<Tool>,
     dyn_req: DynamicMessage,
+    timeout: Option<std::time::Duration>,
 ) -> Response {
     let mut stream = server.invoke_stream(&tool.name, dyn_req);
+    let deadline = timeout.map(|d| tokio::time::Instant::now() + d);
     // gRPC requires status codes in HTTP/2 trailers, not headers. We yield
     // one `Frame::data` per message, then a final `Frame::trailers` carrying
     // `grpc-status` + (on error) `grpc-message`. axum's `Body::new` lets us
@@ -156,15 +206,31 @@ async fn grpc_stream_response(
     let body_stream = async_stream::stream! {
         let mut grpc_status = 0i32; // Code::Ok
         let mut grpc_message: Option<String> = None;
-        while let Some(item) = stream.next().await {
+        loop {
+            let item = if let Some(d) = deadline {
+                match tokio::time::timeout_at(d, stream.next()).await {
+                    Ok(it) => it,
+                    Err(_) => {
+                        grpc_status = Code::DeadlineExceeded as i32;
+                        grpc_message = Some(format!(
+                            "deadline exceeded after {}ms",
+                            timeout.unwrap_or_default().as_millis()
+                        ));
+                        break;
+                    }
+                }
+            } else {
+                stream.next().await
+            };
             match item {
-                Ok(msg) => {
+                None => break,
+                Some(Ok(msg)) => {
                     let payload = msg.encode_to_vec();
                     yield Ok::<_, std::io::Error>(http_body::Frame::data(
                         bytes::Bytes::from(encode_frame(&payload)),
                     ));
                 }
-                Err(s) => {
+                Some(Err(s)) => {
                     grpc_status = s.code as i32;
                     grpc_message = Some(s.message.clone());
                     break;
