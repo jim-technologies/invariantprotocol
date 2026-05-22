@@ -1,0 +1,90 @@
+# Changelog
+
+All notable changes to this project are documented here. Versions track all
+three implementations (Go, Python, Rust) in lockstep so consumers pinning to
+a tag get the same feature set across languages.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
+the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
+but never silent behaviour regressions.
+
+## v0.2.2 — 2026-05-21
+
+### Added
+
+- **Rust gRPC honors the `grpc-timeout` header.** Our hand-rolled gRPC path
+  (we decode frames ourselves for descriptor-driven dispatch) now parses the
+  gRPC-spec deadline format `<digits><unit>` (`n`/`u`/`m`/`S`/`M`/`H`) and
+  wraps invocation in `tokio::time::timeout`. Unary returns
+  `deadline_exceeded`; streaming surfaces the same code in the HTTP/2 trailer.
+  Closes the only gRPC-first gap that wasn't auto-handled by tonic.
+- Parser unit-tested for all six gRPC time units plus the malformed-header
+  fallback (treat as "no deadline" rather than fail the request).
+
+### Documented
+
+- `rust/src/validation.rs` now openly states why Rust doesn't ship a built-in
+  protovalidate interceptor: the `prost-protovalidate 0.3` crate would cascade
+  prost 0.13→0.14 / prost-reflect 0.14→0.16 / tonic 0.12→0.14 / axum 0.7→0.8,
+  which isn't "thin and simple". Users compose their own validation
+  interceptor via `use_interceptor` / `use_stream_interceptor` until the
+  Rust proto-validation ecosystem stabilises on prost 0.14.
+
+## v0.2.1 — 2026-05-21
+
+### Added
+
+- **Configurable HTTP body-size caps** across Go / Python / Rust. Defaults
+  stay at 16 MiB; applications with legitimate large-upload needs raise the
+  cap per-server instead of writing custom middleware.
+  - Go: `Server.SetMaxUnaryRequestBytes(n)` / `Server.SetMaxStreamRequestBytes(n)`
+  - Python: `Server.set_max_unary_request_bytes(n)` / `set_max_stream_request_bytes(n)`
+  - Rust: `Server::set_max_unary_request_bytes(n)` / `set_max_stream_request_bytes(n)`
+    plus `max_*_request_bytes()` getters for introspection
+  - Passing 0 resets to the 16 MiB default in all three languages.
+
+## v0.2.0 — 2026-05-20
+
+### Added
+
+- **Rust implementation** (new). Descriptor-driven dispatch via prost-reflect,
+  no per-service codegen. Same shape-mirror philosophy as Go and Python.
+- **All four projections in Rust**: unary + server-streaming RPCs over
+  Connect (`application/json`, `application/proto`, `application/connect+json`,
+  `application/connect+proto`), gRPC (descriptor-driven via tonic 0.12's
+  `Routes::from(axum::Router)`), MCP (stdio + HTTP transport), CLI.
+- **gRPC reflection auto-registered** in all three languages, including the
+  new Rust implementation.
+- **gRPC-first stance made explicit** in the README — every projection is
+  documented as a translation of the gRPC service it projects.
+- **Streaming server-streaming RPCs** previously projected across Go and
+  Python now also work end-to-end in Rust, including HTTP/2 trailers for
+  the gRPC status code on stream termination.
+- **Production hardening across all three languages**:
+  panic/exception recovery in dispatch core, 16 MiB body caps on Connect +
+  gRPC, Connect-Timeout-Ms on every HTTP path, MCP stdio cancellation via
+  `notifications/cancelled`, multi-projection serve with graceful shutdown.
+- **`_meta.streaming` tool catalog annotation** so MCP clients can render
+  streaming tools differently from unary ones.
+- **Flox manifest** ships the Rust toolchain (`rustc`, `cargo`, `clippy`,
+  `rustfmt`, `rust-analyzer`) so contributors get parity with the Go and
+  Python toolchains via `flox activate`.
+
+### Benchmarks (Intel Xeon E5-2696 v4, Linux)
+
+| Path                        | Go      | Python    | Rust    |
+|-----------------------------|---------|-----------|---------|
+| Direct `invoke` (unary)     | 2.9 µs  | 2.0 µs    | 0.8 µs  |
+| HTTP JSON unary roundtrip   | 282 µs  | 1677 µs   | 206 µs  |
+| HTTP binary proto unary     | 261 µs  | 1641 µs   | 199 µs  |
+| gRPC unary                  | 318 µs  | 509 µs    | (n/a)   |
+
+## v0.1.0 — 2026-04-15
+
+Initial release. Go and Python implementations of the descriptor-driven
+projection framework. Connect (HTTP) + gRPC + MCP (stdio) + CLI surfaces.
+Streaming RPCs, MCP HTTP transport, hardening, and production-server
+coverage all landed in this release. See git history before tagging for
+the development arc.
+
+[Keep a Changelog]: https://keepachangelog.com/en/1.1.0/

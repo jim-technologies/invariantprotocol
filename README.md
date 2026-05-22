@@ -505,6 +505,72 @@ cd python && uv run python bench/bench.py
 cd rust && cargo bench --bench bench
 ```
 
+## Deployment
+
+The framework ships **no first-class TLS helper**, because every language's
+gRPC/HTTP stack already has a battle-tested one. Wire them up at the
+projection boundary:
+
+**Go** — pass `grpc.ServerOption` values into `invariant.GRPC(port, opts...)`:
+
+```go
+creds, _ := credentials.NewServerTLSFromFile("cert.pem", "key.pem")
+srv.Serve(ctx, invariant.GRPC(50051, grpc.Creds(creds)))
+```
+
+For the HTTP/Connect projection, mount the returned `http.Handler` on your
+own `http.Server` configured with `TLSConfig`:
+
+```go
+h, _ := srv.HTTPHandler()
+s := &http.Server{Addr: ":443", Handler: h, TLSConfig: tlsCfg}
+s.ListenAndServeTLS("", "") // certs already in TLSConfig
+```
+
+**Python** — `Server.serve(grpc=...)` is a thin wrapper. For TLS, build the
+gRPC server directly via the lower-level helper:
+
+```python
+from invariant.projections.grpc import build_grpc_server
+grpc_server = build_grpc_server(server, options=[("grpc.max_concurrent_streams", 100)])
+creds = grpc.ssl_server_credentials([(key, cert)])
+grpc_server.add_secure_port("[::]:50051", creds)
+await grpc_server.start()
+```
+
+For HTTP, mount `server.asgi_app()` on your own ASGI server (`uvicorn`,
+`hypercorn`) with TLS settings configured there.
+
+**Rust** — `serve_grpc` is a convenience over tonic; for TLS go through tonic
+directly:
+
+```rust
+let tls = tonic::transport::ServerTlsConfig::new().identity(identity);
+tonic::transport::Server::builder()
+    .tls_config(tls)?
+    .add_routes(invariant::projections::grpc::grpc_routes(server))
+    .serve(addr)
+    .await?;
+```
+
+For HTTP, mount `http_router(server)` inside your axum app and serve via
+`axum_server::tls_rustls` or `axum::serve` behind a TLS-terminating proxy
+(envoy, nginx, AWS ALB) — whichever your deployment shape already uses.
+
+### Process management + restarts
+
+Multi-projection serve (`Serve(ctx, ...)` in Go, `server.serve(...)` in
+Python, `projections::serve::serve(...)` in Rust) honours a cancellation
+signal: hook it to your supervisor's TERM signal handler and the server
+drains in-flight requests before exiting.
+
+### Reverse-proxy compatibility
+
+Connect's HTTP/1.1 + HTTP/2 wire formats pass through any standard L7 proxy
+(envoy, nginx, Cloudflare, ALB). Native gRPC requires HTTP/2 end-to-end —
+envoy is the usual choice. MCP stdio runs as a child process of the agent
+host (Claude.ai, Cursor, etc.); no proxy involved.
+
 ## License
 
 Apache 2.0
