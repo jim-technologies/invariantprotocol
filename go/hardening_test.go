@@ -67,6 +67,34 @@ func TestHTTPUnaryRespectsRaisedBodyCap(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
+// ConfigureMethod overrides the per-server cap for ONE method only — useful
+// when the service has a single oversize-friendly RPC (Upload, BulkImport)
+// alongside tightly-capped peers. Other methods keep the small default.
+func TestHTTPUnaryConfigureMethodPerMethodCap(t *testing.T) {
+	srv := streamServer(t, &streamServicer{})
+	// Server-level default stays small (the cheap-RPCs cap). Bump only
+	// /greet.v1.GreetService/Greet to 4× default.
+	srv.ConfigureMethod("/greet.v1.GreetService/Greet", MethodConfig{
+		MaxUnaryRequestBytes: int64(httpMaxUnaryRequest) * 4,
+	})
+	handler, err := srv.HTTPHandler()
+	require.NoError(t, err)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// A 1 MiB-over-default body to Greet now succeeds (per-method cap).
+	huge := strings.Repeat("a", httpMaxUnaryRequest+1<<20)
+	body := `{"name":"` + huge + `"}`
+
+	req, _ := http.NewRequestWithContext(t.Context(), "POST",
+		ts.URL+"/greet.v1.GreetService/Greet", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "per-method override should let Greet accept this body")
+}
+
 // -- application/connect+proto streaming: binary envelopes for performance. --
 
 func TestStreamingHTTPConnectProto(t *testing.T) {

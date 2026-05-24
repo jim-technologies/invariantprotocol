@@ -91,8 +91,27 @@ type Tool struct {
 
 const (
 	serverName    = "invariant-protocol"
-	serverVersion = "0.2.2"
+	serverVersion = "0.2.3"
 )
+
+// MethodConfig overrides per-server defaults for one RPC method. Nil-valued
+// fields fall back to the server-level setting. Apply via
+// `Server.ConfigureMethod("/pkg.Service/Method", MethodConfig{...})`.
+//
+// Today only request-body caps are configurable per method; the type is
+// designed to grow (per-method timeout, auth requirement, rate limit)
+// without breaking the call site — add the field, leave existing callers
+// using the zero value.
+type MethodConfig struct {
+	// MaxUnaryRequestBytes overrides the per-server unary cap. Zero =
+	// inherit. Use a positive value for methods that legitimately need
+	// large bodies (e.g. an object-store Upload accepting hundreds of
+	// MiB) while keeping the rest of the surface tight.
+	MaxUnaryRequestBytes int64
+	// MaxStreamRequestBytes overrides the per-server Connect-streaming
+	// request envelope cap. Zero = inherit.
+	MaxStreamRequestBytes int64
+}
 
 // Server holds parsed descriptors and registered tools.
 type Server struct {
@@ -108,9 +127,18 @@ type Server struct {
 
 	// Body-size safety caps for the HTTP projection. Defaults are tight;
 	// raise per-server when the application has a legitimate need (e.g. an
-	// object store accepting multi-hundred-megabyte uploads).
+	// object store accepting multi-hundred-megabyte uploads). Or raise
+	// only for specific methods via ConfigureMethod — preferred when one
+	// RPC is the outlier rather than the whole service.
 	httpMaxUnaryRequest     int64
 	connectStreamMaxRequest int64
+
+	// methodConfigs is the per-method override table. Keys are
+	// `/pkg.Service/Method` paths (matching the Connect URL space and
+	// the same identity Register/Connect use). Populated by
+	// ConfigureMethod; read by the HTTP handlers before applying the
+	// server-level cap.
+	methodConfigs map[string]MethodConfig
 }
 
 // SetMaxUnaryRequestBytes overrides the HTTP unary body-size cap. Pass 0 to
@@ -129,6 +157,52 @@ func (s *Server) SetMaxStreamRequestBytes(n int64) {
 		n = defaultConnectStreamMaxRequest
 	}
 	s.connectStreamMaxRequest = n
+}
+
+// ConfigureMethod registers a per-method override. The method path is the
+// Connect/gRPC URL form — `/pkg.Service/Method`. Same identity Register
+// and Connect use, so callers can copy-paste from their proto schema.
+// Zero-valued fields in `cfg` inherit from the server-level setting;
+// non-zero fields override.
+//
+// Typical use: a service has one big RPC (Upload, BulkImport) plus lots
+// of small ones; set the server cap tight and raise just the outlier.
+//
+//	srv := invariant.ServerFromBytes(desc)
+//	srv.SetMaxUnaryRequestBytes(16 * 1024 * 1024)
+//	srv.ConfigureMethod("/ghdrive.v1.GhdriveService/Upload", invariant.MethodConfig{
+//	    MaxUnaryRequestBytes: 1 << 30, // 1 GiB
+//	})
+//
+// Last write wins; re-calling overrides the previous config for that method.
+func (s *Server) ConfigureMethod(methodPath string, cfg MethodConfig) {
+	if s.methodConfigs == nil {
+		s.methodConfigs = make(map[string]MethodConfig)
+	}
+	s.methodConfigs[methodPath] = cfg
+}
+
+// methodUnaryCap returns the effective unary cap for one tool. Looks up
+// the per-method override table; falls back to the server-level cap.
+func (s *Server) methodUnaryCap(t *Tool) int64 {
+	if t != nil && s.methodConfigs != nil {
+		path := "/" + t.ServiceFullName + "/" + t.MethodName
+		if cfg, ok := s.methodConfigs[path]; ok && cfg.MaxUnaryRequestBytes > 0 {
+			return cfg.MaxUnaryRequestBytes
+		}
+	}
+	return s.httpMaxUnaryRequest
+}
+
+// methodStreamCap is the streaming-request counterpart to methodUnaryCap.
+func (s *Server) methodStreamCap(t *Tool) int64 {
+	if t != nil && s.methodConfigs != nil {
+		path := "/" + t.ServiceFullName + "/" + t.MethodName
+		if cfg, ok := s.methodConfigs[path]; ok && cfg.MaxStreamRequestBytes > 0 {
+			return cfg.MaxStreamRequestBytes
+		}
+	}
+	return s.connectStreamMaxRequest
 }
 
 // Use registers a unary interceptor. Runs in registration order (first registered
@@ -556,13 +630,18 @@ func buildInvokeHandler(handler any) (UnaryHandler, error) {
 	}, nil
 }
 
-// matchServicer finds services whose RPC names match methods on the servicer.
+// matchServicer finds services whose RPC names match methods on the
+// servicer. Both unary and server-streaming methods participate; client-
+// streaming is intentionally excluded (the framework doesn't project it).
+// The reflection check is loose — any method with the matching name on
+// the servicer counts as a hit; full handler-signature validation happens
+// later in addTool.
 func (s *Server) matchServicer(servicer any) map[string]*invpb.ServiceInfo {
 	servicerVal := reflect.ValueOf(servicer)
 	matched := make(map[string]*invpb.ServiceInfo)
 	for svcFullName, svcInfo := range s.parsed.Services {
 		for methodName, methodInfo := range svcInfo.Methods {
-			if methodInfo.ClientStreaming || methodInfo.ServerStreaming {
+			if methodInfo.ClientStreaming {
 				continue
 			}
 			if servicerVal.MethodByName(methodName).IsValid() {

@@ -186,7 +186,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, entry *httpT
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.httpMaxUnaryRequest))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.methodUnaryCap(entry.tool)))
 	if err != nil {
 		httpError(w, invalidArgumentError("read body: "+err.Error()))
 		return
@@ -228,7 +228,7 @@ func (s *Server) handleHTTPStream(w http.ResponseWriter, r *http.Request, entry 
 		return
 	}
 
-	reqBytes, err := readConnectEnvelope(r.Body, int(s.connectStreamMaxRequest))
+	reqBytes, err := readConnectEnvelope(r.Body, int(s.methodStreamCap(entry.tool)))
 	if err != nil {
 		httpError(w, invalidArgumentError("read request envelope: "+err.Error()))
 		return
