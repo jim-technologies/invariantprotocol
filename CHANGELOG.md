@@ -8,6 +8,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
 
+## v0.2.3 — 2026-05-24
+
+### Added
+
+- **Per-method body caps via `Server.ConfigureMethod` (Go).** New
+  `MethodConfig{MaxUnaryRequestBytes, MaxStreamRequestBytes}` type lets
+  one outlier RPC (Upload, BulkImport) accept large bodies while the
+  rest of the service stays tightly capped. Zero-valued fields inherit
+  the server-level setting; non-zero override per method.
+
+  Use case: ghdrive's Upload legitimately needs 1 GiB, but ListDir
+  should reject anything over a few KiB. Before, you had to either
+  raise the server-wide cap (and lose the safety on every other RPC)
+  or write custom middleware. Now:
+  `srv.ConfigureMethod("/pkg.Service/Upload", invariant.MethodConfig{MaxUnaryRequestBytes: 1 << 30})`
+  and the rest of the surface stays bounded.
+
+### Changed
+
+- **Auto-matcher now includes server-streaming methods (Go).**
+  `Server.Register(servicer, ...)` previously skipped streaming methods
+  during the service-name auto-discovery, forcing callers to explicitly
+  name the service even when one method was streaming. Now a servicer
+  with any mix of unary + server-streaming handlers auto-matches.
+  Client-streaming stays excluded (the framework doesn't project it).
+
+  No effect on services that were already passing the service name
+  explicitly. The change just removes a confusing inconsistency
+  where adding a `Download(req, stream) error` method to a previously
+  auto-matched servicer would silently break registration.
+
+### Internal
+
+- New test `TestHTTPUnaryConfigureMethodPerMethodCap` in `hardening_test.go`.
+- Python and Rust parity for `MethodConfig` is a follow-up release.
+
 ## v0.2.2 — 2026-05-21
 
 ### Added
