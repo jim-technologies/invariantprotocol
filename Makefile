@@ -1,4 +1,4 @@
-.PHONY: lint fmt test bench generate deps verify-generate breaking
+.PHONY: lint fmt test typecheck audit bench generate deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
@@ -7,6 +7,16 @@ lint:
 	cd python && ruff check src/ tests/
 	cd rust && cargo clippy --all-targets -- -D warnings
 	cd proto && buf lint
+
+typecheck:
+	cd python && uv run ty check
+
+audit:
+	# Python dependency CVE scan. The two ignored advisories are dev-only test
+	# tooling (pytest + its pygments) with no resolvable fix yet; neither ships
+	# in the published wheel. Runtime deps (incl. idna via httpx) are kept fixed.
+	cd python && uv run pip-audit \
+		--ignore-vuln CVE-2026-4539 --ignore-vuln CVE-2025-71176
 
 fmt:
 	cd go && gofmt -w . && golangci-lint run --fix ./...

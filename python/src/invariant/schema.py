@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from google.protobuf.descriptor_pb2 import FieldDescriptorProto
+from google.protobuf.descriptor_pb2 import (
+    FieldDescriptorProto,  # ty: ignore[unresolved-import] — real; stubs omit it
+)
 
 from invariant.descriptor import FieldInfo, MessageInfo, ParsedDescriptor
 

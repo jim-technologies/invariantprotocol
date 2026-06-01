@@ -17,6 +17,8 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
+    "ty",
+    "pip-audit",
 ]
 
 [build-system]
@@ -55,6 +57,23 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S310", "S603", "PT015", "PT017", "B011"]
+
+# ── ty: static type checker (Astral, pre-1.0) ──
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.src]
+include = ["src"]
+
+[tool.ty.rules]
+# This is a descriptor-driven protobuf library: it introspects dynamically
+# generated message/descriptor classes, which a pre-1.0 checker can't model, so
+# these categories are ~entirely false positives. Documented and scoped; the
+# rules that catch real bugs (undefined names, possibly-unbound, unresolved
+# imports — the one protobuf-stub gap is inline-ignored) stay on.
+unresolved-attribute = "ignore"   # dynamic protobuf descriptor introspection
+unsupported-operator = "ignore"   # bytes/int narrowing the checker misses
+invalid-argument-type = "ignore"  # incomplete stdlib stubs (e.g. asyncio.create_task)
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
