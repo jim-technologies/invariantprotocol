@@ -111,6 +111,65 @@ def test_http_client_binding_query_wrapper_does_not_override_explicit_fields():
     assert params["limit"] == ["3"]
 
 
+def _json_name_request_type():
+    """Compile, at runtime, a request message exercising json_name:
+    string user_id = 1;                               -> "userId" (default)
+    string time_in_force = 2 [json_name="timeInForce"];
+    string client_order_id = 3 [json_name="client_order_id"];  # snake on wire
+    """
+    from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+
+    fd = descriptor_pb2.FieldDescriptorProto
+    fdp = descriptor_pb2.FileDescriptorProto(name="jsonname_orders.proto", syntax="proto3", package="t.v1")
+    m = fdp.message_type.add(name="CreateOrderRequest")
+    m.field.add(name="user_id", number=1, label=fd.LABEL_OPTIONAL, type=fd.TYPE_STRING)
+    f2 = m.field.add(name="time_in_force", number=2, label=fd.LABEL_OPTIONAL, type=fd.TYPE_STRING)
+    f2.json_name = "timeInForce"
+    f3 = m.field.add(name="client_order_id", number=3, label=fd.LABEL_OPTIONAL, type=fd.TYPE_STRING)
+    f3.json_name = "client_order_id"
+
+    pool = descriptor_pool.DescriptorPool()
+    pool.Add(fdp)
+    desc = pool.FindMessageTypeByName("t.v1.CreateOrderRequest")
+    return desc, message_factory.GetMessageClass(desc)
+
+
+def test_binding_honors_json_name_on_body_with_proto_name_path():
+    from google.protobuf import json_format
+
+    desc, order_cls = _json_name_request_type()
+    # Spec-correct google.api.http: the path references the PROTO field name.
+    binding = HTTPClientBinding.new("POST", "/v1/users/{user_id}/orders", "*")
+    binding.resolve_fields(desc)
+
+    msg = order_cls(user_id="U1", time_in_force="GTC", client_order_id="C1")
+    args = json_format.MessageToDict(msg)  # default mapping, as the handler does
+    body, url = binding.build(args, "https://api.example.com")
+
+    # proto-name path template still resolves (value in the URL, key consumed):
+    assert url == "https://api.example.com/v1/users/U1/orders"
+    # body keys honor json_name (explicit camelCase AND explicit snake_case):
+    assert json.loads(body) == {"timeInForce": "GTC", "client_order_id": "C1"}
+
+
+def test_binding_honors_json_name_on_query():
+    from google.protobuf import json_format
+
+    desc, order_cls = _json_name_request_type()
+    binding = HTTPClientBinding.new("GET", "/v1/users/{user_id}/orders", "")
+    binding.resolve_fields(desc)
+
+    msg = order_cls(user_id="U1", time_in_force="GTC", client_order_id="C1")
+    args = json_format.MessageToDict(msg)
+    body, url = binding.build(args, "https://api.example.com")
+
+    assert body is None
+    params = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+    assert params["timeInForce"] == ["GTC"]
+    assert params["client_order_id"] == ["C1"]
+    assert "time_in_force" not in params  # proto name never hits the wire
+
+
 async def test_connect_http_response_body_mapping():
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):

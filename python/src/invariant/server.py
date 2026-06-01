@@ -529,6 +529,7 @@ class Server:
                     timeout=timeout,
                     method_path=method_path,
                     header_provider=self._http_header_provider,
+                    input_type=method_info.input_type,
                 )
 
                 tool_name = f"{svc_info.name}.{method_name}"

@@ -47,6 +47,25 @@ class HTTPClientBinding:
             template=_PathTemplate.parse(pattern),
         )
 
+    def resolve_fields(self, descriptor: Any) -> None:
+        """Rewrite the proto-name field selectors onto the JSON names.
+
+        `google.api.http` path variables and the `body` selector reference
+        fields by their PROTO name (`{user_id}`). The request is serialized with
+        the default proto3 JSON mapping, which honors `json_name`/lowerCamelCase
+        — so the selectors must be translated to those JSON keys to line up.
+        Done once per binding (no per-request cost). No-op without a descriptor:
+        for single-word fields proto name == JSON key, and the bare unit tests
+        drive `build` with proto-name dicts directly.
+        """
+        if descriptor is None:
+            return
+        for seg in self.template.segments:
+            if seg.field:
+                seg.field = _json_field_path(descriptor, seg.field)
+        if self.body and self.body != "*":
+            self.body = _json_field_path(descriptor, self.body)
+
     def build(self, args: dict[str, Any], base_url: str) -> tuple[bytes | None, str]:
         working = _clone_map(args)
 
@@ -119,6 +138,7 @@ class HTTPDynamicHandler:
         timeout: float,
         method_path: str,
         header_provider=None,
+        input_type: str | None = None,
     ) -> None:
         self._base_url = _validated_base_url(base_url)
         self._binding = binding
@@ -131,9 +151,20 @@ class HTTPDynamicHandler:
         pool = descriptor_pool.Default()
         resp_desc = pool.FindMessageTypeByName(output_type)
         self._resp_class = message_factory.GetMessageClass(resp_desc)
+        # Map the request's google.api.http selectors (proto names) onto the
+        # JSON keys the default proto3 mapping emits, so json_name is honored.
+        if input_type:
+            try:
+                req_desc = pool.FindMessageTypeByName(input_type)
+            except KeyError:
+                req_desc = None
+            binding.resolve_fields(req_desc)
 
     async def __call__(self, request, _context):
-        args = json_format.MessageToDict(request, preserving_proto_field_name=True)
+        # Default JSON mapping → honors json_name / lowerCamelCase on the wire.
+        # The binding's selectors were translated to these JSON keys at bind time
+        # (resolve_fields), so path/body/query all line up against this dict.
+        args = json_format.MessageToDict(request)
         body_bytes, target = self._binding.build(args, self._base_url)
         attempt = 0
         client = self._ensure_client()
@@ -376,6 +407,28 @@ def _wrap_response_body(payload: Any, field_path: str) -> dict[str, Any]:
     for part in reversed(parts):
         out = {part: out}
     return out
+
+
+def _json_field_path(descriptor: Any, proto_path: str) -> str:
+    """Translate a proto field path ("a.b.c", as written in google.api.http path
+    templates and `body` selectors) to the path the default proto3 JSON mapping
+    emits — i.e. each segment's `json_name` (an explicit `json_name` option, or
+    the lowerCamelCase default). Unknown segments pass through unchanged so a
+    selector that doesn't resolve degrades to its literal name rather than
+    raising at bind time.
+    """
+    parts = proto_path.split(".")
+    out: list[str] = []
+    current = descriptor
+    for part in parts:
+        field = current.fields_by_name.get(part) if current is not None else None
+        if field is None:
+            out.append(part)
+            current = None
+            continue
+        out.append(field.json_name)
+        current = field.message_type  # None once we reach a scalar leaf
+    return ".".join(out)
 
 
 def _get_nested(root: dict[str, Any], path: str) -> tuple[Any, bool]:

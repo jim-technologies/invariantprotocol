@@ -8,6 +8,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
 
+## v0.2.4 — 2026-06-01
+
+### Changed
+
+- **`connect_http` honors `json_name` on outbound requests (Python).** The
+  request body and query parameters now serialize through the default proto3
+  JSON mapping (which respects an explicit `json_name` and lowerCamelCases
+  otherwise) instead of forcing raw proto field names. `google.api.http` path
+  and `body` selectors still reference proto field names per the spec — they
+  are translated to the corresponding JSON keys once at bind time, so
+  `/v1/users/{user_id}` keeps working while a field declared
+  `string time_in_force = 2 [json_name = "timeInForce"];` is sent as
+  `timeInForce`. Single-word fields are unaffected. Set an explicit `json_name`
+  to pin any wire key (e.g. snake_case for venues that expect it).
+
 ## v0.2.3 — 2026-05-24
 
 ### Added
