@@ -8,6 +8,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
 
+## v0.2.5 — 2026-06-01
+
+### Added
+
+- **`Server.use_http_response_observer` for `connect_http` (Python).** An
+  optional observer is called once per successful outbound response with the
+  raw, undecoded body bytes (an `OutboundHTTPResponse`) before they are parsed
+  into the typed message — so callers can archive the verbatim payload (e.g. a
+  raw/bronze data tier) independent of what the response message models. The
+  observer is best-effort: its return value is ignored and exceptions are
+  suppressed so it can never break the call path. `OutboundHTTPResponse` and
+  `HTTPResponseObserver` are exported alongside the existing
+  `OutboundHTTPRequest` / `HTTPHeaderProvider`.
+
 ## v0.2.4 — 2026-06-01
 
 ### Changed

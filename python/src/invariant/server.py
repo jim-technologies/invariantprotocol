@@ -62,6 +62,28 @@ class OutboundHTTPRequest:
 HTTPHeaderProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
 
 
+@dataclass
+class OutboundHTTPResponse:
+    """Outbound HTTP response metadata for response observers.
+
+    `body` is the raw, undecoded response bytes exactly as received — before any
+    proto/JSON parsing — so an observer can archive the verbatim payload (e.g.
+    a raw/bronze data tier) independent of what the typed message models.
+    """
+
+    method_path: str
+    status_code: int
+    body: bytes
+    request: OutboundHTTPRequest
+
+
+# Called once per successful outbound response, after the bytes are received and
+# before they are parsed into the typed message. Side-effecting (archival/
+# metrics); its return value is ignored and exceptions are swallowed so an
+# observer can never break the call path.
+HTTPResponseObserver = Callable[[OutboundHTTPResponse], None]
+
+
 @dataclass(slots=True)
 class Tool:
     """A single registered RPC method projected as a tool."""
@@ -87,7 +109,7 @@ def _is_async_callable(fn: Any) -> bool:
 
 
 _SERVER_NAME = "invariant-protocol"
-_SERVER_VERSION = "0.2.2"
+_SERVER_VERSION = "0.2.5"
 
 
 class Server:
@@ -110,6 +132,7 @@ class Server:
         self._interceptors: list[Interceptor] = []
         self._stream_interceptors: list[StreamInterceptor] = []
         self._http_header_provider: HTTPHeaderProvider | None = None
+        self._http_response_observer: HTTPResponseObserver | None = None
         # Body-size safety caps. Defaults are tight; raise per-server when the
         # application has a legitimate need (e.g. accepting large uploads).
         # Mirrors Go's `httpMaxUnaryRequest` / `connectStreamMaxRequest` fields.
@@ -208,6 +231,15 @@ class Server:
     def use_http_header_provider(self, provider: HTTPHeaderProvider | None) -> None:
         """Set optional dynamic headers for outbound ConnectHTTP requests."""
         self._http_header_provider = provider
+
+    def use_http_response_observer(self, observer: HTTPResponseObserver | None) -> None:
+        """Set an optional observer of raw outbound ConnectHTTP responses.
+
+        The observer receives the verbatim response bytes before parsing, for
+        side effects like archiving a raw/bronze data tier. Its return value is
+        ignored and exceptions are swallowed.
+        """
+        self._http_response_observer = observer
 
     # -- Public API: invocation core --
 
@@ -530,6 +562,7 @@ class Server:
                     method_path=method_path,
                     header_provider=self._http_header_provider,
                     input_type=method_info.input_type,
+                    response_observer=self._http_response_observer,
                 )
 
                 tool_name = f"{svc_info.name}.{method_name}"

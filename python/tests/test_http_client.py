@@ -209,6 +209,33 @@ async def test_connect_http_response_body_mapping():
         httpd.shutdown()
 
 
+async def test_connect_http_response_observer_captures_raw_bytes():
+    httpd, port = _start_annotated_http_backend()
+    try:
+        srv = Server.from_descriptor(DESCRIPTOR_PATH)
+        seen: dict = {}
+
+        def observer(resp):
+            seen["method_path"] = resp.method_path
+            seen["status"] = resp.status_code
+            seen["body"] = resp.body  # raw, undecoded bytes
+
+        srv.use_http_response_observer(observer)  # must precede connect_http
+        srv.connect_http(f"http://localhost:{port}")
+        try:
+            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            assert result["message"] == "Hello, World"
+            # the observer saw the verbatim response bytes, before parsing
+            assert seen["status"] == 200
+            assert isinstance(seen["body"], bytes)
+            assert json.loads(seen["body"]) == {"message": "Hello, World"}
+            assert seen["method_path"].endswith("/Greet")
+        finally:
+            await srv.stop()
+    finally:
+        httpd.shutdown()
+
+
 async def test_connect_http_registers_tools():
     httpd, port = _start_annotated_http_backend()
     try:

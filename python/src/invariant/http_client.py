@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -139,6 +140,7 @@ class HTTPDynamicHandler:
         method_path: str,
         header_provider=None,
         input_type: str | None = None,
+        response_observer=None,
     ) -> None:
         self._base_url = _validated_base_url(base_url)
         self._binding = binding
@@ -146,6 +148,7 @@ class HTTPDynamicHandler:
         self._max_retries = _DEFAULT_HTTP_MAX_RETRIES
         self._method_path = method_path
         self._header_provider = header_provider
+        self._response_observer = response_observer
         self._headers = _outbound_http_headers_from_env()
         self._client: httpx.AsyncClient | None = None
         pool = descriptor_pool.Default()
@@ -202,6 +205,8 @@ class HTTPDynamicHandler:
                     f"upstream HTTP response exceeds {_HTTP_CLIENT_MAX_RESPONSE_BYTES} byte limit",
                 )
 
+            self._observe_response(raw, response.status_code, target, body_bytes)
+
             out = self._resp_class()
             if raw.strip():
                 try:
@@ -219,6 +224,31 @@ class HTTPDynamicHandler:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+    def _observe_response(self, raw: bytes, status_code: int, target: str, body_bytes: bytes | None) -> None:
+        if self._response_observer is None:
+            return
+        # An observer is best-effort (archival/metrics); it must never break the
+        # call path, so anything it raises is suppressed.
+        with contextlib.suppress(Exception):
+            from invariant.server import (
+                OutboundHTTPRequest,
+                OutboundHTTPResponse,
+            )
+
+            self._response_observer(
+                OutboundHTTPResponse(
+                    method_path=self._method_path,
+                    status_code=status_code,
+                    body=raw,
+                    request=OutboundHTTPRequest(
+                        method_path=self._method_path,
+                        method=self._binding.method,
+                        url=target,
+                        body=body_bytes or b"",
+                    ),
+                )
+            )
 
     def _parse_http_response(self, raw: bytes, out: Any) -> None:
         decoded = raw.decode()
