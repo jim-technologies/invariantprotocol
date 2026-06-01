@@ -2,6 +2,7 @@ from invariant.errors import InvariantError
 from invariant.server import (
     Handler,
     HTTPHeaderProvider,
+    HTTPQueryProvider,
     HTTPResponseObserver,
     Interceptor,
     OutboundHTTPRequest,
@@ -16,6 +17,7 @@ from invariant.validation import validation, validation_stream
 
 __all__ = [
     "HTTPHeaderProvider",
+    "HTTPQueryProvider",
     "HTTPResponseObserver",
     "Handler",
     "Interceptor",

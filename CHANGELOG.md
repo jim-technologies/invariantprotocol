@@ -8,6 +8,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
 
+## v0.2.6 — 2026-06-01
+
+### Added
+
+- **`Server.use_http_query_provider` for `connect_http` (Python).** Symmetric to
+  `use_http_header_provider`, but injects query-string parameters into each
+  outbound request — for venues that authenticate via the query string (a plain
+  API key, or an HMAC signature + timestamp signed over the request). The
+  provider sees the fully-built request (existing query + body) so it can sign
+  over it, and is re-run per retry so signatures/timestamps stay fresh. Both
+  providers may be set at once (e.g. an API-key header + a signed query param).
+  `HTTPQueryProvider` is exported.
+
 ## v0.2.5 — 2026-06-01
 
 ### Added

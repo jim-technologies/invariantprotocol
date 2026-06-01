@@ -236,6 +236,41 @@ async def test_connect_http_response_observer_captures_raw_bytes():
         httpd.shutdown()
 
 
+async def test_connect_http_query_provider_adds_auth_params():
+    captured: dict = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            captured["path"] = self.path  # includes the query string
+            raw = json.dumps({"message": "Hello, World"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *_args):
+            pass
+
+    httpd = ThreadingHTTPServer(("localhost", 0), Handler)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        srv = Server.from_descriptor(DESCRIPTOR_PATH)
+        # e.g. an API key (The Odds API) or HMAC signature + timestamp (Binance)
+        srv.use_http_query_provider(lambda _req: {"apiKey": "secret", "v": "2"})
+        srv.connect_http(f"http://localhost:{port}")
+        try:
+            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            assert result["message"] == "Hello, World"
+            assert "apiKey=secret" in captured["path"]
+            assert "v=2" in captured["path"]
+        finally:
+            await srv.stop()
+    finally:
+        httpd.shutdown()
+
+
 async def test_connect_http_registers_tools():
     httpd, port = _start_annotated_http_backend()
     try:

@@ -141,6 +141,7 @@ class HTTPDynamicHandler:
         header_provider=None,
         input_type: str | None = None,
         response_observer=None,
+        query_provider=None,
     ) -> None:
         self._base_url = _validated_base_url(base_url)
         self._binding = binding
@@ -148,6 +149,7 @@ class HTTPDynamicHandler:
         self._max_retries = _DEFAULT_HTTP_MAX_RETRIES
         self._method_path = method_path
         self._header_provider = header_provider
+        self._query_provider = query_provider
         self._response_observer = response_observer
         self._headers = _outbound_http_headers_from_env()
         self._client: httpx.AsyncClient | None = None
@@ -168,11 +170,14 @@ class HTTPDynamicHandler:
         # The binding's selectors were translated to these JSON keys at bind time
         # (resolve_fields), so path/body/query all line up against this dict.
         args = json_format.MessageToDict(request)
-        body_bytes, target = self._binding.build(args, self._base_url)
+        body_bytes, base_target = self._binding.build(args, self._base_url)
         attempt = 0
         client = self._ensure_client()
 
         while True:
+            # Per attempt: query auth (e.g. HMAC signature + timestamp) and
+            # header auth are recomputed so a retry re-signs with a fresh stamp.
+            target = self._apply_query_provider(base_target, body_bytes)
             headers = self._build_headers(target, body_bytes)
 
             try:
@@ -224,6 +229,48 @@ class HTTPDynamicHandler:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+    def _apply_query_provider(self, target: str, body_bytes: bytes | None) -> str:
+        """Let an optional query_provider add auth query params (API key, HMAC
+        signature + timestamp) to the URL. The provider sees the fully-built
+        request (including any query the message already set) so it can sign
+        over it. Mirrors the header_provider; failures surface as
+        UNAUTHENTICATED.
+        """
+        if self._query_provider is None:
+            return target
+        from invariant.server import OutboundHTTPRequest
+
+        try:
+            extra = self._query_provider(
+                OutboundHTTPRequest(
+                    method_path=self._method_path,
+                    method=self._binding.method,
+                    url=target,
+                    body=body_bytes or b"",
+                )
+            )
+        except InvariantError:
+            raise
+        except Exception as e:
+            raise InvariantError(
+                grpc.StatusCode.UNAUTHENTICATED,
+                f"build outbound query params for {self._method_path}: {e}",
+            ) from None
+        if not extra:
+            return target
+        parts = urllib.parse.urlsplit(target)
+        params = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+        params.extend((n, v) for n, v in extra.items() if n)
+        return urllib.parse.urlunsplit(
+            (
+                parts.scheme,
+                parts.netloc,
+                parts.path,
+                urllib.parse.urlencode(params, doseq=True),
+                parts.fragment,
+            )
+        )
 
     def _observe_response(self, raw: bytes, status_code: int, target: str, body_bytes: bytes | None) -> None:
         if self._response_observer is None:

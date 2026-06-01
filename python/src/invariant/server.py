@@ -61,6 +61,12 @@ class OutboundHTTPRequest:
 
 HTTPHeaderProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
 
+# Returns extra query parameters to add to an outbound request — for venues
+# that authenticate via the query string (an API key, or an HMAC signature +
+# timestamp computed over the request). Sees the fully-built request so it can
+# sign over the existing query/body. Symmetric to HTTPHeaderProvider.
+HTTPQueryProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
+
 
 @dataclass
 class OutboundHTTPResponse:
@@ -109,7 +115,7 @@ def _is_async_callable(fn: Any) -> bool:
 
 
 _SERVER_NAME = "invariant-protocol"
-_SERVER_VERSION = "0.2.5"
+_SERVER_VERSION = "0.2.6"
 
 
 class Server:
@@ -132,6 +138,7 @@ class Server:
         self._interceptors: list[Interceptor] = []
         self._stream_interceptors: list[StreamInterceptor] = []
         self._http_header_provider: HTTPHeaderProvider | None = None
+        self._http_query_provider: HTTPQueryProvider | None = None
         self._http_response_observer: HTTPResponseObserver | None = None
         # Body-size safety caps. Defaults are tight; raise per-server when the
         # application has a legitimate need (e.g. accepting large uploads).
@@ -231,6 +238,15 @@ class Server:
     def use_http_header_provider(self, provider: HTTPHeaderProvider | None) -> None:
         """Set optional dynamic headers for outbound ConnectHTTP requests."""
         self._http_header_provider = provider
+
+    def use_http_query_provider(self, provider: HTTPQueryProvider | None) -> None:
+        """Set optional dynamic query params for outbound ConnectHTTP requests.
+
+        For venues that authenticate via the query string (API key, or an HMAC
+        signature + timestamp signed over the request). Symmetric to
+        ``use_http_header_provider``; both may be set at once.
+        """
+        self._http_query_provider = provider
 
     def use_http_response_observer(self, observer: HTTPResponseObserver | None) -> None:
         """Set an optional observer of raw outbound ConnectHTTP responses.
@@ -563,6 +579,7 @@ class Server:
                     header_provider=self._http_header_provider,
                     input_type=method_info.input_type,
                     response_observer=self._http_response_observer,
+                    query_provider=self._http_query_provider,
                 )
 
                 tool_name = f"{svc_info.name}.{method_name}"

@@ -1,6 +1,6 @@
 [project]
 name = "invariant-protocol"
-version = "0.2.5"
+version = "0.2.6"
 description = "Project gRPC services into MCP, CLI, and HTTP interfaces from proto descriptors"
 requires-python = ">=3.11"
 dependencies = [
