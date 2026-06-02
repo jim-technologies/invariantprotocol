@@ -126,9 +126,7 @@ impl Server {
             tools: RwLock::new(BTreeMap::new()),
             interceptors: RwLock::new(Vec::new()),
             stream_interceptors: RwLock::new(Vec::new()),
-            http_max_unary_request: RwLock::new(
-                crate::projections::http::HTTP_MAX_UNARY_REQUEST,
-            ),
+            http_max_unary_request: RwLock::new(crate::projections::http::HTTP_MAX_UNARY_REQUEST),
             connect_stream_max_request: RwLock::new(
                 crate::projections::http::CONNECT_STREAM_MAX_REQUEST,
             ),

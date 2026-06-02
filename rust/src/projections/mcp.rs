@@ -31,7 +31,8 @@ pub async fn serve_mcp_stdio(server: Arc<Server>) -> std::io::Result<()> {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let stdout = Arc::new(AsyncMutex::new(tokio::io::stdout()));
-    let inflight: Arc<Mutex<HashMap<String, JoinHandle<()>>>> = Arc::new(Mutex::new(HashMap::new()));
+    let inflight: Arc<Mutex<HashMap<String, JoinHandle<()>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     while let Some(line) = reader.next_line().await? {
         if line.trim().is_empty() {

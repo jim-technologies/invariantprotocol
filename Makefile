@@ -1,6 +1,17 @@
-.PHONY: lint fmt test typecheck audit bench generate deps verify-generate breaking
+.PHONY: check lint fmt fmt-check test typecheck audit bench generate deps verify-generate breaking
 
 BASE_REF ?= origin/main
+
+# Single entry point: format-check + lint + typecheck + tests across all three
+# languages (Go, Python, Rust) plus proto. CI runs `flox activate -- make check`
+# so contributors and CI hit the identical toolchain and gates.
+check: fmt-check lint typecheck test
+
+fmt-check:
+	cd go && test -z "$$(gofmt -l .)" || { echo "gofmt: files need formatting:"; gofmt -l .; exit 1; }
+	cd python && ruff format --check src/ tests/
+	cd rust && cargo fmt --check
+	cd proto && buf format --diff --exit-code
 
 lint:
 	cd go && golangci-lint run ./...

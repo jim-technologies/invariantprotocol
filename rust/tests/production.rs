@@ -32,7 +32,10 @@ async fn unary_panic_becomes_internal_error() {
         .get_message_by_name("greet.v1.GreetRequest")
         .unwrap();
     let dyn_req = DynamicMessage::new(desc);
-    let err = server.invoke("GreetService.Greet", dyn_req).await.unwrap_err();
+    let err = server
+        .invoke("GreetService.Greet", dyn_req)
+        .await
+        .unwrap_err();
     assert_eq!(err.code, Code::Internal);
     assert!(err.message.contains("kaboom"));
     assert!(err.message.contains("/greet.v1.GreetService/Greet"));
@@ -188,12 +191,15 @@ async fn grpc_oversized_request_rejected() {
 #[tokio::test]
 async fn serve_runs_multiple_projections_and_shuts_down_on_cancel() {
     let srv = Server::from_descriptor(DESCRIPTOR_PATH).unwrap();
-    srv.register_unary("GreetService.Greet", |req: greet::GreetRequest| async move {
-        Ok::<_, Status>(greet::GreetResponse {
-            message: format!("Hi {}", req.name),
-            ..Default::default()
-        })
-    });
+    srv.register_unary(
+        "GreetService.Greet",
+        |req: greet::GreetRequest| async move {
+            Ok::<_, Status>(greet::GreetResponse {
+                message: format!("Hi {}", req.name),
+                ..Default::default()
+            })
+        },
+    );
     let server = Arc::new(srv);
 
     // Pick port 0 indirectly by using fixed ports just for this test isn't
@@ -225,12 +231,15 @@ async fn serve_runs_multiple_projections_and_shuts_down_on_cancel() {
 async fn set_max_unary_request_bytes_lifts_cap() {
     use invariant::projections::http::http_router;
     let srv = Server::from_descriptor(DESCRIPTOR_PATH).unwrap();
-    srv.register_unary("GreetService.Greet", |req: greet::GreetRequest| async move {
-        Ok::<_, Status>(greet::GreetResponse {
-            message: format!("Hi {}", req.name.len()),
-            ..Default::default()
-        })
-    });
+    srv.register_unary(
+        "GreetService.Greet",
+        |req: greet::GreetRequest| async move {
+            Ok::<_, Status>(greet::GreetResponse {
+                message: format!("Hi {}", req.name.len()),
+                ..Default::default()
+            })
+        },
+    );
     // Raise the default 16 MiB cap to 64 MiB.
     srv.set_max_unary_request_bytes(64 * 1024 * 1024);
     let server = Arc::new(srv);
@@ -239,7 +248,9 @@ async fn set_max_unary_request_bytes_lifts_cap() {
     let app = http_router(server);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let handle = tokio::spawn(async move { let _ = axum::serve(listener, app).await; });
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
     tokio::task::yield_now().await;
 
     // 17 MiB body — bigger than default cap, smaller than override.
@@ -273,12 +284,15 @@ async fn set_max_request_bytes_zero_resets_to_default() {
 #[tokio::test]
 async fn mcp_dispatch_handles_notification_id_null() {
     let srv = Server::from_descriptor(DESCRIPTOR_PATH).unwrap();
-    srv.register_unary("GreetService.Greet", |req: greet::GreetRequest| async move {
-        Ok::<_, Status>(greet::GreetResponse {
-            message: format!("Hi {}", req.name),
-            ..Default::default()
-        })
-    });
+    srv.register_unary(
+        "GreetService.Greet",
+        |req: greet::GreetRequest| async move {
+            Ok::<_, Status>(greet::GreetResponse {
+                message: format!("Hi {}", req.name),
+                ..Default::default()
+            })
+        },
+    );
     let server = Arc::new(srv);
 
     // Notification — no id, no response.

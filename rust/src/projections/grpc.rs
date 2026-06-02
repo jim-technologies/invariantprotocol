@@ -147,9 +147,7 @@ async fn grpc_handler(State(server): State<Arc<Server>>, req: Request) -> Respon
 /// Test-only re-export of `parse_grpc_timeout` so unit tests can exercise
 /// the parser without spinning up an HTTP/2 server.
 #[doc(hidden)]
-pub fn __test_parse_grpc_timeout(
-    headers: &axum::http::HeaderMap,
-) -> Option<std::time::Duration> {
+pub fn __test_parse_grpc_timeout(headers: &axum::http::HeaderMap) -> Option<std::time::Duration> {
     parse_grpc_timeout(headers)
 }
 
@@ -179,9 +177,11 @@ fn parse_grpc_timeout(headers: &axum::http::HeaderMap) -> Option<std::time::Dura
 /// can't drive the server OOM. Returns `RESOURCE_EXHAUSTED` on overrun —
 /// same code Go's `http.MaxBytesReader` maps to.
 async fn read_body_capped(req: Request) -> Result<bytes::Bytes, Status> {
-    let collected = req.into_body().collect().await.map_err(|e| {
-        Status::new(Code::Internal, format!("read body: {e}"))
-    })?;
+    let collected = req
+        .into_body()
+        .collect()
+        .await
+        .map_err(|e| Status::new(Code::Internal, format!("read body: {e}")))?;
     let bytes = collected.to_bytes();
     if bytes.len() > GRPC_MAX_REQUEST_BYTES {
         return Err(Status::resource_exhausted(format!(

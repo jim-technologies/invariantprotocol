@@ -7,8 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  lint:
-    name: Lint
+  check:
+    name: Check (fmt + lint + typecheck + test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
       - uses: flox/install-flox-action@v2
       - uses: flox/activate-action@v1
         with:
-          command: make lint
+          command: make check
 
   generated:
     name: Verify Generated
@@ -67,20 +67,3 @@ jobs:
       - uses: flox/activate-action@v1
         with:
           command: make breaking BASE_REF=${{ github.event.pull_request.base.sha }}
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/cache@v4
-        with:
-          path: /nix/store
-          key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
-          restore-keys: nix-${{ runner.os }}-
-
-      - uses: flox/install-flox-action@v2
-      - uses: flox/activate-action@v1
-        with:
-          command: make test

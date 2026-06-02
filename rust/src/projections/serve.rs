@@ -5,7 +5,7 @@
 //! for MCP) or the supplied cancellation token fires, all projections are
 //! signalled to shut down gracefully. Same semantics as Go's `errc <- ...`.
 
-use crate::projections::{http, grpc, mcp};
+use crate::projections::{grpc, http, mcp};
 use crate::server::Server;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -72,8 +72,7 @@ pub async fn serve(
     // Wait for either the cancellation token or the first projection to finish.
     let first_result: Result<(), ServeError>;
     {
-        let mut futures: futures::stream::FuturesUnordered<_> =
-            handles.drain(..).collect();
+        let mut futures: futures::stream::FuturesUnordered<_> = handles.drain(..).collect();
         tokio::select! {
             biased;
             _ = &mut cancel_fut => {
@@ -98,13 +97,14 @@ pub async fn serve(
     first_result
 }
 
-async fn run_projection(
-    server: Arc<Server>,
-    projection: Projection,
-) -> Result<(), ServeError> {
+async fn run_projection(server: Arc<Server>, projection: Projection) -> Result<(), ServeError> {
     match projection {
-        Projection::Http(port) => http::serve_http(server, port).await.map_err(ServeError::Http),
-        Projection::Grpc(port) => grpc::serve_grpc(server, port).await.map_err(ServeError::Grpc),
+        Projection::Http(port) => http::serve_http(server, port)
+            .await
+            .map_err(ServeError::Http),
+        Projection::Grpc(port) => grpc::serve_grpc(server, port)
+            .await
+            .map_err(ServeError::Grpc),
         Projection::McpStdio => mcp::serve_mcp_stdio(server).await.map_err(ServeError::Http),
     }
 }
