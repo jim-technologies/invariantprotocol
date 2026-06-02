@@ -271,6 +271,86 @@ async def test_connect_http_query_provider_adds_auth_params():
         httpd.shutdown()
 
 
+async def test_connect_http_httpbody_response_returns_raw_bytes():
+    import google.api.httpbody_pb2 as hb  # noqa: F401  (registers HttpBody)
+
+    payload = b'{"weird": [1, 2, 3], "ok": true}'  # arbitrary, unmodeled body
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_a):
+            pass
+
+    httpd = ThreadingHTTPServer(("localhost", 0), Handler)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        handler = HTTPDynamicHandler(
+            base_url=f"http://localhost:{port}",
+            binding=HTTPClientBinding.new("GET", "/raw", ""),
+            output_type="google.api.HttpBody",
+            timeout=5.0,
+            method_path="/x.Svc/Raw",
+        )
+        try:
+            resp = await handler(greet_pb2.GreetRequest(name="x"), None)
+            # raw bytes verbatim — no JSON->proto parsing
+            assert resp.data == payload
+            assert resp.content_type == "application/json"
+        finally:
+            await handler.aclose()
+    finally:
+        httpd.shutdown()
+
+
+async def test_connect_http_httpbody_request_sends_raw_body():
+    import google.api.httpbody_pb2 as hb
+
+    captured: dict = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", "0"))
+            captured["body"] = self.rfile.read(n) if n else b""
+            captured["content_type"] = self.headers.get("Content-Type")
+            raw = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *_a):
+            pass
+
+    httpd = ThreadingHTTPServer(("localhost", 0), Handler)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        handler = HTTPDynamicHandler(
+            base_url=f"http://localhost:{port}",
+            binding=HTTPClientBinding.new("POST", "/upload", "*"),
+            output_type="greet.v1.GreetResponse",
+            timeout=5.0,
+            method_path="/x.Svc/Upload",
+            input_type="google.api.HttpBody",
+        )
+        try:
+            await handler(hb.HttpBody(content_type="text/csv", data=b"a,b\n1,2"), None)
+            assert captured["body"] == b"a,b\n1,2"
+            assert captured["content_type"] == "text/csv"
+        finally:
+            await handler.aclose()
+    finally:
+        httpd.shutdown()
+
+
 async def test_connect_http_registers_tools():
     httpd, port = _start_annotated_http_backend()
     try:

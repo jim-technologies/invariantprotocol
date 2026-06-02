@@ -28,6 +28,11 @@ _DEFAULT_USER_AGENT = "invariant-protocol/0.1"
 # buggy upstream could otherwise stream gigabytes back and OOM us. Same
 # 16 MiB shape as the inbound caps.
 _HTTP_CLIENT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+# An RPC may use google.api.HttpBody as its request/response to carry a raw,
+# unmodeled payload: the body bytes go in `data` and the MIME type in
+# `content_type`, with no JSON<->proto mapping. Lets callers model the typed
+# parts of an API and pass arbitrary/irregular payloads through verbatim.
+_HTTPBODY_TYPE = "google.api.HttpBody"
 
 
 @dataclass
@@ -156,6 +161,8 @@ class HTTPDynamicHandler:
         pool = descriptor_pool.Default()
         resp_desc = pool.FindMessageTypeByName(output_type)
         self._resp_class = message_factory.GetMessageClass(resp_desc)
+        self._httpbody_response = output_type == _HTTPBODY_TYPE
+        self._httpbody_request = input_type == _HTTPBODY_TYPE
         # Map the request's google.api.http selectors (proto names) onto the
         # JSON keys the default proto3 mapping emits, so json_name is honored.
         if input_type:
@@ -166,11 +173,19 @@ class HTTPDynamicHandler:
             binding.resolve_fields(req_desc)
 
     async def __call__(self, request, _context):
-        # Default JSON mapping → honors json_name / lowerCamelCase on the wire.
-        # The binding's selectors were translated to these JSON keys at bind time
-        # (resolve_fields), so path/body/query all line up against this dict.
-        args = json_format.MessageToDict(request)
-        body_bytes, base_target = self._binding.build(args, self._base_url)
+        req_content_type: str | None = None
+        if self._httpbody_request:
+            # google.api.HttpBody request: send the raw `data` bytes verbatim
+            # with its declared content_type — no JSON mapping.
+            body_bytes = request.data or None
+            _, base_target = self._binding.build({}, self._base_url)
+            req_content_type = request.content_type or None
+        else:
+            # Default JSON mapping → honors json_name / lowerCamelCase on the
+            # wire. The binding's selectors were translated to these JSON keys
+            # at bind time (resolve_fields), so path/body/query all line up.
+            args = json_format.MessageToDict(request)
+            body_bytes, base_target = self._binding.build(args, self._base_url)
         attempt = 0
         client = self._ensure_client()
 
@@ -179,6 +194,8 @@ class HTTPDynamicHandler:
             # header auth are recomputed so a retry re-signs with a fresh stamp.
             target = self._apply_query_provider(base_target, body_bytes)
             headers = self._build_headers(target, body_bytes)
+            if req_content_type:
+                headers["Content-Type"] = req_content_type
 
             try:
                 response = await client.request(
@@ -211,6 +228,16 @@ class HTTPDynamicHandler:
                 )
 
             self._observe_response(raw, response.status_code, target, body_bytes)
+
+            if self._httpbody_response:
+                # Return the raw body verbatim in a google.api.HttpBody — for
+                # endpoints whose payload isn't worth modeling as a message.
+                out = self._resp_class()
+                out.data = raw
+                content_type = response.headers.get("content-type")
+                if content_type:
+                    out.content_type = content_type
+                return out
 
             out = self._resp_class()
             if raw.strip():

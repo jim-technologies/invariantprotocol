@@ -8,6 +8,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
 
+## v0.2.7 — 2026-06-01
+
+### Added
+
+- **`google.api.HttpBody` request/response support in `connect_http` (Python).**
+  An RPC whose response type is `google.api.HttpBody` receives the raw, undecoded
+  body bytes in `data` (and the MIME type in `content_type`) with no JSON↔proto
+  mapping — the escape hatch for endpoints whose payload isn't worth modeling as
+  a message. Symmetrically, an `HttpBody` request sends its `data` bytes verbatim
+  with `content_type`. Other response types are unchanged.
+
 ## v0.2.6 — 2026-06-01
 
 ### Added
