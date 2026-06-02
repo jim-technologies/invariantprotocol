@@ -115,7 +115,10 @@ class HTTPClientBinding:
             else:
                 parts.append(seg.literal)
 
-        return "/" + "/".join(parts), consumed
+        path = "/" + "/".join(parts)
+        if self.template.trailing_slash:
+            path += "/"
+        return path, consumed
 
     def _build_body(self, args: dict[str, Any]) -> tuple[bytes | None, str | None]:
         if self.body == "":
@@ -433,11 +436,15 @@ class _PathSegment:
 @dataclass
 class _PathTemplate:
     segments: list[_PathSegment]
+    trailing_slash: bool = False
 
     @classmethod
     def parse(cls, pattern: str) -> _PathTemplate:
         if not pattern.startswith("/"):
             raise ValueError("path must start with '/'")
+        # Preserve a trailing slash (e.g. "/questions/") — some APIs (Django
+        # REST) 301-redirect or 404 without it.
+        trailing = len(pattern) > 1 and pattern.endswith("/")
         trimmed = pattern.strip("/")
         if not trimmed:
             return cls(segments=[])
@@ -463,7 +470,7 @@ class _PathTemplate:
                     continue
                 raise ValueError(f"unsupported wildcard pattern {wildcard!r}")
             segments.append(_PathSegment(literal=raw))
-        return cls(segments=segments)
+        return cls(segments=segments, trailing_slash=trailing)
 
 
 def _clone_map(data: dict[str, Any]) -> dict[str, Any]:

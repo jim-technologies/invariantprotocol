@@ -115,7 +115,7 @@ def _is_async_callable(fn: Any) -> bool:
 
 
 _SERVER_NAME = "invariant-protocol"
-_SERVER_VERSION = "0.2.7"
+_SERVER_VERSION = "0.2.8"
 
 
 class Server:

@@ -111,6 +111,19 @@ def test_http_client_binding_query_wrapper_does_not_override_explicit_fields():
     assert params["limit"] == ["3"]
 
 
+def test_http_client_binding_preserves_trailing_slash():
+    # APIs like Django REST need the trailing slash (else 301/404).
+    _b, url = HTTPClientBinding.new("GET", "/questions/", "").build(
+        {}, "https://api.example.com"
+    )
+    assert url == "https://api.example.com/questions/"
+    # ... but a path without one stays without one.
+    _b2, url2 = HTTPClientBinding.new("GET", "/questions", "").build(
+        {}, "https://api.example.com"
+    )
+    assert url2 == "https://api.example.com/questions"
+
+
 def _json_name_request_type():
     """Compile, at runtime, a request message exercising json_name:
     string user_id = 1;                               -> "userId" (default)

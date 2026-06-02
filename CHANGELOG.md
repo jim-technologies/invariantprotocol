@@ -8,6 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
 
+## v0.2.8 — 2026-06-01
+
+### Fixed
+
+- **`connect_http` preserves a trailing slash in the path (Python).** A
+  google.api.http path like `get: "/questions/"` now produces a request to
+  `/questions/` instead of `/questions` — required by APIs (e.g. Django REST
+  Framework) that 301-redirect or 404 without it. The root path `"/"` and
+  slash-less paths are unaffected.
+
 ## v0.2.7 — 2026-06-01
 
 ### Added
