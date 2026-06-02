@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: /nix/store
           key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: /nix/store
           key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
@@ -50,7 +50,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: /nix/store
           key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
