@@ -67,7 +67,7 @@ class _InvariantHandler(grpc.GenericRpcHandler):
                         yield msg
                 except Exception as e:
                     err = as_invariant_error(e)
-                    await context.abort(err.code, err.message)
+                    await context.abort(err.code, err.message, trailing_metadata=err.grpc_trailing_metadata())
 
             return grpc.unary_stream_rpc_method_handler(
                 stream_handler,
@@ -80,7 +80,7 @@ class _InvariantHandler(grpc.GenericRpcHandler):
                 return await server._invoke(tool, request, context)
             except Exception as e:
                 err = as_invariant_error(e)
-                await context.abort(err.code, err.message)
+                await context.abort(err.code, err.message, trailing_metadata=err.grpc_trailing_metadata())
 
         return grpc.unary_unary_rpc_method_handler(
             handler,

@@ -1,12 +1,82 @@
 # Changelog
 
-All notable changes to this project are documented here. Versions track all
-three implementations (Go, Python, Rust) in lockstep so consumers pinning to
-a tag get the same feature set across languages.
+All notable changes to this project are documented here. Versions are tagged
+repo-wide; entries call out implementation scope when a feature has not reached
+all three implementations yet.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
+
+## v0.3.0 — 2026-07-03
+
+### Changed
+
+- **Python `connect_http` now uses per-connection transport policy.** The new
+  shape is:
+  `server.connect_http(base_url, auth=..., service_config=..., options=ChannelOptions(...), observer=...)`.
+  One pooled `httpx.AsyncClient` is created per connection and shared by every
+  registered HTTP-proxy handler from that call.
+- **Retries now come from gRPC service config.** `retry_policy` supports
+  `max_attempts`, `initial_backoff`, `max_backoff`, `backoff_multiplier`, and
+  `retryable_status_codes` in gRPC code space. `method_config.name: [{}]` is
+  the gRPC wildcard default. Retryable status codes may be names or enum
+  numbers, including `UNKNOWN`, so unmapped HTTP statuses can be retried
+  deliberately. HTTP responses are mapped to gRPC status codes before retry
+  selection; HTTP 502 now maps to `UNAVAILABLE` instead of `UNKNOWN`. Invalid
+  configs fail loudly at `connect_http()` with `ValueError`: duplicate
+  `method_config.name` entries are rejected, `retry_unsafe_methods` must be
+  boolean even when no retry policy is present, and `max_attempts` must be an
+  integer capped at gRPC's effective maximum of 5. Backoff uses gRPC A6 full
+  jitter. HTTP `Retry-After` is honored exactly when it is within `max_backoff`
+  and resets the exponential backoff state; if the server pushback exceeds
+  `max_backoff`, Invariant stops retrying and surfaces `RetryInfo` with the
+  server's requested delay. The only transcoding-specific extension is
+  `retry_unsafe_methods`, defaulting off.
+- **Outbound HTTP errors now carry standard `google.rpc` details.** HTTP
+  failures include `ErrorInfo`, `RetryInfo` when pushback is present, and
+  `QuotaFailure` for rate-limit/quota exhaustion. Every remote detail dict is
+  preserved in Connect/MCP/CLI JSON payloads; details that resolve as protobuf
+  `Any` values also flow through gRPC rich status trailers. The `Retry-After`
+  header drives retry scheduling, while a remote body `RetryInfo` wins in the
+  surfaced error details.
+- **`google.api.HttpBody` proxying is now production-strength.** HttpBody
+  responses send `Accept: */*`, follow redirects, stream through
+  `ChannelOptions.max_receive_message_size` while reading, preserve
+  `content_type`, and participate in the same retry and observer path as JSON
+  responses. Redirect following is fixed on for HttpBody responses, and
+  response headers are surfaced to observers rather than copied onto the
+  returned `HttpBody`.
+- **Response observers now fire for success and error HTTP responses.**
+  `OutboundHTTPResponse` now includes `headers`, `duration_ms`, and `success`.
+
+### Removed
+
+- **Python server-global outbound HTTP hooks were removed.** These methods no
+  longer exist: `use_http_header_provider`, `use_http_query_provider`, and
+  `use_http_response_observer`.
+
+Migration mapping:
+
+| v0.2.x | v0.3.0 |
+|--------|--------|
+| `server.use_http_header_provider(fn); server.connect_http(url)` | `server.connect_http(url, auth=fn)` or `auth=HTTPAuth(header_provider=fn)` |
+| `server.use_http_query_provider(fn); server.connect_http(url)` | `server.connect_http(url, auth=HTTPAuth(query_provider=fn))` |
+| `server.use_http_response_observer(fn); server.connect_http(url)` | `server.connect_http(url, observer=fn)` |
+| `server.connect_http(url, timeout=30.0)` | `server.connect_http(url, options=ChannelOptions(connect_timeout=30.0, read_timeout=30.0))` |
+| Built-in GET/HEAD retries on `429`/`5xx` | Add `service_config={"method_config": [{"name": [...], "retry_policy": {...}}]}` |
+| Retrying POST/PUT/PATCH/DELETE impossible | Add `retry_unsafe_methods: True` on that method config |
+
+### Added
+
+- **Python `ChannelOptions`.** Supports `max_receive_message_size`,
+  connect/read/write/pool timeout split, pool limits, keepalive expiry, proxy
+  URL, and optional HTTP/2. `socks5://` proxy URLs require HTTPX's SOCKS extra
+  in the application environment.
+- **Python `HTTPAuth`.** Holds per-connection header and query providers; both
+  run once per attempt so signatures and timestamps stay fresh after retries.
+- **Go/Rust parity is a follow-up.** Go still has `UseHTTPHeaderProvider`, and
+  Rust has no matching outbound HTTP transport-policy layer in this release.
 
 ## v0.2.8 — 2026-06-01
 

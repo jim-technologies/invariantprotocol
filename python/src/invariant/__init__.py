@@ -1,6 +1,8 @@
 from invariant.errors import InvariantError
 from invariant.server import (
+    ChannelOptions,
     Handler,
+    HTTPAuth,
     HTTPHeaderProvider,
     HTTPQueryProvider,
     HTTPResponseObserver,
@@ -16,6 +18,8 @@ from invariant.server import (
 from invariant.validation import validation, validation_stream
 
 __all__ = [
+    "ChannelOptions",
+    "HTTPAuth",
     "HTTPHeaderProvider",
     "HTTPQueryProvider",
     "HTTPResponseObserver",

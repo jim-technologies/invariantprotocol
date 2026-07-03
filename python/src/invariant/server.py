@@ -20,6 +20,7 @@ from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
 from invariant.descriptor import ParsedDescriptor
 from invariant.schema import SchemaGenerator
+from invariant.version import package_version
 
 # --- Interceptor types (mirrors gRPC pattern, zero coupling to grpc package) ---
 
@@ -79,15 +80,49 @@ class OutboundHTTPResponse:
 
     method_path: str
     status_code: int
+    headers: dict[str, str]
     body: bytes
+    duration_ms: float
+    success: bool
     request: OutboundHTTPRequest
 
 
-# Called once per successful outbound response, after the bytes are received and
-# before they are parsed into the typed message. Side-effecting (archival/
-# metrics); its return value is ignored and exceptions are swallowed so an
-# observer can never break the call path.
+# Called once per outbound HTTP response, success or error, after bytes are
+# received and before success bodies are parsed into typed messages.
+# Side-effecting (archival/metrics); its return value is ignored and exceptions
+# are swallowed so an observer can never break the call path.
 HTTPResponseObserver = Callable[[OutboundHTTPResponse], None]
+
+
+@dataclass(slots=True)
+class HTTPAuth:
+    """Per-connection outbound HTTP credentials.
+
+    Providers are called once per attempt with the fully-built request so
+    signatures and timestamps stay fresh across retries.
+    """
+
+    header_provider: HTTPHeaderProvider | None = None
+    query_provider: HTTPQueryProvider | None = None
+
+
+@dataclass(slots=True)
+class ChannelOptions:
+    """Transport options for ``connect_http``.
+
+    Names mirror gRPC channel args where there is a direct HTTP-client analog.
+    """
+
+    max_receive_message_size: int = 16 * 1024 * 1024
+    connect_timeout: float = 10.0
+    read_timeout: float = 10.0
+    write_timeout: float = 10.0
+    pool_timeout: float = 10.0
+    max_connections: int = 100
+    max_keepalive_connections: int = 20
+    keepalive_expiry: float = 5.0
+    proxy: str | None = None
+    http2: bool = False
 
 
 @dataclass(slots=True)
@@ -115,7 +150,7 @@ def _is_async_callable(fn: Any) -> bool:
 
 
 _SERVER_NAME = "invariant-protocol"
-_SERVER_VERSION = "0.2.8"
+_SERVER_VERSION = package_version()
 
 
 class Server:
@@ -135,11 +170,9 @@ class Server:
         self.tools: dict[str, Tool] = {}
         self._fds = fds
         self._channels: list[grpc.aio.Channel] = []
+        self._http_connections: list[Any] = []
         self._interceptors: list[Interceptor] = []
         self._stream_interceptors: list[StreamInterceptor] = []
-        self._http_header_provider: HTTPHeaderProvider | None = None
-        self._http_query_provider: HTTPQueryProvider | None = None
-        self._http_response_observer: HTTPResponseObserver | None = None
         # Body-size safety caps. Defaults are tight; raise per-server when the
         # application has a legitimate need (e.g. accepting large uploads).
         # Mirrors Go's `httpMaxUnaryRequest` / `connectStreamMaxRequest` fields.
@@ -234,28 +267,6 @@ class Server:
                 "(declared with `async def` and `yield`)."
             )
         self._stream_interceptors.append(interceptor)
-
-    def use_http_header_provider(self, provider: HTTPHeaderProvider | None) -> None:
-        """Set optional dynamic headers for outbound ConnectHTTP requests."""
-        self._http_header_provider = provider
-
-    def use_http_query_provider(self, provider: HTTPQueryProvider | None) -> None:
-        """Set optional dynamic query params for outbound ConnectHTTP requests.
-
-        For venues that authenticate via the query string (API key, or an HMAC
-        signature + timestamp signed over the request). Symmetric to
-        ``use_http_header_provider``; both may be set at once.
-        """
-        self._http_query_provider = provider
-
-    def use_http_response_observer(self, observer: HTTPResponseObserver | None) -> None:
-        """Set an optional observer of raw outbound ConnectHTTP responses.
-
-        The observer receives the verbatim response bytes before parsing, for
-        side effects like archiving a raw/bronze data tier. Its return value is
-        ignored and exceptions are swallowed.
-        """
-        self._http_response_observer = observer
 
     # -- Public API: invocation core --
 
@@ -534,7 +545,10 @@ class Server:
         base_url: str,
         service_name: str | None = None,
         *,
-        timeout: float = 10.0,
+        auth: HTTPAuth | HTTPHeaderProvider | None = None,
+        service_config: dict[str, Any] | None = None,
+        options: ChannelOptions | None = None,
+        observer: HTTPResponseObserver | None = None,
     ) -> None:
         """Connect to a remote HTTP service and register its methods as tools.
 
@@ -545,6 +559,7 @@ class Server:
             raise ValueError("connect_http requires Server.from_descriptor() or Server.from_bytes().")
 
         from invariant.http_client import (
+            HTTPConnection,
             HTTPDynamicHandler,
             client_binding_for_method,
             http_rules_by_method_path,
@@ -559,6 +574,14 @@ class Server:
         else:
             services = self.parsed.services
         rules = http_rules_by_method_path(self._fds)
+        connection = HTTPConnection(
+            base_url=base_url,
+            auth=auth,
+            service_config=service_config,
+            options=options,
+            observer=observer,
+        )
+        self._http_connections.append(connection)
 
         for svc_full_name, svc_info in services.items():
             for method_name, method_info in svc_info.methods.items():
@@ -571,15 +594,11 @@ class Server:
                 method_path = f"/{svc_full_name}/{method_name}"
                 binding = client_binding_for_method(rules.get(method_path), svc_full_name, method_name)
                 handler = HTTPDynamicHandler(
-                    base_url=base_url,
+                    connection=connection,
                     binding=binding,
                     output_type=method_info.output_type,
-                    timeout=timeout,
                     method_path=method_path,
-                    header_provider=self._http_header_provider,
                     input_type=method_info.input_type,
-                    response_observer=self._http_response_observer,
-                    query_provider=self._http_query_provider,
                 )
 
                 tool_name = f"{svc_info.name}.{method_name}"
@@ -798,6 +817,9 @@ class Server:
         for ch in self._channels:
             await ch.close()
         self._channels.clear()
+        for conn in self._http_connections:
+            await conn.aclose()
+        self._http_connections.clear()
         for tool in self.tools.values():
             aclose = getattr(tool.handler, "aclose", None)
             if aclose is not None:

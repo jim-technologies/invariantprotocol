@@ -403,7 +403,7 @@ wheels = [
 
 [[package]]
 name = "invariant-protocol"
-version = "0.2.8"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "googleapis-common-protos" },

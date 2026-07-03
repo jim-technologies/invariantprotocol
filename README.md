@@ -120,7 +120,11 @@ POST /v1/users
 
 Write the comment once. It appears everywhere — typed, validated, with enums, required fields, and descriptions.
 
-## The API
+## Python API
+
+Python spelling is shown here. Go and Rust keep their existing shape-mirrored
+APIs; the Python `connect_http` transport-policy surface is slated for
+Go/Rust parity in a follow-up.
 
 ```
 from_descriptor("descriptor.binpb")   # load proto descriptor
@@ -128,11 +132,11 @@ from_bytes(raw_bytes)                 # load from embedded bytes
 
 register(servicer)                    # wire your implementation (Python: async)
 connect("host:port")                  # or proxy to a remote gRPC server (unary only)
-connect_http("https://api.example")   # or proxy to a remote HTTP service (unary only)
+connect_http("https://api.example",    # or proxy to a remote HTTP service (unary only)
+    auth=..., service_config=..., options=..., observer=...)
 
 use(interceptor)                      # add middleware on unary RPCs
 use_stream(interceptor)               # add middleware on server-streaming RPCs
-use_http_header_provider(fn)          # optional per-request outbound HTTP auth/signing
 
 invoke(name, request)                 # in-process unary dispatch by tool name
 invoke_stream(name, request)          # in-process server-streaming dispatch
@@ -257,16 +261,21 @@ Signed HTTP requests (dynamic headers per request):
 ```go
 srv.UseHTTPHeaderProvider(func(ctx context.Context, req *invariant.OutboundHTTPRequest) (map[string]string, error) {
     // Example only: replace with real signing logic.
-    return map[string]string{"X-Polymarket-Signature": sign(req.Method, req.URL, req.Body)}, nil
+    return map[string]string{"X-Example-Signature": sign(req.Method, req.URL, req.Body)}, nil
 })
 ```
 
 ```python
+from invariant import HTTPAuth
+
 def sign_headers(req):
     # Example only: replace with real signing logic.
-    return {"X-Polymarket-Signature": sign(req.method, req.url, req.body)}
+    return {"X-Example-Signature": sign(req.method, req.url, req.body)}
 
-server.use_http_header_provider(sign_headers)
+server.connect_http(
+    "https://api.example.com",
+    auth=HTTPAuth(header_provider=sign_headers),
+)
 ```
 
 ## Remote HTTP proxy (`connect_http`)
@@ -296,10 +305,37 @@ deps:
 Then `buf dep update`. The client uses:
 
 - The primary binding (or canonical fallback if no annotation).
-- Built-in timeout, safe retries on `429`/`5xx` for `GET`/`HEAD` (incl. `Retry-After`).
-- Optional `UseHTTPHeaderProvider` / `use_http_header_provider` for per-request signing.
+- One pooled `httpx.AsyncClient` per Python `connect_http()` connection.
+- gRPC service-config retry policy in gRPC code space:
+  `max_attempts`, `initial_backoff`, `max_backoff`,
+  `backoff_multiplier`, `retryable_status_codes`. A `method_config` name of
+  `{}` is the gRPC wildcard default; service and method entries out-rank it.
+  Status codes may be names or enum numbers, including `UNKNOWN`. Invalid
+  retry config raises `ValueError` at `connect_http()` time; duplicate names,
+  non-boolean `retry_unsafe_methods`, and non-integer `max_attempts` are
+  rejected, and `max_attempts` is capped at gRPC's effective maximum of 5. HTTP
+  `Retry-After` is treated as retry pushback: values up to `max_backoff` are
+  honored exactly and reset the A6 backoff schedule, while values above
+  `max_backoff` stop retrying and surface `RetryInfo` to the caller. The
+  transcoding extension `retry_unsafe_methods` opts a method into retrying
+  non-GET/HEAD HTTP verbs.
+- Optional per-connection `HTTPAuth` providers for header and query signing.
+- Optional per-connection response observer called for successful and error
+  HTTP responses with raw bytes, headers, duration, and success status.
+- `ChannelOptions` for receive size cap, connect/read/write/pool timeouts,
+  keepalive/pool limits, proxy URL, and HTTP/2. `socks5://` proxy URLs require
+  installing HTTPX's SOCKS extra in the application environment.
+- `google.api.HttpBody` responses send `Accept: */*`, follow redirects, stream through
+  `max_receive_message_size` while reading, and set `content_type`; response
+  headers are available to the observer, not on the returned `HttpBody`.
 - `INVARIANT_HTTP_HEADER_<NAME>=value` env injection (e.g. `INVARIANT_HTTP_HEADER_AUTHORIZATION="Bearer ..."`).
-- Tolerant error parsing: accepts both Connect-style (`{"code": "invalid_argument", ...}`) and legacy wrapped (`{"error": {...}}`).
+- Tolerant error parsing: accepts both Connect-style
+  (`{"code": "invalid_argument", ...}`) and legacy wrapped
+  (`{"error": {...}}`). All remote detail dicts are preserved in JSON error
+  payloads; details that resolve as protobuf `Any` values are also emitted in
+  gRPC rich-status trailers. `Retry-After` drives retry scheduling, while a
+  remote body `RetryInfo` takes precedence in surfaced error details. HTTP 502
+  maps to `UNAVAILABLE`.
 
 ## Server-streaming
 

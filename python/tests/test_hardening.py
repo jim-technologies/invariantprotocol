@@ -14,9 +14,29 @@ import pytest
 import pytest_asyncio
 from conftest import DESCRIPTOR_PATH
 
-from invariant import InvariantError, Server
+from invariant import ChannelOptions, InvariantError, Server
 
 # -- HTTP unary body-size limit. --
+
+
+def test_invariant_error_materializes_detail_generators_for_payload_and_trailers():
+    from google.protobuf import duration_pb2
+    from google.rpc import error_details_pb2
+
+    def details():
+        yield error_details_pb2.RetryInfo(retry_delay=duration_pb2.Duration(seconds=3))
+
+    err = InvariantError(grpc.StatusCode.UNAVAILABLE, "retry later", details())
+
+    assert err.to_payload()["details"] == [
+        {
+            "@type": "type.googleapis.com/google.rpc.RetryInfo",
+            "retryDelay": "3s",
+        }
+    ]
+    status = err.to_status_proto()
+    assert len(status.details) == 1
+    assert status.details[0].Is(error_details_pb2.RetryInfo.DESCRIPTOR)
 
 
 @pytest_asyncio.fixture
@@ -390,7 +410,7 @@ async def test_connect_http_rejects_oversized_upstream_response():
     """A proxied REST upstream returning a huge body must not OOM the server."""
     import uvicorn
 
-    from invariant.http_client import _HTTP_CLIENT_MAX_RESPONSE_BYTES
+    max_receive = 1024
 
     # Tiny ASGI app: respond to anything with a giant JSON body.
     async def big_app(scope, receive, send):
@@ -409,7 +429,7 @@ async def test_connect_http_rejects_oversized_upstream_response():
             m = await receive()
             if not m.get("more_body", False):
                 break
-        filler = "x" * (_HTTP_CLIENT_MAX_RESPONSE_BYTES + 1024)
+        filler = "x" * (max_receive + 1024)
         body = ('{"message":"' + filler + '"}').encode()
         await send(
             {
@@ -434,7 +454,7 @@ async def test_connect_http_rejects_oversized_upstream_response():
         port = upstream.servers[0].sockets[0].getsockname()[1]
 
         srv = Server.from_descriptor(DESCRIPTOR_PATH)
-        srv.connect_http(f"http://127.0.0.1:{port}")
+        srv.connect_http(f"http://127.0.0.1:{port}", options=ChannelOptions(max_receive_message_size=max_receive))
         try:
             with pytest.raises(InvariantError) as exc:
                 await srv.invoke("GreetService.Greet", greet_pb2.GreetRequest(name="x"))
