@@ -1,0 +1,41 @@
+{
+  "name": "@jim-technologies/invariant-protocol",
+  "version": "0.4.0",
+  "description": "Project gRPC services into MCP, CLI, HTTP/Connect, and gRPC interfaces from proto descriptors",
+  "type": "module",
+  "main": "./typescript/dist/index.js",
+  "types": "./typescript/dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./typescript/dist/index.d.ts",
+      "import": "./typescript/dist/index.js"
+    }
+  },
+  "files": [
+    "typescript/dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepare": "npm --prefix typescript ci && npm --prefix typescript run build"
+  },
+  "keywords": [
+    "grpc",
+    "protobuf",
+    "mcp",
+    "connect"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/jim-technologies/invariantprotocol.git"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.12.1",
+    "@connectrpc/connect": "^2.1.2",
+    "@connectrpc/connect-node": "^2.1.2",
+    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/proto-loader": "^0.8.1",
+    "@grpc/reflection": "^1.0.4"
+  }
+}

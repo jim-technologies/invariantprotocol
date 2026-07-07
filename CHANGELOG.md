@@ -8,6 +8,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
 
+## v0.4.0 — 2026-07-07
+
+### Added
+
+- **TypeScript runtime.** Added a descriptor-driven Node package under
+  `typescript/` using Protobuf-ES dynamic descriptors. It supports local
+  servicer registration, unary and server-streaming `invoke`, unary and stream
+  interceptors, JSON Schema/tool catalogs, CLI helpers, MCP dispatch including
+  `POST /mcp`, remote gRPC proxying, remote HTTP proxying, Connect-ES powered
+  HTTP/Connect routes, and grpc-js serving with reflection.
+- **Default `make help` target.** The top-level Makefile now follows the
+  Medallion-wide convention: plain `make` and `make help` list available
+  targets.
+- **Python `invariant-check-proto-comments` CLI.** Downstream services can run
+  it against `descriptor.binpb` in CI to enforce comments on services, RPCs,
+  messages, fields, enums, and enum values before projecting them into MCP,
+  CLI, HTTP, or gRPC catalogs.
+
+### Documented
+
+- **Descriptor generation now explicitly requires source info.** The README
+  uses `buf build --include-source-info -o descriptor.binpb` as the canonical
+  downstream command and explains why stripping `SourceCodeInfo` breaks
+  projected descriptions.
+
 ## v0.3.0 — 2026-07-03
 
 ### Changed

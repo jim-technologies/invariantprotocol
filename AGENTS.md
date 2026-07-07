@@ -19,7 +19,8 @@ The core idea: proto comments become tool descriptions, field comments become JS
 .proto → buf build → descriptor.binpb → Invariant runtime → MCP / CLI / HTTP / gRPC
 ```
 
-Both Go and Python implementations follow the same flow:
+Go, Python, Rust, and TypeScript implementations follow the same flow where
+their runtime surface exists:
 
 1. **Descriptor parsing** (`descriptor.go` / `descriptor.py`) — extract services, methods, messages, enums, and source comments from `FileDescriptorSet`
 2. **Schema generation** (`schema.go` / `schema.py`) — convert proto message types to JSON Schema
@@ -29,7 +30,23 @@ Both Go and Python implementations follow the same flow:
 
 ### Shape mirror, not literal mirror
 
-Go and Python share the same 8-method API and the same dispatch pipeline, but the implementations are **idiomatic per language**. Python is async end-to-end; Go is sync (goroutines + sync function signatures). Don't try to keep them literally identical when the language idiom differs. Prefer language-native patterns over forced symmetry.
+Go, Python, Rust, and TypeScript share the same dispatch pipeline, but the
+implementations are **idiomatic per language**. Python and TypeScript are async
+end-to-end; Go is sync (goroutines + sync function signatures). Don't try to
+keep them literally identical when the language idiom differs. Prefer
+language-native patterns over forced symmetry.
+
+### TypeScript
+
+The TypeScript package in `typescript/` is a descriptor-driven Node runtime. Its
+HTTP/RPC projection uses Connect-ES (`@connectrpc/connect` +
+`@connectrpc/connect-node`) with runtime Protobuf-ES descriptors, not generated
+server stubs. It supports local servicer registration, remote gRPC proxying via
+`connect()`, remote HTTP proxying via `connectHttp()`, unary and
+server-streaming `invoke`, unary and stream interceptors, JSON Schema/tool
+catalogs, CLI helpers, MCP dispatch including `POST /mcp`, Node HTTP/Connect
+JSON/proto + streaming envelopes, and grpc-js serving with reflection. Python
+still has the richest HTTP retry and `google.api.HttpBody` handling.
 
 ### Async-native Python (load-bearing)
 
@@ -176,11 +193,12 @@ make generate  # regenerate proto stubs
 
 ## Dependency boundaries
 
-Three lockfiles:
+Four lockfiles:
 
 - **`.flox/env/manifest.toml`** — language toolchains and CLI tools (`python3`, `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`). May also pin nix-built Python packages when uv would otherwise need a C toolchain inside the flox sandbox.
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev dep. `uv run` resolves against this.
 - **`go/go.mod` + `go/go.sum`** — every Go dep.
+- **`typescript/package.json` + `typescript/package-lock.json`** — every TypeScript runtime and dev dep. `npm ci` resolves against this.
 
 CI (`.github/workflows/ci.yml`) runs everything inside `flox activate`, so contributors and CI hit the same toolchain by construction.
 

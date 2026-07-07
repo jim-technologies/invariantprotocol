@@ -5,6 +5,10 @@ __pycache__/
 dist/
 .venv/
 
+# JavaScript / TypeScript
+node_modules/
+coverage/
+
 # Caches
 .pytest_cache/
 .ruff_cache/

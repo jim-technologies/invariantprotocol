@@ -48,7 +48,7 @@ The framework treats **gRPC as the canonical surface** and every other protocol 
 - **Reflection**: `grpc.reflection.v1.ServerReflection` auto-registered in all three languages. `grpcurl`, Buf Studio, Connect debug clients all work out of the box.
 - **Deadlines + cancellation**: gRPC-native via context (Go / Rust) / asyncio (Python). Connect-Timeout-Ms is just the HTTP carrier for the same deadline.
 
-ConnectRPC is the **first-class HTTP translation** of gRPC — same semantics, just over plain HTTP/1.1 or HTTP/2 instead of strict HTTP/2-with-prior-knowledge. We hand-roll the Connect protocol on top of axum/Go's net-http/Python's ASGI because (a) it's small, and (b) we want the same descriptor-driven dispatch that drives gRPC. We do NOT depend on any per-service codegen Connect library (`connectrpc` crate in Rust, etc.) — that would contradict the descriptor-driven stance.
+ConnectRPC is the **first-class HTTP translation** of gRPC — same semantics, just over plain HTTP/1.1 or HTTP/2 instead of strict HTTP/2-with-prior-knowledge. Go, Python, and Rust hand-roll the small Connect protocol surface so the same descriptor-driven dispatch drives every projection. TypeScript uses Connect-ES (`@connectrpc/connect` + `@connectrpc/connect-node`) because its router accepts runtime Protobuf-ES descriptors, so we keep the no-generated-server-stubs design while using the modern Node Connect stack.
 
 MCP and CLI are also gRPC translations: MCP `tools/call` is unary gRPC dispatch with a JSON envelope; CLI is unary or streaming gRPC dispatch with stdout output. Switching transports is a client config change, not a code change.
 
@@ -63,6 +63,32 @@ MCP and CLI are also gRPC translations: MCP `tools/call` is unary gRPC dispatch 
                           ┌──────┬──────┼──────┐
                           MCP    CLI   HTTP   gRPC
 ```
+
+## Descriptor contract
+
+Invariant reads tool descriptions, field descriptions, enum choices, and gRPC
+reflection data from a `FileDescriptorSet`. Build it with source information
+intact:
+
+```bash
+buf build --include-source-info -o descriptor.binpb
+```
+
+`--include-source-info` is required. Without it, proto comments are stripped
+from the descriptor, so MCP/CLI/HTTP catalogs lose the descriptions agents and
+humans rely on.
+
+Downstream services can enforce the comment contract in CI with the packaged
+checker:
+
+```bash
+invariant-check-proto-comments descriptor.binpb
+```
+
+It checks services, RPCs, messages, fields, enums, and enum values. Common
+dependency protos under `google/**` and `buf/**` are skipped by default; use
+`--include` or `--exclude` globs if your descriptor contains extra imported
+files.
 
 ## Your proto comments become everything
 
@@ -122,9 +148,9 @@ Write the comment once. It appears everywhere — typed, validated, with enums, 
 
 ## Python API
 
-Python spelling is shown here. Go and Rust keep their existing shape-mirrored
-APIs; the Python `connect_http` transport-policy surface is slated for
-Go/Rust parity in a follow-up.
+Python spelling is shown here. Go, Rust, and TypeScript keep shape-mirrored
+APIs where their runtimes support the same surface; the Python `connect_http`
+transport-policy surface is slated for Go/Rust parity in a follow-up.
 
 ```
 from_descriptor("descriptor.binpb")   # load proto descriptor
@@ -145,7 +171,7 @@ serve(...)                            # start projections (blocking)
 stop()                                # cleanup
 ```
 
-The two implementations are **shape mirrors** — same surface, idiomatic per language. Python is async-native end-to-end (sync handlers are rejected at `register()` time). Go stays sync. There is no async/sync compatibility layer.
+The implementations are **shape mirrors** — same surface where supported, idiomatic per language. Python and TypeScript are async-native (sync handlers are rejected at `register()` time). Go stays sync. There is no async/sync compatibility layer.
 
 ## Go
 
@@ -477,6 +503,44 @@ pip install "invariant-protocol @ git+https://github.com/jim-technologies/invari
 invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", branch = "main" }
 ```
 
+**TypeScript (source package):**
+```bash
+npm install "github:jim-technologies/invariantprotocol#v0.4.0"
+```
+
+## TypeScript
+
+The TypeScript runtime is descriptor-driven like the other implementations and uses `@bufbuild/protobuf` for dynamic messages. Its HTTP/RPC projection is powered by Connect-ES, not a custom Connect implementation. It supports local servicer registration, remote gRPC proxying via `connect()`, remote HTTP proxying via `connectHttp()`, unary and server-streaming `invoke`, unary and stream interceptors, JSON Schema tool catalogs, CLI helpers, MCP dispatch including `POST /mcp`, Node HTTP/Connect (`application/json`, `application/proto`, `application/connect+json`, `application/connect+proto`), and native grpc-js serving with reflection.
+
+`connectHttp()` supports the primary `google.api.http` binding plus canonical fallback, dynamic header/query auth hooks, response observers, and receive/deadline caps. Python still has the richest HTTP retry and `google.api.HttpBody` handling.
+
+```ts
+import { Server, serveHttp } from "@jim-technologies/invariant-protocol";
+
+class GreetServicer {
+  async Greet(request) {
+    return { message: `Hi ${request.name}` };
+  }
+
+  async *StreamGreet(request) {
+    for (let i = 0; i < (request.count || 1); i += 1) {
+      yield { message: `Hi ${request.name} #${i + 1}` };
+    }
+  }
+}
+
+const server = Server.fromDescriptor("descriptor.binpb");
+server.register(new GreetServicer());
+await serveHttp(server, 8080);
+
+// Or expose gRPC with reflection:
+await server.serveGrpc(50051);
+
+// Or proxy an existing service:
+server.connect("localhost:50051");
+server.connectHttp("https://api.example.com");
+```
+
 ## Rust
 
 The Rust implementation is descriptor-driven like the Go and Python ones — no per-service codegen, no generated traits. We do **not** depend on the `connectrpc` crate because its model is codegen-per-service, which conflicts with this stance. The Connect protocol is hand-rolled on top of `axum` + `tower`, exactly the way the Go and Python projections are.
@@ -513,7 +577,7 @@ Streaming, unary interceptors, and stream interceptors all flow through `use_int
 
 ## Requirements
 
-- `buf build --as-file-descriptor-set -o descriptor.binpb` (source info included by default)
+- `buf build --include-source-info -o descriptor.binpb`
 - Generated stubs for your language (`buf generate`)
 - For `connect_http` proxy mode with `google.api.http`, add Buf dep `buf.build/googleapis/googleapis`
 - For `Validation()` / `validation()`, add Buf dep `buf.build/bufbuild/protovalidate`

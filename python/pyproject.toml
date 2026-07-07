@@ -13,6 +13,9 @@ dependencies = [
     "protovalidate>=0.7",
 ]
 
+[project.scripts]
+invariant-check-proto-comments = "invariant.proto_comments:main"
+
 [dependency-groups]
 dev = [
     "pytest>=7.0",

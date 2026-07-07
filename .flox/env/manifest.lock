@@ -26,6 +26,9 @@
         "pkg-path": "python313Packages.grpcio-tools",
         "outputs": "all"
       },
+      "nodejs": {
+        "pkg-path": "nodejs"
+      },
       "protobuf": {
         "pkg-path": "python313Packages.protobuf",
         "version": ">=6.33.5",
@@ -909,6 +912,127 @@
         "dev": "/nix/store/1i5n40v8a3711nfb8cx40n1p08ibc7gq-python3.13-grpcio-tools-1.78.0-dev",
         "dist": "/nix/store/6yppcbx10jmakhkq2yrr3bghlc1pbnmi-python3.13-grpcio-tools-1.78.0-dist",
         "out": "/nix/store/pshdxwp230rqn3wn319q48kf5fgrpb1s-python3.13-grpcio-tools-1.78.0"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "nodejs",
+      "broken": false,
+      "derivation": "/nix/store/15casabz8n6il3myv53c3gwmazcjwjxf-nodejs-24.13.0.drv",
+      "description": "Event-driven I/O framework for the V8 JavaScript engine",
+      "install_id": "nodejs",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "nodejs-24.13.0",
+      "pname": "nodejs",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:47:01.039858Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "24.13.0",
+      "outputs_to_install": [
+        "out",
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/cx0jd5mwhn7ihryyv0qp9d33f8s1iwb7-nodejs-24.13.0"
+      },
+      "system": "aarch64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "nodejs",
+      "broken": false,
+      "derivation": "/nix/store/w9vyyxzm4d1y0y3qyazdcfnvp3yjx9rb-nodejs-24.13.0.drv",
+      "description": "Event-driven I/O framework for the V8 JavaScript engine",
+      "install_id": "nodejs",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "nodejs-24.13.0",
+      "pname": "nodejs",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:23:38.373304Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "24.13.0",
+      "outputs_to_install": [
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/8dsjz52869ygjd6xdvibgk3ysl3fg6zp-nodejs-24.13.0"
+      },
+      "system": "aarch64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "nodejs",
+      "broken": false,
+      "derivation": "/nix/store/2g4jab428j25rirdw7k5j8hwwfxp5x9v-nodejs-24.13.0.drv",
+      "description": "Event-driven I/O framework for the V8 JavaScript engine",
+      "install_id": "nodejs",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "nodejs-24.13.0",
+      "pname": "nodejs",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:04:16.048205Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "24.13.0",
+      "outputs_to_install": [
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/i9bak02hsrywwba0apxdn7ldvkf9jl6a-nodejs-24.13.0"
+      },
+      "system": "x86_64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "nodejs",
+      "broken": false,
+      "derivation": "/nix/store/gr41mppcarfhwk10hv2g6rdmgr2yq3hz-nodejs-24.13.0.drv",
+      "description": "Event-driven I/O framework for the V8 JavaScript engine",
+      "install_id": "nodejs",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "nodejs-24.13.0",
+      "pname": "nodejs",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:47:46.538112Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "24.13.0",
+      "outputs_to_install": [
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/sy0c7j0npsq33d9zhnnzvjnzc52f4y0p-nodejs-24.13.0"
       },
       "system": "x86_64-linux",
       "group": "toplevel",
