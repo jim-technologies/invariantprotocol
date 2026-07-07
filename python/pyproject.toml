@@ -4,7 +4,7 @@ version = "0.3.0"
 description = "Project gRPC services into MCP, CLI, and HTTP interfaces from proto descriptors"
 requires-python = ">=3.11"
 dependencies = [
-    "protobuf>=4.25.0",
+    "protobuf>=7.35.0",
     "grpcio>=1.60.0",
     "grpcio-reflection>=1.60.0",
     "googleapis-common-protos>=1.66.0",
