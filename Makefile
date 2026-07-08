@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help check lint fmt fmt-check test typecheck proto-comments audit bench generate deps verify-generate breaking
+.PHONY: help check lint fmt fmt-check test typecheck proto-comments public-surface audit bench generate deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
@@ -11,7 +11,7 @@ help: ## Show available make targets.
 # languages (Go, Python, Rust, TypeScript) plus proto/comment gates. CI runs
 # `flox activate -- make check` so contributors and CI hit the identical
 # toolchain and gates.
-check: fmt-check lint typecheck proto-comments test ## Run the canonical validation gate.
+check: fmt-check lint typecheck proto-comments public-surface test ## Run the canonical validation gate.
 
 typescript/node_modules/.package-lock.json: typescript/package-lock.json typescript/package.json
 	cd typescript && npm ci
@@ -34,6 +34,9 @@ typecheck: typescript/node_modules/.package-lock.json ## Run Python and TypeScri
 
 proto-comments: ## Verify projected proto comments are complete.
 	cd python && uv run invariant-check-proto-comments tests/proto/descriptor.binpb
+
+public-surface: ## Scan OSS-facing files for private/product-specific references.
+	python3 scripts/check_public_surface.py
 
 audit: ## Scan Python dependencies for known vulnerabilities.
 	# Python dependency CVE scan. The two ignored advisories are dev-only test

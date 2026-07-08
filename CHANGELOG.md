@@ -19,7 +19,7 @@ but never silent behaviour regressions.
   `POST /mcp`, remote gRPC proxying, remote HTTP proxying, Connect-ES powered
   HTTP/Connect routes, and grpc-js serving with reflection.
 - **Default `make help` target.** The top-level Makefile now follows the
-  Medallion-wide convention: plain `make` and `make help` list available
+  project convention: plain `make` and `make help` list available
   targets.
 - **Python `invariant-check-proto-comments` CLI.** Downstream services can run
   it against `descriptor.binpb` in CI to enforce comments on services, RPCs,
@@ -130,7 +130,7 @@ Migration mapping:
 
 - **`Server.use_http_query_provider` for `connect_http` (Python).** Symmetric to
   `use_http_header_provider`, but injects query-string parameters into each
-  outbound request — for venues that authenticate via the query string (a plain
+  outbound request — for APIs that authenticate via the query string (a plain
   API key, or an HMAC signature + timestamp signed over the request). The
   provider sees the fully-built request (existing query + body) so it can sign
   over it, and is re-run per retry so signatures/timestamps stay fresh. Both
@@ -145,7 +145,7 @@ Migration mapping:
   optional observer is called once per successful outbound response with the
   raw, undecoded body bytes (an `OutboundHTTPResponse`) before they are parsed
   into the typed message — so callers can archive the verbatim payload (e.g. a
-  raw/bronze data tier) independent of what the response message models. The
+  raw response archive) independent of what the response message models. The
   observer is best-effort: its return value is ignored and exceptions are
   suppressed so it can never break the call path. `OutboundHTTPResponse` and
   `HTTPResponseObserver` are exported alongside the existing
@@ -164,7 +164,7 @@ Migration mapping:
   `/v1/users/{user_id}` keeps working while a field declared
   `string time_in_force = 2 [json_name = "timeInForce"];` is sent as
   `timeInForce`. Single-word fields are unaffected. Set an explicit `json_name`
-  to pin any wire key (e.g. snake_case for venues that expect it).
+  to pin any wire key (e.g. snake_case for APIs that expect it).
 
 ## v0.2.3 — 2026-05-24
 
@@ -176,11 +176,11 @@ Migration mapping:
   rest of the service stays tightly capped. Zero-valued fields inherit
   the server-level setting; non-zero override per method.
 
-  Use case: ghdrive's Upload legitimately needs 1 GiB, but ListDir
+  Use case: `/files.v1.FileService/Upload` legitimately needs 1 GiB, but ListDir
   should reject anything over a few KiB. Before, you had to either
   raise the server-wide cap (and lose the safety on every other RPC)
   or write custom middleware. Now:
-  `srv.ConfigureMethod("/pkg.Service/Upload", invariant.MethodConfig{MaxUnaryRequestBytes: 1 << 30})`
+  `srv.ConfigureMethod("/files.v1.FileService/Upload", invariant.MethodConfig{MaxUnaryRequestBytes: 1 << 30})`
   and the rest of the surface stays bounded.
 
 ### Changed

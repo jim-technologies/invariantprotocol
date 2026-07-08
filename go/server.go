@@ -170,7 +170,7 @@ func (s *Server) SetMaxStreamRequestBytes(n int64) {
 //
 //	srv := invariant.ServerFromBytes(desc)
 //	srv.SetMaxUnaryRequestBytes(16 * 1024 * 1024)
-//	srv.ConfigureMethod("/ghdrive.v1.GhdriveService/Upload", invariant.MethodConfig{
+//	srv.ConfigureMethod("/files.v1.FileService/Upload", invariant.MethodConfig{
 //	    MaxUnaryRequestBytes: 1 << 30, // 1 GiB
 //	})
 //

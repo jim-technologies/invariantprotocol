@@ -62,8 +62,8 @@ class OutboundHTTPRequest:
 
 HTTPHeaderProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
 
-# Returns extra query parameters to add to an outbound request — for venues
-# that authenticate via the query string (an API key, or an HMAC signature +
+# Returns extra query parameters to add to an outbound request — for APIs that
+# authenticate via the query string (an API key, or an HMAC signature +
 # timestamp computed over the request). Sees the fully-built request so it can
 # sign over the existing query/body. Symmetric to HTTPHeaderProvider.
 HTTPQueryProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
@@ -75,7 +75,7 @@ class OutboundHTTPResponse:
 
     `body` is the raw, undecoded response bytes exactly as received — before any
     proto/JSON parsing — so an observer can archive the verbatim payload (e.g.
-    a raw/bronze data tier) independent of what the typed message models.
+    a raw response archive) independent of what the typed message models.
     """
 
     method_path: str
