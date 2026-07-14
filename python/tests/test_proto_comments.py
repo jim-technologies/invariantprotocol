@@ -39,7 +39,7 @@ def test_proto_comment_check_requires_source_info(tmp_path, capsys):
     assert exit_code == 1
     captured = capsys.readouterr()
     assert "example.proto" in captured.err
-    assert "buf build --include-source-info -o descriptor.binpb" in captured.err
+    assert "buf build -o descriptor.binpb" in captured.err
 
 
 def _minimal_descriptor() -> descriptor_pb2.FileDescriptorSet:

@@ -3,11 +3,11 @@
 
 mod common;
 
-use common::{greet, DESCRIPTOR_PATH};
+use common::{DESCRIPTOR_PATH, greet};
 use futures::StreamExt;
 use invariant::projections::{
     grpc::grpc_routes,
-    serve::{serve as serve_projections, Projection},
+    serve::{Projection, serve as serve_projections},
 };
 use invariant::{Code, Server, ServerStreamTx, Status};
 use prost_reflect::DynamicMessage;
@@ -116,7 +116,7 @@ async fn grpc_streaming_error_lands_in_trailer() {
     });
     let path: http::uri::PathAndQuery = "/greet.v1.GreetService/StreamGreet".parse().unwrap();
     let codec =
-        tonic::codec::ProstCodec::<greet::StreamGreetRequest, greet::GreetResponse>::default();
+        tonic_prost::ProstCodec::<greet::StreamGreetRequest, greet::GreetResponse>::default();
     let mut stream = client
         .server_streaming(req, path, codec)
         .await
@@ -179,7 +179,7 @@ async fn grpc_oversized_request_rejected() {
         ..Default::default()
     });
     let path: http::uri::PathAndQuery = "/greet.v1.GreetService/Greet".parse().unwrap();
-    let codec = tonic::codec::ProstCodec::<greet::GreetRequest, greet::GreetResponse>::default();
+    let codec = tonic_prost::ProstCodec::<greet::GreetRequest, greet::GreetResponse>::default();
     let err = client.unary(req, path, codec).await.unwrap_err();
     assert_eq!(err.code(), tonic::Code::ResourceExhausted);
 

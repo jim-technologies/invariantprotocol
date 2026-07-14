@@ -1,12 +1,13 @@
 //! Validation hook — Rust intentionally ships **no** built-in
 //! `protovalidate` interceptor.
 //!
-//! Why: the reflection-based Rust validator crates require `prost-reflect
-//! 0.16+` which pulls `prost 0.14` and forces a cascade through `tonic 0.14`
-//! and `axum 0.8`. That dep churn isn't "thin and simple", and the gRPC and
-//! Connect protocols themselves don't depend on validation. Users wanting
-//! `buf.validate` enforcement compose it via [`Server::use_interceptor`] /
-//! [`Server::use_stream_interceptor`] against any validator they prefer.
+//! Why: the Rust ecosystem still has no mature, official Buf protovalidate
+//! runtime. The official `protovalidate-rust` crate remains a placeholder,
+//! while current third-party implementations make different code-generation,
+//! reflection, and CEL tradeoffs. Invariant should not select one of those
+//! policies for every user. Users wanting `buf.validate` enforcement compose
+//! it via [`Server::use_interceptor`] / [`Server::use_stream_interceptor`]
+//! against the validator that fits their application.
 //!
 //! Example with a hand-rolled validator (a real codebase would call into
 //! `prost-protovalidate` or similar):
@@ -27,5 +28,5 @@
 //! server.use_interceptor(my_validator());
 //! ```
 //!
-//! When the dep landscape stabilises around prost 0.14 we'll revisit
-//! shipping a first-class wrapper here. For now: explicit, user-side.
+//! We can revisit a first-class wrapper when the official Buf runtime is
+//! production-ready. For now: explicit, user-side.

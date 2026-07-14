@@ -5,7 +5,7 @@
 //! a single client snapshot covers all of them.
 
 use crate::descriptor::{FieldInfo, MessageInfo, ParsedDescriptor};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 
 // `FieldDescriptorProto::Type` constants, lifted to keep the match readable.
@@ -69,13 +69,13 @@ impl<'d> SchemaGen<'d> {
                 self.field_type_schema(field, visiting)
             };
 
-            if !field.comment.is_empty() {
-                if let Some(obj) = prop.as_object_mut() {
-                    obj.insert(
-                        "description".to_string(),
-                        Value::String(field.comment.clone()),
-                    );
-                }
+            if !field.comment.is_empty()
+                && let Some(obj) = prop.as_object_mut()
+            {
+                obj.insert(
+                    "description".to_string(),
+                    Value::String(field.comment.clone()),
+                );
             }
 
             properties.insert(field.name.clone(), prop);

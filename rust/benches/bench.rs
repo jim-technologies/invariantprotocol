@@ -3,16 +3,17 @@
 //!
 //! Run with: `cargo bench --bench bench`
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
-use invariant::{projections::http::http_router, Server, ServerStreamTx, Status};
+use invariant::{Server, ServerStreamTx, Status, projections::http::http_router};
 use prost::Message;
 use prost_reflect::DynamicMessage;
+use std::hint::black_box;
 use std::sync::Arc;
 
 #[path = "../tests/common/mod.rs"]
 mod common;
-use common::{greet, DESCRIPTOR_PATH};
+use common::{DESCRIPTOR_PATH, greet};
 
 async fn greet(req: greet::GreetRequest) -> Result<greet::GreetResponse, Status> {
     Ok(greet::GreetResponse {

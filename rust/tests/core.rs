@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{greet, DESCRIPTOR_PATH};
+use common::{DESCRIPTOR_PATH, greet};
 use invariant::{Code, Server, Status};
 use prost::Message;
 use prost_reflect::DynamicMessage;
@@ -117,11 +117,13 @@ fn tool_catalog_lists_registered_tools() {
         .iter()
         .find(|e| e["name"] == "GreetService.Greet")
         .unwrap();
-    assert!(greet_entry["description"]
-        .as_str()
-        .unwrap()
-        .to_lowercase()
-        .contains("greet a person"));
+    assert!(
+        greet_entry["description"]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .contains("greet a person")
+    );
 
     // No `_meta.streaming` on unary tools.
     assert!(greet_entry.get("_meta").is_none());
@@ -129,8 +131,8 @@ fn tool_catalog_lists_registered_tools() {
 
 #[tokio::test]
 async fn interceptor_chain_runs_outer_then_inner() {
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc as StdArc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     let srv = build_server();
     let outer = StdArc::new(AtomicU32::new(0));

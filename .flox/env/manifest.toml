@@ -6,7 +6,7 @@
 ##
 ## -------------------------------------------------------------------
 # Flox manifest version managed by Flox CLI
-schema-version = "1.11.0"
+schema-version = "1.12.0"
 
 
 ## Install Packages --------------------------------------------------
@@ -15,27 +15,19 @@ schema-version = "1.11.0"
 ##  $ flox show gum     <- show all versions of a package
 ## -------------------------------------------------------------------
 [install]
-python3.pkg-path = "python3"
+python3.pkg-path = "python314"
 buf.pkg-path = "buf"
 uv.pkg-path = "uv"
 go.pkg-path = "go"
-nodejs.pkg-path = "nodejs"
-protobuf.pkg-path = "python313Packages.protobuf"
-protobuf.version = ">=6.33.5"
-protobuf.outputs = "all"
-grpcio.pkg-path = "python313Packages.grpcio"
-grpcio.outputs = "all"
-grpcio-tools.pkg-path = "python313Packages.grpcio-tools"
-grpcio-tools.outputs = "all"
-pytest.pkg-path = "python313Packages.pytest"
-pytest.outputs = "all"
-pyyaml.pkg-path = "python313Packages.pyyaml"
-pyyaml.outputs = "all"
+nodejs.pkg-path = "nodejs_26"
+# Native Python wheels such as grpcio link libstdc++ on Linux. GCC supplies the
+# runtime library and also covers source-build fallbacks for native extensions.
+gcc.pkg-path = "gcc16"
 protoc-gen-go.pkg-path = "protoc-gen-go"
 golangci-lint.pkg-path = "golangci-lint"
 ruff.pkg-path = "ruff"
 protoc.pkg-path = "protobuf"
-protoc.version = ">=33.5"
+protoc.version = ">=34.1"
 
 # Rust toolchain. Lock to a stable channel via flox-provided rustc/cargo so
 # nothing pulls a different toolchain at build time. clippy + rustfmt mirror
@@ -55,9 +47,8 @@ rust-analyzer.pkg-path = "rust-analyzer"
 ##      as well as [hook], [profile] scripts and [services] below.
 ## -------------------------------------------------------------------
 [vars]
-# Pin uv to flox's Python 3.13. Without this, uv downloads its own Python
-# (3.14 by default), builds C extensions like grpcio's cygrpc against that
-# ABI, and the resulting .so cannot load when run via flox-activated python.
+# Keep uv on the same Python 3.14 interpreter as the reproducible Flox
+# environment instead of downloading a separate interpreter.
 UV_PYTHON_DOWNLOADS = "never"
 
 
@@ -66,7 +57,13 @@ UV_PYTHON_DOWNLOADS = "never"
 ## -------------------------------------------------------------------
 [hook]
 on-activate = '''
-  export UV_PYTHON="$(command -v python3.13)"
+  export UV_PYTHON="$(command -v python3.14)"
+  if [ "$(uname -s)" = "Linux" ]; then
+    libstdcpp="$(gcc -print-file-name=libstdc++.so.6)"
+    if [ -f "$libstdcpp" ]; then
+      export LD_LIBRARY_PATH="$(dirname "$libstdcpp")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+  fi
 '''
 
 

@@ -218,7 +218,9 @@ request path must not rebuild descriptor registries or discover handler types
 per call. Never call `protodesc.NewFiles` on a request path.
 
 ### Proto descriptor requirement
-`buf build --include-source-info -o descriptor.binpb` — the `--include-source-info` flag is critical, otherwise comments won't be available for tool descriptions.
+`buf build -o descriptor.binpb` — Buf 1.71 includes source info by default. Do
+not pass `--exclude-source-info`, or comments won't be available for tool
+descriptions.
 
 ## Running
 

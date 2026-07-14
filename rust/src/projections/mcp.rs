@@ -12,7 +12,7 @@ use crate::errors::Status;
 use crate::server::Server;
 use parking_lot::Mutex;
 use prost_reflect::{DynamicMessage, SerializeOptions};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -56,7 +56,7 @@ pub async fn serve_mcp_stdio(server: Arc<Server>) -> std::io::Result<()> {
 
         // Notifications run inline so cancellation takes effect before the
         // next message is read.
-        if msg.get("id").map_or(true, |v| v.is_null()) {
+        if msg.get("id").is_none_or(|v| v.is_null()) {
             handle_notification(&msg, &inflight);
             continue;
         }

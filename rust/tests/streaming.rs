@@ -2,10 +2,10 @@
 
 mod common;
 
-use common::{greet, DESCRIPTOR_PATH};
+use common::{DESCRIPTOR_PATH, greet};
 use futures::StreamExt;
 use invariant::projections::http::{
-    http_router, CONNECT_END_STREAM_FLAG, CONNECT_STREAM_JSON, CONNECT_STREAM_PROTO,
+    CONNECT_END_STREAM_FLAG, CONNECT_STREAM_JSON, CONNECT_STREAM_PROTO, http_router,
 };
 use invariant::{Code, Server, ServerStreamTx, Status};
 use prost::Message;

@@ -27,10 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ],
         )
         .ok(); // Soft-fail: greet.proto imports google/api + buf/validate which
-               // require the buf module cache. We work around it by using a
-               // stripped-down test proto below if the full compile fails.
-               // Drop the stripped proto in OUT_DIR — keeps it scoped to this crate's
-               // build artefacts and out of any sibling language directory.
+    // require the buf module cache. We work around it by using a
+    // stripped-down test proto below if the full compile fails.
+    // Drop the stripped proto in OUT_DIR — keeps it scoped to this crate's
+    // build artefacts and out of any sibling language directory.
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
     let stripped_path = out_dir.join("greet.proto");
     std::fs::write(&stripped_path, STRIPPED_GREET_PROTO)?;

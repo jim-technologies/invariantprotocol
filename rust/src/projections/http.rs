@@ -15,12 +15,12 @@
 use crate::errors::{Code, Status};
 use crate::server::{Server, Tool};
 use axum::{
+    Router,
     body::Bytes,
     extract::{Request, State},
-    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Router,
 };
 use http_body_util::BodyExt;
 use prost::Message;

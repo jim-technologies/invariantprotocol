@@ -1,0 +1,8 @@
+version: v2
+plugins:
+  - protoc_builtin: python
+    out: ../../src
+inputs:
+  - binary_image: descriptor.binpb
+    paths:
+      - buf/validate/validate.proto

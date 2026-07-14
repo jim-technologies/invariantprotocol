@@ -1,6 +1,6 @@
 //! gRPC projection — descriptor-driven dispatch over tonic's transport.
 //!
-//! Modern path (tonic 0.12+): we build a regular `axum::Router` mapping each
+//! We build a regular `axum::Router` mapping each
 //! registered tool's `/{package.Service}/{Method}` to a handler that decodes
 //! the gRPC length-prefixed frame, dispatches via [`Server::invoke`] (or
 //! [`Server::invoke_stream`]), and encodes the response back into the gRPC
@@ -20,12 +20,12 @@
 
 use crate::errors::{Code, Status};
 use crate::server::{Server, Tool};
+use axum::Router;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use axum::Router;
 use futures::StreamExt;
 use http_body_util::{BodyExt, StreamBody};
 use prost::Message;
@@ -43,7 +43,7 @@ const GRPC_MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 /// so the caller can mount them on tonic's transport via `add_routes`.
 ///
 /// Internally this is an `axum::Router` lifted into `Routes` via the modern
-/// `Routes::from(axum::Router)` conversion shipped in tonic 0.12.
+/// `Routes::from(axum::Router)` conversion provided by tonic.
 pub fn grpc_routes(server: Arc<Server>) -> Routes {
     Routes::from(grpc_router(server))
 }
@@ -241,10 +241,10 @@ async fn grpc_stream_response(
         if let Ok(v) = HeaderValue::from_str(&grpc_status.to_string()) {
             trailers.insert(HeaderName::from_static("grpc-status"), v);
         }
-        if let Some(msg) = grpc_message {
-            if let Ok(v) = HeaderValue::from_str(&msg) {
-                trailers.insert(HeaderName::from_static("grpc-message"), v);
-            }
+        if let Some(msg) = grpc_message
+            && let Ok(v) = HeaderValue::from_str(&msg)
+        {
+            trailers.insert(HeaderName::from_static("grpc-message"), v);
         }
         yield Ok(http_body::Frame::trailers(trailers));
     };

@@ -97,7 +97,7 @@ type Tool struct {
 
 const (
 	serverName    = "invariant-protocol"
-	serverVersion = "0.3.0"
+	serverVersion = "0.3.1"
 )
 
 // MethodConfig overrides per-server defaults for one RPC method. Zero-valued

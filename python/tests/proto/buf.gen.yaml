@@ -2,9 +2,11 @@ version: v2
 plugins:
   - protoc_builtin: python
     out: gen
+  - remote: buf.build/grpc/python:v1.82.1
+    out: gen
   - protoc_builtin: go
     out: ../../../go/tests/gen
     opt: paths=source_relative
-  - remote: buf.build/grpc/go:v1.6.0
+  - remote: buf.build/grpc/go:v1.6.2
     out: ../../../go/tests/gen
     opt: paths=source_relative

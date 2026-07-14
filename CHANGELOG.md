@@ -2,11 +2,65 @@
 
 All notable changes to this project are documented here. Versions are tagged
 repo-wide; entries call out implementation scope when a feature has not reached
-all three implementations yet.
+all four implementations yet.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
+
+## v0.5.0 — 2026-07-14
+
+Package versions in this repository snapshot are Go `v0.3.1`, Python `0.4.0`,
+Rust `0.3.0`, and TypeScript/npm `0.4.1`.
+
+### Added
+
+- **Generated gRPC registration is now the primary Go model.** `Server`
+  implements `grpc.ServiceRegistrar`, accepts normal generated
+  `Register<Service>Server` calls, retains typed service implementations for
+  every projection, and exposes the native gRPC lifecycle directly.
+- **Standard gRPC middleware and semantics across Go projections.** Shared
+  unary and stream middleware uses gRPC interceptor types with typed generated
+  messages, full method names, metadata, rich statuses, deadlines, and
+  cancellation preserved across native gRPC and HTTP/Connect projections.
+- **Complete native gRPC regression coverage.** Tests cover generated clients,
+  unary and server streaming, interceptor ordering and single execution,
+  metadata and trailers, rich status details, cancellation, message limits,
+  registration freeze, and graceful shutdown.
+- **Dependency automation for every package ecosystem.** Dependabot now covers
+  both Go modules, Python/uv, Rust/Cargo, both npm package locations, and GitHub
+  Actions.
+
+### Changed
+
+- **Current language and build ecosystems.** The reproducible Flox environment
+  now uses Python 3.14, Go 1.26, Node 26, Rust 1.95 with edition 2024, GCC 16,
+  Buf 1.71, and the latest compatible linting and generation tools available
+  in the catalog.
+- **Runtime dependencies were refreshed throughout.** Notable upgrades include
+  gRPC Go 1.82, protobuf Python 7.35, grpcio 1.82, TypeScript 7, tonic/prost
+  0.14, axum 0.8, and reqwest 0.13, with regenerated language stubs and lock
+  files.
+- **Descriptor generation follows Buf 1.71 defaults.** Source information is
+  retained by default, validation stubs are regenerated deterministically from
+  the built descriptor, and generated-file verification covers every emitted
+  artifact.
+- **HTTP/Connect bounds both request and response messages in Go.** Unary and
+  streaming limits remain independent of native protobuf gRPC limits, and
+  streaming limits apply per message.
+
+### Fixed
+
+- **Native Go unary interceptors now execute exactly once.** The generated-gRPC
+  handler path invokes `grpc.UnaryServerInterceptor` using the standard typed
+  terminal handler and correct `grpc.UnaryServerInfo` instead of bypassing it.
+
+### Breaking
+
+- Python now requires Python 3.14 or newer.
+- Go now requires Go 1.26.4 or newer.
+- Rust now requires Rust 1.95 or newer and uses edition 2024. Public tonic,
+  prost, and axum ecosystem types follow their current major versions.
 
 ## v0.4.0 — 2026-07-07
 

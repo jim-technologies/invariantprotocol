@@ -97,8 +97,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         for file_name in result.source_info_missing:
             print(f"  {file_name}", file=sys.stderr)
         print(file=sys.stderr)
-        print("Rebuild it with:", file=sys.stderr)
-        print("  buf build --include-source-info -o descriptor.binpb", file=sys.stderr)
+        print("Rebuild it with source info (included by default in Buf 1.71+):", file=sys.stderr)
+        print("  buf build -o descriptor.binpb", file=sys.stderr)
         return 1
 
     if result.missing_comments:

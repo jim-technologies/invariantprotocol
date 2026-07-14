@@ -57,7 +57,7 @@ MCP and CLI are also gRPC translations: MCP `tools/call` is unary gRPC dispatch 
   │                            │                             │
   ├── buf generate → stubs     │                             │
   └── buf build ──────────────→│                             │
-       --include-source-info   │                             │
+       (source info default)   │                             │
                                └── invariant runtime ←───────┘
                                         │
                           ┌──────┬──────┼──────┐
@@ -71,12 +71,12 @@ reflection data from a `FileDescriptorSet`. Build it with source information
 intact:
 
 ```bash
-buf build --include-source-info -o descriptor.binpb
+buf build -o descriptor.binpb
 ```
 
-`--include-source-info` is required. Without it, proto comments are stripped
-from the descriptor, so MCP/CLI/HTTP catalogs lose the descriptions agents and
-humans rely on.
+Buf 1.71 includes source information by default. Do not pass
+`--exclude-source-info`: stripping proto comments from the descriptor makes
+MCP/CLI/HTTP catalogs lose the descriptions agents and humans rely on.
 
 Downstream services can enforce the comment contract in CI with the packaged
 checker:
@@ -633,7 +633,7 @@ invariant-protocol = { git = "https://github.com/jim-technologies/invariantproto
 
 **TypeScript (source package):**
 ```bash
-npm install "github:jim-technologies/invariantprotocol#v0.4.0"
+npm install "github:jim-technologies/invariantprotocol#v0.5.0"
 ```
 
 ## TypeScript
@@ -697,7 +697,7 @@ Rust has no runtime method-name reflection, so registration is per-method (`regi
 - **HTTP / Connect** — unary `application/json` + `application/proto`, streaming `application/connect+json` + `application/connect+proto`, envelope framing, `Connect-Timeout-Ms`, 16 MiB body cap
 - **MCP** — stdio transport + `POST /mcp` HTTP transport, `tools/list` with `_meta.streaming`, streaming `tools/call` collects chunks into the content array
 - **CLI** — `cli_write(server, args, writer)`, real-time flush per chunk on streams
-- **gRPC** — descriptor-driven dispatch via `Routes::from(axum::Router)` (modern tonic 0.12+ API), HTTP/2 prior-knowledge via `tonic::transport::Server::add_routes`
+- **gRPC** — descriptor-driven dispatch via `Routes::from(axum::Router)` (tonic 0.14), HTTP/2 prior-knowledge via `tonic::transport::Server::add_routes`
 
 Streaming, unary interceptors, and stream interceptors all flow through `use_interceptor` / `use_stream_interceptor` with the same first-registered-outermost ordering as the Go and Python ports.
 
@@ -705,7 +705,7 @@ Streaming, unary interceptors, and stream interceptors all flow through `use_int
 
 ## Requirements
 
-- `buf build --include-source-info -o descriptor.binpb`
+- `buf build -o descriptor.binpb` (source info is included by default)
 - Generated stubs for your language (`buf generate`)
 - For `connect_http` proxy mode with `google.api.http`, add Buf dep `buf.build/googleapis/googleapis`
 - For `Validation()` / `validation()`, add Buf dep `buf.build/bufbuild/protovalidate`
@@ -719,7 +719,7 @@ plugins:
   - protoc_builtin: go
     out: gen
     opt: paths=source_relative
-  - remote: buf.build/grpc/go:v1.6.0
+  - remote: buf.build/grpc/go:v1.6.2
     out: gen
     opt: paths=source_relative
 ```

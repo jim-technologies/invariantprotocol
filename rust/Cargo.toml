@@ -1,8 +1,8 @@
 [package]
 name = "invariant-protocol"
-version = "0.2.2"
-edition = "2021"
-rust-version = "1.81"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.95"
 description = "Project gRPC services into Connect/gRPC/MCP/CLI interfaces from proto descriptors"
 license = "Apache-2.0"
 repository = "https://github.com/jim-technologies/invariantprotocol"
@@ -25,17 +25,17 @@ path = "src/lib.rs"
 # - thiserror: structured error types.
 # - parking_lot: faster RwLock than std for the tool registry hot path.
 [dependencies]
-prost = "0.13"
-prost-types = "0.13"
-prost-reflect = { version = "0.14", features = ["serde", "text-format"] }
-tonic = { version = "0.12", default-features = false, features = ["transport", "codegen", "prost"] }
+prost = "0.14"
+prost-types = "0.14"
+prost-reflect = { version = "0.16", features = ["serde", "text-format"] }
+tonic = { version = "0.14", default-features = false, features = ["transport", "codegen", "router"] }
 http = "1"
 http-body = "1"
-tonic-reflection = "0.12"
+tonic-reflection = "0.14"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "sync", "signal", "time", "fs"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["io"] }
-axum = { version = "0.7", default-features = false, features = ["http1", "http2", "json", "macros", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "macros", "tokio"] }
 hyper = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["full"] }
 http-body-util = "0.1"
@@ -51,13 +51,14 @@ async-stream = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tempfile = "3"
-criterion = { version = "0.5", features = ["async_tokio"] }
-prost-build = "0.13"
+criterion = { version = "0.8", features = ["async_tokio"] }
+prost-build = "0.14"
+tonic-prost = "0.14"
 
 [build-dependencies]
-prost-build = "0.13"
+prost-build = "0.14"
 
 [[bench]]
 name = "bench"

@@ -205,10 +205,10 @@ impl ParsedDescriptor {
                 proto3_optional: proto3_opt,
             };
 
-            if let Some(idx) = oneof_index {
-                if let Some(slot) = oneofs.get_mut(idx as usize) {
-                    slot.field_names.push(field.name.clone());
-                }
+            if let Some(idx) = oneof_index
+                && let Some(slot) = oneofs.get_mut(idx as usize)
+            {
+                slot.field_names.push(field.name.clone());
             }
             fields.push(field);
         }

@@ -39,11 +39,7 @@ public-surface: ## Scan OSS-facing files for private/product-specific references
 	python3 scripts/check_public_surface.py
 
 audit: ## Scan Python dependencies for known vulnerabilities.
-	# Python dependency CVE scan. The two ignored advisories are dev-only test
-	# tooling (pytest + its pygments) with no resolvable fix yet; neither ships
-	# in the published wheel. Runtime deps (incl. idna via httpx) are kept fixed.
-	cd python && uv run pip-audit \
-		--ignore-vuln CVE-2026-4539 --ignore-vuln CVE-2025-71176
+	cd python && uv run pip-audit
 
 fmt: ## Format code and apply safe linter fixes.
 	cd go && gofmt -w . && golangci-lint run --fix ./...
@@ -53,6 +49,7 @@ fmt: ## Format code and apply safe linter fixes.
 
 test: typescript/node_modules/.package-lock.json ## Run Go, Python, Rust, and TypeScript tests.
 	cd go && go test ./...
+	cd go/tests/manual && go test ./...
 	cd python && uv run python -m pytest tests/
 	cd rust && cargo test
 	cd typescript && npm test
@@ -64,19 +61,25 @@ bench: ## Run Go, Python, and Rust benchmarks.
 
 generate: ## Regenerate protobuf stubs.
 	cd proto && buf generate
+	cd python/tests/proto && buf build -o descriptor.binpb
 	cd python/tests/proto && buf generate
+	cd python/tests/proto && buf generate --template buf.validate.gen.yaml
 
 deps: ## Tidy/update language dependency lockfiles.
-	cd go && go mod tidy
+	cd go && go get -u all && go mod tidy
+	cd go/tests/manual && go get -u all && go mod tidy
+	cd python && uv lock --upgrade
 	cd rust && cargo update
+	cd typescript && npm update
+	cd python/tests/proto && buf dep update
 
 breaking: ## Check proto breaking changes against BASE_REF.
 	cd proto && buf breaking --against "../.git#ref=$(BASE_REF),subdir=proto"
 
 verify-generate: ## Verify generated protobuf stubs are committed.
 	$(MAKE) generate
-	@if [ -n "$$(git status --porcelain --untracked-files=all -- go/gen go/tests/gen python/src/invariant/gen python/tests/proto/gen)" ]; then \
+	@if [ -n "$$(git status --porcelain --untracked-files=all -- go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen)" ]; then \
 		echo "Generated files are out of date. Run 'make generate' and commit the results."; \
-		git status --short -- go/gen go/tests/gen python/src/invariant/gen python/tests/proto/gen; \
+		git status --short -- go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen; \
 		exit 1; \
 	fi

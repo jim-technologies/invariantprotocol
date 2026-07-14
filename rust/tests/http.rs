@@ -6,8 +6,8 @@
 
 mod common;
 
-use common::{greet, DESCRIPTOR_PATH};
-use invariant::{projections::http::http_router, Server, Status};
+use common::{DESCRIPTOR_PATH, greet};
+use invariant::{Server, Status, projections::http::http_router};
 use prost::Message;
 use std::sync::Arc;
 

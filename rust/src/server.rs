@@ -19,14 +19,14 @@
 use crate::descriptor::ParsedDescriptor;
 use crate::errors::{Code, Status};
 use crate::schema::SchemaGen;
-use crate::stream::{dyn_stream_channel, DynStreamTx, ServerStreamTx, STREAM_BUFFER};
+use crate::stream::{DynStreamTx, STREAM_BUFFER, ServerStreamTx, dyn_stream_channel};
+use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
-use futures::FutureExt;
 use parking_lot::RwLock;
 use prost::Message;
 use prost_reflect::{DynamicMessage, MessageDescriptor};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
