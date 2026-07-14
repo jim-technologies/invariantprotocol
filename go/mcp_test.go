@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"testing"
+	"time"
 
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
@@ -92,6 +94,23 @@ func sendMultiMCP(t *testing.T, srv *Server, reqs ...map[string]any) []map[strin
 		resps = append(resps, resp)
 	}
 	return resps
+}
+
+func TestMCPSessionCancellationInterruptsIdleRead(t *testing.T) {
+	reader, writer := io.Pipe()
+	t.Cleanup(func() { _ = writer.Close() })
+	session := mcpServer(t).newMCPSession(reader, io.Discard)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- session.run(ctx) }()
+
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("MCP session did not stop while stdin was idle")
+	}
 }
 
 func TestMCPInitialize(t *testing.T) {

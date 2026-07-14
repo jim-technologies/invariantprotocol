@@ -8,10 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"sync"
 
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -42,6 +40,36 @@ func (s *Server) serveMCP(ctx context.Context) error {
 func (m *mcpSession) run(ctx context.Context) error {
 	scanner := bufio.NewScanner(m.r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	type scanResult struct {
+		line []byte
+		err  error
+		done bool
+	}
+	scanned := make(chan scanResult, 1)
+	go func() {
+		for scanner.Scan() {
+			result := scanResult{line: append([]byte(nil), scanner.Bytes()...)}
+			select {
+			case scanned <- result:
+			case <-ctx.Done():
+				return
+			}
+		}
+		result := scanResult{err: scanner.Err(), done: true}
+		select {
+		case scanned <- result:
+		case <-ctx.Done():
+		}
+	}()
+
+	// stdin and pipe readers are closable. Closing them on cancellation also
+	// releases the scanner goroutine; the select below still lets sessions over
+	// an arbitrary blocking io.Reader return promptly even when it is not.
+	stopReaderClose := func() bool { return false }
+	if closer, ok := m.r.(io.Closer); ok {
+		stopReaderClose = context.AfterFunc(ctx, func() { _ = closer.Close() })
+	}
+	defer stopReaderClose()
 
 	var wg sync.WaitGroup
 	defer func() {
@@ -51,7 +79,8 @@ func (m *mcpSession) run(ctx context.Context) error {
 		wg.Wait()
 	}()
 
-	for scanner.Scan() {
+	for {
+		var line []byte
 		select {
 		case <-ctx.Done():
 			// Parent shutdown — cancel everything in flight, then wait.
@@ -61,10 +90,16 @@ func (m *mcpSession) run(ctx context.Context) error {
 			}
 			m.inflightMu.Unlock()
 			return ctx.Err()
-		default:
+		case result := <-scanned:
+			if result.done {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return result.err
+			}
+			line = result.line
 		}
 
-		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
@@ -115,7 +150,6 @@ func (m *mcpSession) run(ctx context.Context) error {
 			}
 		})
 	}
-	return scanner.Err()
 }
 
 func (m *mcpSession) writeResponse(resp *jsonRPCResponse) {
@@ -301,9 +335,14 @@ func errorContent(err error) map[string]any {
 // dynamicpb→typed conversion for reflected handlers, using a binary roundtrip
 // when proto names match (~10x faster than JSON) and JSON fallback otherwise.
 func (s *Server) invoke(ctx context.Context, tool *Tool, req proto.Message) (proto.Message, error) {
-	resp, err := s.chainedInvoke(ctx, req, tool.callInfo, tool.invokeHandler)
+	s.freeze()
+	ctx, _ = withProjectionUnaryTransport(ctx, tool.callInfo.FullMethod)
+	resp, err := tool.invokeHandler(ctx, req)
 	if err != nil {
 		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
 	}
 
 	if resp == nil {
@@ -344,34 +383,6 @@ func (s *Server) invokeJSON(ctx context.Context, tool *Tool, argsJSON json.RawMe
 		return "", fmt.Errorf("marshal response: %w", err)
 	}
 	return string(out), nil
-}
-
-// chainedInvoke runs the interceptor chain then calls the handler.
-// Chain ordering: first registered = outermost (A(B(C(handler)))).
-//
-// Panics inside any interceptor or the handler are recovered and converted
-// to a codes.Internal status error — a single goroutine bug must not be
-// allowed to crash the whole server.
-func (s *Server) chainedInvoke(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (resp any, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = status.Errorf(codes.Internal, "panic in %s: %v", info.FullMethod, r)
-		}
-	}()
-
-	if len(s.interceptors) == 0 {
-		return handler(ctx, req)
-	}
-
-	// Build chain from inside out: wrap handler with interceptors in reverse order.
-	current := handler
-	for _, interceptor := range slices.Backward(s.interceptors) {
-		next := current
-		current = func(ctx context.Context, req any) (any, error) {
-			return interceptor(ctx, req, info, next)
-		}
-	}
-	return current(ctx, req)
 }
 
 // --- Helpers ---

@@ -16,7 +16,9 @@ import (
 )
 
 // benchServicer is a no-allocation servicer for benchmarks.
-type benchServicer struct{}
+type benchServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func (s *benchServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	return &greetpb.GreetResponse{Message: "Hi " + req.Name}, nil
@@ -30,7 +32,7 @@ func (s *benchServicer) GreetGroup(_ context.Context, req *greetpb.GreetGroupReq
 	return &greetpb.GreetGroupResponse{Messages: msgs, Count: int32(len(req.People))}, nil
 }
 
-func (s *benchServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream ServerStream) error {
+func (s *benchServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 	n := int(req.GetCount())
 	if n <= 0 {
 		n = 1
@@ -51,9 +53,7 @@ func benchServer(b *testing.B) *Server {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if err := srv.Register(&benchServicer{}); err != nil {
-		b.Fatal(err)
-	}
+	greetpb.RegisterGreetServiceServer(srv, &benchServicer{})
 	return srv
 }
 
@@ -193,55 +193,15 @@ func startServeGRPCB(b *testing.B) (string, func()) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if err := srv.Register(&benchServicer{}); err != nil {
-		b.Fatal(err)
-	}
+	greetpb.RegisterGreetServiceServer(srv, &benchServicer{})
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		b.Fatal(err)
 	}
 
-	files, err := srv.buildProtoFiles()
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	gs := grpc.NewServer()
-	type svcEntry struct {
-		methods []grpc.MethodDesc
-	}
-	svcMap := make(map[string]*svcEntry)
-	for _, tool := range srv.tools {
-		entry, ok := svcMap[tool.ServiceFullName]
-		if !ok {
-			entry = &svcEntry{}
-			svcMap[tool.ServiceFullName] = entry
-		}
-		reqMD, err := findMessageDescriptor(files, tool.InputType)
-		if err != nil {
-			b.Fatal(err)
-		}
-		respMD, err := findMessageDescriptor(files, tool.OutputType)
-		if err != nil {
-			b.Fatal(err)
-		}
-		entry.methods = append(entry.methods, grpc.MethodDesc{
-			MethodName: tool.MethodName,
-			Handler:    srv.grpcMethodHandler(tool, reqMD, respMD),
-		})
-	}
-	type grpcServicer any
-	for svcName, entry := range svcMap {
-		gs.RegisterService(&grpc.ServiceDesc{
-			ServiceName: svcName,
-			HandlerType: (*grpcServicer)(nil),
-			Methods:     entry.methods,
-		}, struct{}{})
-	}
-
-	go func() { _ = gs.Serve(lis) }()
-	return lis.Addr().String(), gs.Stop
+	go func() { _ = srv.Serve(lis) }()
+	return lis.Addr().String(), srv.Stop
 }
 
 // BenchmarkInvokeStreamDirect measures the in-process streaming path —

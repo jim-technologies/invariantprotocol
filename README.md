@@ -43,9 +43,9 @@ The framework treats **gRPC as the canonical surface** and every other protocol 
 
 - **Source of truth**: the proto descriptor. Service names, method names, types, comments — all gRPC's vocabulary.
 - **Method paths**: `/{package.Service}/{Method}`. gRPC's canonical path shape. Connect uses the same, by spec. MCP uses `ServiceName.MethodName` which is the same identity in dot-notation.
-- **Error codes**: `grpc.StatusCode` (Go), `grpc.StatusCode` (Python), `tonic::Code`-equivalent (Rust). Connect's HTTP error envelope translates these by name. MCP wraps them. CLI propagates them.
+- **Error codes**: grpc-go `codes.Code` and `status.Status`, Python `grpc.StatusCode`, and Rust's tonic code equivalent. Connect's HTTP error envelope translates these by name. MCP wraps them. CLI propagates them.
 - **Interceptor model**: `UnaryServerInterceptor` / `StreamServerInterceptor` — same signatures gRPC uses. First registered = outermost, like gRPC.
-- **Reflection**: `grpc.reflection.v1.ServerReflection` auto-registered in all three languages. `grpcurl`, Buf Studio, Connect debug clients all work out of the box.
+- **Reflection**: `grpc.reflection.v1.ServerReflection` is registered by the runtime implementations. `grpcurl`, Buf Studio, and Connect debug clients work out of the box.
 - **Deadlines + cancellation**: gRPC-native via context (Go / Rust) / asyncio (Python). Connect-Timeout-Ms is just the HTTP carrier for the same deadline.
 
 ConnectRPC is the **first-class HTTP translation** of gRPC — same semantics, just over plain HTTP/1.1 or HTTP/2 instead of strict HTTP/2-with-prior-knowledge. Go, Python, and Rust hand-roll the small Connect protocol surface so the same descriptor-driven dispatch drives every projection. TypeScript uses Connect-ES (`@connectrpc/connect` + `@connectrpc/connect-node`) because its router accepts runtime Protobuf-ES descriptors, so we keep the no-generated-server-stubs design while using the modern Node Connect stack.
@@ -140,8 +140,6 @@ files.
 ```
 POST /user.v1.UserService/CreateUser
 {"display_name": "Alice Smith", "email": "alice@example.com", "role": "ROLE_EDITOR", "tags": ["engineering"]}
-POST /v1/users
-{"display_name": "Alice Smith", "email": "alice@example.com", "role": "ROLE_EDITOR", "tags": ["engineering"]}
 ```
 
 Write the comment once. It appears everywhere — typed, validated, with enums, required fields, and descriptions.
@@ -176,20 +174,73 @@ The implementations are **shape mirrors** — same surface where supported, idio
 ## Go
 
 ```go
-ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-defer cancel()
+type GreetServer struct {
+    greetpb.UnimplementedGreetServiceServer
+}
 
-srv, _ := invariant.ServerFromDescriptor("descriptor.binpb")
-srv.Register(&GreetServicer{})
+func (*GreetServer) Greet(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+    return &greetpb.GreetResponse{Message: "Hi " + req.GetName()}, nil
+}
 
-srv.Serve(ctx, invariant.MCP())                              // MCP over stdio
-srv.Serve(ctx, invariant.CLI())                              // CLI from os.Args
-srv.Serve(ctx, invariant.HTTP(8080))                         // HTTP server
-srv.Serve(ctx, invariant.GRPC(50051))                        // gRPC server
-srv.Serve(ctx, invariant.HTTP(8080), invariant.GRPC(50051))  // multiple at once
+srv, err := invariant.ServerFromDescriptor("descriptor.binpb")
+if err != nil { log.Fatal(err) }
+greetpb.RegisterGreetServiceServer(srv, &GreetServer{})
+
+lis, err := net.Listen("tcp", ":50051")
+if err != nil { log.Fatal(err) }
+
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+go func() {
+    <-ctx.Done()
+    srv.GracefulStop()
+}()
+
+if err := srv.Serve(lis); err != nil { log.Fatal(err) }
 ```
 
-`Serve` honors the context: cancellation triggers graceful shutdown of every projection.
+`*invariant.Server` implements `grpc.ServiceRegistrar`, so generated
+`Register<Service>Server` functions are the primary registration API. Native
+gRPC owns the main lifecycle. Optional projections reuse that same registered
+implementation. If the process needs only projections, run them instead of
+`Serve`:
+
+```go
+err := srv.ServeProjections(ctx, invariant.HTTP(8080), invariant.MCP())
+// Or run one CLI invocation from os.Args:
+err = srv.ServeProjections(ctx, invariant.CLI())
+```
+
+The first Go example serves native gRPC only. To serve native gRPC and optional
+projections together, register everything first and then run the two lifecycle
+methods concurrently:
+
+```go
+go func() {
+    if err := srv.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+        log.Printf("gRPC: %v", err)
+    }
+}()
+if err := srv.ServeProjections(ctx, invariant.HTTP(8080), invariant.MCP()); err != nil {
+    log.Printf("projection: %v", err)
+}
+```
+
+`ServeProjections` honors context cancellation. `ServeGRPC` is an explicit
+alias for `Serve`; `GRPCServer` exposes the owned `*grpc.Server`, and
+`GetServiceInfo` mirrors grpc-go service discovery. Calling `Serve`,
+`ServeProjections`, `HTTPHandler`, `Invoke`, `InvokeStream`, or `GRPCServer`
+freezes service registration and all configuration. Late generated registration
+panics with a deterministic Invariant error, matching grpc-go's setup-time
+registration contract. Call `GracefulStop` to drain native gRPC requests, or
+`Stop` for an immediate shutdown.
+
+The reflection-based `Register` method and `Connect` spelling remain as
+compatibility wrappers over the same registration model. The old
+`GRPC(port, ...)` projection is deprecated: create a listener and call `Serve`,
+and pass native `grpc.ServerOption` values to the Invariant constructor.
+Projection-level gRPC options are rejected instead of being silently applied
+to a different server.
 
 ## Python (async-native)
 
@@ -264,35 +315,40 @@ Don't have the source? Point at a running gRPC server:
 
 ```go
 srv, _ := invariant.ServerFromDescriptor("descriptor.binpb")
-srv.Connect("localhost:50051")
-srv.Serve(invariant.MCP())  // your gRPC server is now an MCP tool
+conn, _ := grpc.NewClient(
+    "localhost:50051",
+    grpc.WithTransportCredentials(insecure.NewCredentials()),
+)
+defer conn.Close() // the caller owns the connection
+
+srv.ConnectGRPC(conn, grpc.WaitForReady(true))
+srv.ServeProjections(ctx, invariant.MCP()) // the remote service is now MCP tools
 ```
 
-Remote HTTP service:
+`ConnectGRPC` accepts any `grpc.ClientConnInterface` plus default
+`grpc.CallOption` values. The caller owns the connection; request deadlines,
+cancellation, metadata, status details, and response headers/trailers flow
+through the proxy. The remote methods are registered on the same native gRPC
+server as local implementations, so `srv.Serve(listener)` also exposes them to
+ordinary generated clients. Streaming proxy methods remain intentionally
+excluded.
+
+Remote HTTP service (configure outbound headers before connecting):
 
 ```go
 srv, _ := invariant.ServerFromDescriptor("descriptor.binpb")
-srv.ConnectHTTP("https://api.example.com")
-srv.Serve(invariant.MCP()) // your HTTP service is now an MCP tool
-```
-
-```python
-server = Server.from_descriptor("descriptor.binpb")
-server.connect_http("https://api.example.com")
-server.serve(mcp=True)  # your HTTP service is now an MCP tool
-```
-
-Signed HTTP requests (dynamic headers per request):
-
-```go
 srv.UseHTTPHeaderProvider(func(ctx context.Context, req *invariant.OutboundHTTPRequest) (map[string]string, error) {
     // Example only: replace with real signing logic.
     return map[string]string{"X-Example-Signature": sign(req.Method, req.URL, req.Body)}, nil
 })
+srv.ConnectHTTP("https://api.example.com")
+srv.ServeProjections(ctx, invariant.MCP()) // your HTTP service is now an MCP tool
 ```
 
 ```python
 from invariant import HTTPAuth
+
+server = Server.from_descriptor("descriptor.binpb")
 
 def sign_headers(req):
     # Example only: replace with real signing logic.
@@ -302,6 +358,7 @@ server.connect_http(
     "https://api.example.com",
     auth=HTTPAuth(header_provider=sign_headers),
 )
+server.serve(mcp=True)  # your HTTP service is now an MCP tool
 ```
 
 ## Remote HTTP proxy (`connect_http`)
@@ -374,7 +431,7 @@ service Tail {
 ```
 
 ```go
-func (s *TailServicer) Watch(req *WatchRequest, stream invariant.ServerStream) error {
+func (s *TailServer) Watch(req *WatchRequest, stream grpc.ServerStreamingServer[Event]) error {
     for ev := range events(req) {
         if err := stream.Send(ev); err != nil { return err }
     }
@@ -397,16 +454,52 @@ If you're already serving the HTTP projection, MCP is also available at `POST /m
 
 ## Middleware
 
-gRPC-style unary interceptors. Run on every invocation across all projections. First registered = outermost.
+Go uses grpc-go's interceptor types directly. Register shared middleware with
+`Use` and `UseStream`; it runs once per call across native gRPC, HTTP, MCP, and
+CLI. First registered is outermost. Services registered through generated
+`Register<Service>Server` functions retain their concrete generated request and
+response types inside these interceptors.
 
 ```go
-srv.Use(func(ctx context.Context, req any, info *invariant.ServerCallInfo, handler invariant.UnaryHandler) (any, error) {
+var logging grpc.UnaryServerInterceptor = func(
+    ctx context.Context,
+    req any,
+    info *grpc.UnaryServerInfo,
+    handler grpc.UnaryHandler,
+) (any, error) {
     log.Printf("→ %s", info.FullMethod)
     resp, err := handler(ctx, req)
     log.Printf("← %s err=%v", info.FullMethod, err)
     return resp, err
-})
+}
+srv.Use(logging)
+
+var streamLogging grpc.StreamServerInterceptor = func(
+    service any,
+    stream grpc.ServerStream,
+    info *grpc.StreamServerInfo,
+    handler grpc.StreamHandler,
+) error {
+    log.Printf("↔ %s", info.FullMethod)
+    return handler(service, stream)
+}
+srv.UseStream(streamLogging)
 ```
+
+Interceptors passed as constructor `grpc.ServerOption` values apply only to
+native gRPC:
+
+```go
+srv, _ := invariant.ServerFromDescriptor(
+    "descriptor.binpb",
+    grpc.ChainUnaryInterceptor(nativeOnly),
+    grpc.ChainStreamInterceptor(nativeStreamOnly),
+)
+```
+
+Constructor interceptors and shared interceptors each execute exactly once.
+Registering the same interceptor in both places deliberately executes it twice;
+Invariant never silently duplicates it.
 
 ```python
 async def logging_interceptor(request, context, info, handler):
@@ -424,8 +517,34 @@ server.use(logging_interceptor)
 |------------|-------------|
 | **MCP** | Each RPC becomes a tool. JSON Schema from proto types. Descriptions from proto comments. Served over stdio, or over HTTP at `POST /mcp` (Streamable HTTP transport — single JSON-RPC request per call). |
 | **CLI** | `ServiceName Method -r request.json`. AI agents and humans alike call RPCs from the shell. `--help` lists tools with field types. Streaming RPCs emit newline-delimited JSON. |
-| **HTTP** | Connect-only. Unary: `POST /{package.Service}/{Method}` with `application/json` or `application/proto`. Server-streaming: same path with `application/connect+json` or `application/connect+proto` (one request envelope → stream of response envelopes + end-stream marker). Request bodies capped at 16 MiB. `GET /` returns the tool catalog. `GET /healthz` (and `/readyz`) returns `{"status":"ok"}` for k8s probes. `GET /__invariant/descriptor.binpb` returns the raw FileDescriptorSet. |
-| **gRPC** | Standard gRPC server with reflection enabled by default — `grpcurl`, Buf Studio, Connect debug clients all work out of the box. Unary and server-streaming RPCs are projected. |
+| **HTTP** | Connect-only. Unary: `POST /{package.Service}/{Method}` with `application/json` or `application/proto`. Server-streaming: same path with `application/connect+json` or `application/connect+proto` (one request envelope → stream of response envelopes + end-stream marker). In Go, encoded requests, responses, and individual stream messages default to 16 MiB limits. `GET /` returns the tool catalog. `GET /healthz` (and `/readyz`) returns `{"status":"ok"}` for k8s probes. `GET /__invariant/descriptor.binpb` returns the raw FileDescriptorSet. |
+| **gRPC** | Standard native gRPC with reflection enabled by default. Go owns a canonical `grpc.Server`, uses generated registration, and supports normal grpc-go clients and semantics. |
+
+Go `Include` / `Exclude` filters control optional projection catalogs only.
+They do not remove methods from the canonical generated native gRPC service.
+
+Go exposes separate HTTP wire limits through `SetMaxUnaryRequestBytes`,
+`SetMaxUnaryResponseBytes`, `SetMaxStreamRequestBytes`, and
+`SetMaxStreamResponseBytes`; `ConfigureMethod` overrides any of them for one
+full method. Streaming limits apply independently to each encoded message, not
+the lifetime of the stream. Exceeding a limit returns `resource_exhausted`.
+These are HTTP JSON/protobuf byte limits: opaque options such as
+`grpc.MaxRecvMsgSize` and `grpc.MaxSendMsgSize` govern native gRPC messages and
+do not automatically govern HTTP bytes. Connect end-stream control data has a
+separate 1 MiB safety bound, so unbounded error details or trailers cannot
+bypass the per-message limits.
+
+In Go, HTTP headers are untrusted. By default, only `traceparent`, `tracestate`,
+`baggage`, and `x-request-id` become incoming gRPC metadata.
+`UseHTTPMetadataMapper` can select additional reviewed values, but Invariant
+still removes authorization, tenant, principal, role, user, protocol, and
+internal metadata keys. Authenticate in HTTP middleware and place trusted
+identity in the request's incoming-metadata context; never let callers assert
+identity by choosing a header. The `invariant-internal-*` namespace is reserved
+for trusted middleware and is never accepted from an HTTP mapper.
+Safe handler metadata set with `grpc.SetHeader`, `grpc.SendHeader`, or
+`grpc.SetTrailer` is mapped back to Connect response headers or the streaming
+end envelope.
 
 ### Connect protocol
 
@@ -437,16 +556,16 @@ HTTP errors use the Connect error envelope:
   "message": "proto: (line 1:27): unknown field \"extra\"",
   "details": [
     {
-      "@type": "type.googleapis.com/google.rpc.BadRequest",
-      "fieldViolations": [
-        {"field": "extra", "description": "proto: (line 1:27): unknown field \"extra\""}
-      ]
+      "type": "google.rpc.BadRequest",
+      "value": "<base64-encoded protobuf bytes>"
     }
   ]
 }
 ```
 
-Code names follow Connect's lowercase convention (`invalid_argument`, `not_found`, etc.).
+Code names follow Connect's lowercase convention (`invalid_argument`,
+`not_found`, etc.). Rich detail `value` fields use unpadded base64 of the
+serialized protobuf detail.
 
 ### Validation
 
@@ -467,13 +586,22 @@ server.use_stream(invariant.validation_stream())   # server-streaming RPCs
 
 Constraint violations short-circuit with `invalid_argument` and field-level `BadRequest` details. Streaming variants validate the request before the response stream opens, so failures never produce any messages.
 
-### gRPC reflection
+### gRPC reflection and health
 
-The gRPC projection registers reflection automatically. Try it:
+The native gRPC server registers reflection automatically. Try it:
 
 ```bash
 grpcurl -plaintext localhost:50051 list
 grpcurl -plaintext -d '{"name":"World"}' localhost:50051 greet.v1.GreetService/Greet
+```
+
+Health is conventional grpc-go registration rather than synthesized
+application state:
+
+```go
+healthServer := health.NewServer()
+healthpb.RegisterHealthServer(srv, healthServer)
+healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 ```
 
 ### Production behavior
@@ -582,18 +710,32 @@ Streaming, unary interceptors, and stream interceptors all flow through `use_int
 - For `connect_http` proxy mode with `google.api.http`, add Buf dep `buf.build/googleapis/googleapis`
 - For `Validation()` / `validation()`, add Buf dep `buf.build/bufbuild/protovalidate`
 
+Go service protos need both message and gRPC generation. A minimal Buf v2
+configuration includes:
+
+```yaml
+version: v2
+plugins:
+  - protoc_builtin: go
+    out: gen
+    opt: paths=source_relative
+  - remote: buf.build/grpc/go:v1.6.0
+    out: gen
+    opt: paths=source_relative
+```
+
 ## Benchmarks
 
 Reference numbers, Intel Xeon E5-2696 v4 (Linux, Go 1.25, Python 3.14, Rust 1.94):
 
 | Path                                  | Go             | Python          | Rust            |
 |---------------------------------------|----------------|-----------------|-----------------|
-| Direct `Invoke()`                     | 2.9 µs / op    | 2.0 µs / op     | 0.8 µs / op     |
+| Direct `Invoke()`                     | 1.6 µs / op    | 2.0 µs / op     | 0.8 µs / op     |
 | Direct `InvokeStream()` (10 msgs)     | 3.7 µs / call  | —               | 42.9 µs / call  |
-| Direct `InvokeStream()` (per chunk)   | ~374 ns        | —               | ~4.3 µs         |
-| HTTP JSON unary                       | 282 µs / op    | 1677 µs / op    | 206 µs / op     |
-| HTTP binary proto unary               | 261 µs / op    | 1641 µs / op    | 199 µs / op     |
-| gRPC unary                            | 318 µs / op    | 509 µs / op     | (pending)       |
+| Direct `InvokeStream()` (per chunk)   | ~366 ns        | —               | ~4.3 µs         |
+| HTTP JSON unary                       | 298 µs / op    | 1677 µs / op    | 206 µs / op     |
+| HTTP binary proto unary               | 269 µs / op    | 1641 µs / op    | 199 µs / op     |
+| gRPC unary                            | 302 µs / op    | 509 µs / op     | (pending)       |
 
 Reading: Rust is fastest on unary (direct + HTTP). Go is fastest per-chunk on streaming because the framework uses a sync callback — Rust's streaming hop is an `mpsc` channel send, which costs ~4 µs/chunk but decouples producer + consumer cleanly across projections. For typical LLM-token-stream workloads (~50 tok/s) the per-chunk overhead is negligible.
 
@@ -611,11 +753,20 @@ The framework ships **no first-class TLS helper**, because every language's
 gRPC/HTTP stack already has a battle-tested one. Wire them up at the
 projection boundary:
 
-**Go** — pass `grpc.ServerOption` values into `invariant.GRPC(port, opts...)`:
+**Go** — pass ordinary `grpc.ServerOption` values to the Invariant constructor,
+register generated services, then serve a listener you own:
 
 ```go
 creds, _ := credentials.NewServerTLSFromFile("cert.pem", "key.pem")
-srv.Serve(ctx, invariant.GRPC(50051, grpc.Creds(creds)))
+srv, _ := invariant.ServerFromDescriptor(
+    "descriptor.binpb",
+    grpc.Creds(creds),
+    grpc.MaxRecvMsgSize(16<<20),
+)
+greetpb.RegisterGreetServiceServer(srv, &GreetServer{})
+
+lis, _ := net.Listen("tcp", ":50051")
+srv.Serve(lis)
 ```
 
 For the HTTP/Connect projection, mount the returned `http.Handler` on your
@@ -659,10 +810,10 @@ For HTTP, mount `http_router(server)` inside your axum app and serve via
 
 ### Process management + restarts
 
-Multi-projection serve (`Serve(ctx, ...)` in Go, `server.serve(...)` in
-Python, `projections::serve::serve(...)` in Rust) honours a cancellation
-signal: hook it to your supervisor's TERM signal handler and the server
-drains in-flight requests before exiting.
+Go's `ServeProjections(ctx, ...)`, Python's `server.serve(...)`, and Rust's
+`projections::serve::serve(...)` honor a cancellation signal. Native Go gRPC
+uses `Serve(listener)` with `GracefulStop()` to drain in-flight requests. Hook
+both forms to your supervisor's TERM signal handler.
 
 ### Reverse-proxy compatibility
 

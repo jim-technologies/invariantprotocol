@@ -2,6 +2,7 @@ package invariant
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,8 +55,44 @@ func errorPayload(err error) map[string]any {
 	return payload
 }
 
+// connectErrorPayload encodes rich details in Connect's wire shape. Keep
+// errorPayload's expanded debug shape for MCP/CLI compatibility.
+func connectErrorPayload(err error) map[string]any {
+	st := statusFromError(err)
+	payload := map[string]any{
+		"code":    grpcCodeName(st.Code()),
+		"message": st.Message(),
+	}
+	if details := connectStatusDetails(st); len(details) > 0 {
+		payload["details"] = details
+	}
+	return payload
+}
+
+func connectStatusDetails(st *status.Status) []map[string]any {
+	protoStatus := st.Proto()
+	if len(protoStatus.Details) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(protoStatus.Details))
+	for _, detail := range protoStatus.Details {
+		typeName := detail.GetTypeUrl()
+		if slash := strings.LastIndexByte(typeName, '/'); slash >= 0 {
+			typeName = typeName[slash+1:]
+		}
+		out = append(out, map[string]any{
+			"type":  typeName,
+			"value": base64.RawStdEncoding.EncodeToString(detail.GetValue()),
+		})
+	}
+	return out
+}
+
 // grpcCodeName returns the Connect-style lowercase code name (e.g. "invalid_argument").
 func grpcCodeName(code codes.Code) string {
+	if code == codes.Canceled {
+		return "canceled"
+	}
 	name := codepb.Code(int32(code)).String()
 	if strings.HasPrefix(name, "Code(") {
 		return "unknown"

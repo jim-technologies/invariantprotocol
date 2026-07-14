@@ -8,6 +8,7 @@ import (
 
 	"buf.build/go/protovalidate"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -26,9 +27,9 @@ import (
 //	server.Use(v)
 //
 // Streaming RPCs are not covered by the unary interceptor — pair it with
-// ValidationStream and “server.UseStream(vs)“ when you have streaming
+// ValidationStream and `server.UseStream(vs)` when you have streaming
 // methods with protovalidate constraints.
-func Validation() (UnaryServerInterceptor, error) {
+func Validation() (grpc.UnaryServerInterceptor, error) {
 	validator, err := protovalidate.New()
 	if err != nil {
 		return nil, fmt.Errorf("create protovalidate validator: %w", err)
@@ -50,20 +51,39 @@ func Validation() (UnaryServerInterceptor, error) {
 // the request before opening the stream. Failures short-circuit with
 // INVALID_ARGUMENT and never produce any response messages — the same
 // guarantee callers expect from the unary variant.
-func ValidationStream() (StreamServerInterceptor, error) {
+func ValidationStream() (grpc.StreamServerInterceptor, error) {
 	validator, err := protovalidate.New()
 	if err != nil {
 		return nil, fmt.Errorf("create protovalidate validator: %w", err)
 	}
 
-	return func(req any, stream ServerStream, _ *ServerCallInfo, handler StreamHandler) error {
-		if msg, ok := req.(proto.Message); ok {
-			if err := validator.Validate(msg); err != nil {
-				return validationToInvariantError(err)
-			}
+	return func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		wrapped := &validationServerStream{
+			ServerStream: stream,
+			validate: func(msg proto.Message) error {
+				if err := validator.Validate(msg); err != nil {
+					return validationToInvariantError(err)
+				}
+				return nil
+			},
 		}
-		return handler(req, stream)
+		return handler(srv, wrapped)
 	}, nil
+}
+
+type validationServerStream struct {
+	grpc.ServerStream
+	validate func(proto.Message) error
+}
+
+func (s *validationServerStream) RecvMsg(msg any) error {
+	if err := s.ServerStream.RecvMsg(msg); err != nil {
+		return err
+	}
+	if protoMessage, ok := msg.(proto.Message); ok {
+		return s.validate(protoMessage)
+	}
+	return nil
 }
 
 func validationToInvariantError(err error) error {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -239,32 +240,25 @@ func TestConnectMCPToolCallGreetGroup(t *testing.T) {
 	assert.Contains(t, block["text"], "Hello, Bob")
 }
 
-func TestConnectdynamicHandlerDirect(t *testing.T) {
+func TestConnectProgrammaticInvoke(t *testing.T) {
 	addr, stop := startTestGRPCServer(t)
 	defer stop()
 
 	srv := connectServer(t, addr)
 
-	tool := srv.tools["GreetService.Greet"]
-	dh, ok := tool.Handler.(*grpcDynamicHandler)
-	require.True(t, ok, "handler should be *grpcDynamicHandler")
-
-	result, err := callDynamicJSON(t.Context(), dh, []byte(`{"name": "Direct"}`))
+	result, err := srv.Invoke(t.Context(), "GreetService.Greet", &greetpb.GreetRequest{Name: "Direct"})
 	require.NoError(t, err)
-	assert.Contains(t, result, "Hello, Direct")
+	assert.Equal(t, "Hello, Direct", result.(*greetpb.GreetResponse).GetMessage())
 }
 
-func TestConnectdynamicHandlerDirectRejectsUnknownField(t *testing.T) {
+func TestConnectProgrammaticJSONRejectsUnknownField(t *testing.T) {
 	addr, stop := startTestGRPCServer(t)
 	defer stop()
 
 	srv := connectServer(t, addr)
 
 	tool := srv.tools["GreetService.Greet"]
-	dh, ok := tool.Handler.(*grpcDynamicHandler)
-	require.True(t, ok, "handler should be *grpcDynamicHandler")
-
-	_, err := callDynamicJSON(t.Context(), dh, []byte(`{"name":"Direct","extra":"x"}`))
+	_, err := srv.invokeJSON(t.Context(), tool, []byte(`{"name":"Direct","extra":"x"}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown field")
 

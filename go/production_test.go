@@ -12,6 +12,7 @@ import (
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -84,15 +85,15 @@ func TestStreamInterceptorOrdering(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
 
 	var order []string
-	srv.UseStream(func(req any, stream ServerStream, _ *ServerCallInfo, handler StreamHandler) error {
+	srv.UseStream(func(service any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		order = append(order, "outer-before")
-		err := handler(req, stream)
+		err := handler(service, stream)
 		order = append(order, "outer-after")
 		return err
 	})
-	srv.UseStream(func(req any, stream ServerStream, _ *ServerCallInfo, handler StreamHandler) error {
+	srv.UseStream(func(service any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		order = append(order, "inner-before")
-		err := handler(req, stream)
+		err := handler(service, stream)
 		order = append(order, "inner-after")
 		return err
 	})

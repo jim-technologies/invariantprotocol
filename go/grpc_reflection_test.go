@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	reflectionpb "google.golang.org/grpc/reflection/grpc_reflection_v1"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 func TestGRPCReflection(t *testing.T) {
@@ -46,4 +48,21 @@ func TestGRPCReflection(t *testing.T) {
 	}
 
 	assert.True(t, services["greet.v1.GreetService"], "expected greet.v1.GreetService in reflection list, got: %v", services)
+
+	descriptorStream, err := client.ServerReflectionInfo(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, descriptorStream.Send(&reflectionpb.ServerReflectionRequest{
+		MessageRequest: &reflectionpb.ServerReflectionRequest_FileContainingSymbol{
+			FileContainingSymbol: "greet.v1.GreetService",
+		},
+	}))
+	response, err := descriptorStream.Recv()
+	require.NoError(t, err)
+	require.Nil(t, response.GetErrorResponse())
+	files := response.GetFileDescriptorResponse().GetFileDescriptorProto()
+	require.NotEmpty(t, files)
+	var greetFile descriptorpb.FileDescriptorProto
+	require.NoError(t, proto.Unmarshal(files[0], &greetFile))
+	assert.Equal(t, "greet.proto", greetFile.GetName())
+	require.NoError(t, descriptorStream.CloseSend())
 }

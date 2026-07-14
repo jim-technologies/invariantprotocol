@@ -40,7 +40,13 @@ func TestHTTPUnaryRejectsOversizedBody(t *testing.T) {
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
-	require.GreaterOrEqual(t, resp.StatusCode, 400)
+	require.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+
+	responseBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var envelope map[string]any
+	require.NoError(t, json.Unmarshal(responseBody, &envelope))
+	assert.Equal(t, "resource_exhausted", envelope["code"])
 }
 
 // SetMaxUnaryRequestBytes raises the cap for apps that legitimately accept
@@ -49,6 +55,7 @@ func TestHTTPUnaryRejectsOversizedBody(t *testing.T) {
 func TestHTTPUnaryRespectsRaisedBodyCap(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
 	srv.SetMaxUnaryRequestBytes(int64(httpMaxUnaryRequest) * 4) // 64 MiB
+	srv.SetMaxUnaryResponseBytes(int64(httpMaxUnaryRequest) * 4)
 	handler, err := srv.HTTPHandler()
 	require.NoError(t, err)
 	ts := httptest.NewServer(handler)
@@ -75,7 +82,8 @@ func TestHTTPUnaryConfigureMethodPerMethodCap(t *testing.T) {
 	// Server-level default stays small (the cheap-RPCs cap). Bump only
 	// /greet.v1.GreetService/Greet to 4× default.
 	srv.ConfigureMethod("/greet.v1.GreetService/Greet", MethodConfig{
-		MaxUnaryRequestBytes: int64(httpMaxUnaryRequest) * 4,
+		MaxUnaryRequestBytes:  int64(httpMaxUnaryRequest) * 4,
+		MaxUnaryResponseBytes: int64(httpMaxUnaryRequest) * 4,
 	})
 	handler, err := srv.HTTPHandler()
 	require.NoError(t, err)
@@ -163,7 +171,7 @@ func TestServeContextCancelStopsGracefully(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	errc := make(chan error, 1)
 	go func() {
-		errc <- srv.Serve(ctx, HTTP(0))
+		errc <- srv.ServeProjections(ctx, HTTP(0))
 	}()
 
 	// Cancel immediately; serve should return cleanly with ctx.Err.
@@ -414,10 +422,19 @@ func TestStreamRejectsOversizedRequestEnvelope(t *testing.T) {
 	resp, err := http.DefaultClient.Do(httpReq)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
-	require.GreaterOrEqual(t, resp.StatusCode, 400)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	if got := resp.Header.Get("Content-Type"); got != connectStreamJSONType {
+		t.Errorf("Content-Type = %q, want %q", got, connectStreamJSONType)
+	}
 
-	body, _ := io.ReadAll(resp.Body)
-	var envelope map[string]any
-	require.NoError(t, json.Unmarshal(body, &envelope))
-	assert.Equal(t, "invalid_argument", envelope["code"])
+	frames := readAllEnvelopes(t, resp.Body)
+	require.Len(t, frames, 1)
+	assert.Equal(t, connectEndStreamFlag, frames[0].flags)
+	var end struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(frames[0].payload, &end))
+	assert.Equal(t, "resource_exhausted", end.Error.Code)
 }

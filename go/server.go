@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	invpb "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1"
 	"google.golang.org/grpc"
@@ -23,39 +24,41 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// --- Interceptor types (mirrors gRPC pattern, zero coupling to grpc package) ---
+// These aliases keep the pre-1.0 names source-compatible while making grpc-go's
+// middleware types the one interceptor model used by every projection.
+type (
+	// ServerCallInfo is the compatibility name for grpc.UnaryServerInfo.
+	//
+	// Deprecated: use grpc.UnaryServerInfo.
+	ServerCallInfo = grpc.UnaryServerInfo
+	// UnaryHandler is the compatibility name for grpc.UnaryHandler.
+	//
+	// Deprecated: use grpc.UnaryHandler.
+	UnaryHandler = grpc.UnaryHandler
+	// UnaryServerInterceptor is the compatibility name for grpc.UnaryServerInterceptor.
+	//
+	// Deprecated: use grpc.UnaryServerInterceptor.
+	UnaryServerInterceptor = grpc.UnaryServerInterceptor
+	// StreamHandler is the compatibility name for grpc.StreamHandler.
+	//
+	// Deprecated: use grpc.StreamHandler.
+	StreamHandler = grpc.StreamHandler
+	// StreamServerInterceptor is the compatibility name for grpc.StreamServerInterceptor.
+	//
+	// Deprecated: use grpc.StreamServerInterceptor.
+	StreamServerInterceptor = grpc.StreamServerInterceptor
+)
 
-// ServerCallInfo holds metadata about the RPC being invoked, passed to interceptors.
-type ServerCallInfo struct {
-	FullMethod string // e.g. "/greet.v1.GreetService/Greet"
-}
-
-// UnaryHandler is the handler function called at the end of the interceptor chain.
-type UnaryHandler func(ctx context.Context, req any) (any, error)
-
-// UnaryServerInterceptor intercepts unary RPCs across all projections (MCP, HTTP,
-// gRPC, CLI). Same signature as grpc.UnaryServerInterceptor but framework-native.
-type UnaryServerInterceptor func(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error)
-
-// ServerStream is the streaming counterpart to UnaryHandler — passed to
-// server-streaming RPC handlers and to StreamServerInterceptor. Send delivers
-// one response message. Context returns the per-call context.
+// ServerStream is retained only for the reflection-based Register compatibility
+// API.
 //
-// Mirrors grpc.ServerStream's minimum surface so users can move handlers
-// between Invariant and grpc-go with one rename.
+// Deprecated: implement the generated grpc.ServerStreamingServer method.
 type ServerStream interface {
 	Send(msg proto.Message) error
 	Context() context.Context
 }
 
-// StreamHandler is the handler at the end of the streaming interceptor chain.
-type StreamHandler func(req any, stream ServerStream) error
-
-// StreamServerInterceptor wraps server-streaming RPCs. Separate from
-// UnaryServerInterceptor to match gRPC's split — a unary interceptor cannot
-// observe the response stream, and a stream interceptor doesn't see a single
-// returned value.
-type StreamServerInterceptor func(req any, stream ServerStream, info *ServerCallInfo, handler StreamHandler) error
+type legacyStreamHandler func(req any, stream ServerStream) error
 
 // OutboundHTTPRequest describes an HTTP request that will be sent by ConnectHTTP.
 // It is passed to HTTPHeaderProvider so callers can compute dynamic auth headers.
@@ -83,34 +86,41 @@ type Tool struct {
 	ServerStreaming bool
 
 	// Cached at addTool time so the hot path doesn't reflect on every call.
-	invokeHandler UnaryHandler  // non-nil when !ServerStreaming
-	streamHandler StreamHandler // non-nil when ServerStreaming
-	callInfo      *ServerCallInfo
+	invokeHandler UnaryHandler        // non-nil when !ServerStreaming
+	streamHandler legacyStreamHandler // compatibility Register stream handler
+	streamDesc    *grpc.StreamDesc
+	serviceImpl   any
+	callInfo      *grpc.UnaryServerInfo
+	streamInfo    *grpc.StreamServerInfo
 	newRequest    func() proto.Message
 }
 
 const (
 	serverName    = "invariant-protocol"
-	serverVersion = "0.2.3"
+	serverVersion = "0.3.0"
 )
 
-// MethodConfig overrides per-server defaults for one RPC method. Nil-valued
+// MethodConfig overrides per-server defaults for one RPC method. Zero-valued
 // fields fall back to the server-level setting. Apply via
 // `Server.ConfigureMethod("/pkg.Service/Method", MethodConfig{...})`.
 //
-// Today only request-body caps are configurable per method; the type is
-// designed to grow (per-method timeout, auth requirement, rate limit)
-// without breaking the call site — add the field, leave existing callers
-// using the zero value.
+// Request and response limits are independent because protobuf and JSON wire
+// sizes are not interchangeable.
 type MethodConfig struct {
 	// MaxUnaryRequestBytes overrides the per-server unary cap. Zero =
 	// inherit. Use a positive value for methods that legitimately need
 	// large bodies (e.g. an object-store Upload accepting hundreds of
 	// MiB) while keeping the rest of the surface tight.
 	MaxUnaryRequestBytes int64
+	// MaxUnaryResponseBytes overrides the encoded unary HTTP response cap.
+	// The selected wire encoding (JSON or protobuf) is measured.
+	MaxUnaryResponseBytes int64
 	// MaxStreamRequestBytes overrides the per-server Connect-streaming
 	// request envelope cap. Zero = inherit.
 	MaxStreamRequestBytes int64
+	// MaxStreamResponseBytes overrides the encoded Connect response-message
+	// cap. It applies independently to each message, like gRPC limits.
+	MaxStreamResponseBytes int64
 }
 
 // Server holds parsed descriptors and registered tools.
@@ -119,9 +129,10 @@ type Server struct {
 	schemaGen          *schemaGenerator
 	tools              map[string]*Tool
 	fds                *descriptorpb.FileDescriptorSet // original FDS for dynamic message creation
-	interceptors       []UnaryServerInterceptor
-	streamInterceptors []StreamServerInterceptor
+	interceptors       []grpc.UnaryServerInterceptor
+	streamInterceptors []grpc.StreamServerInterceptor
 	httpHeaderProvider HTTPHeaderProvider
+	httpMetadataMapper HTTPMetadataMapper
 	includes           []string // glob patterns for methods to include
 	excludes           []string // glob patterns for methods to exclude
 
@@ -130,8 +141,10 @@ type Server struct {
 	// object store accepting multi-hundred-megabyte uploads). Or raise
 	// only for specific methods via ConfigureMethod — preferred when one
 	// RPC is the outlier rather than the whole service.
-	httpMaxUnaryRequest     int64
-	connectStreamMaxRequest int64
+	httpMaxUnaryRequest      int64
+	httpMaxUnaryResponse     int64
+	connectStreamMaxRequest  int64
+	connectStreamMaxResponse int64
 
 	// methodConfigs is the per-method override table. Keys are
 	// `/pkg.Service/Method` paths (matching the Connect URL space and
@@ -139,6 +152,21 @@ type Server struct {
 	// ConfigureMethod; read by the HTTP handlers before applying the
 	// server-level cap.
 	methodConfigs map[string]MethodConfig
+
+	mu                 sync.RWMutex
+	frozen             bool
+	frozenFast         atomic.Bool
+	grpcServer         *grpc.Server
+	registeredServices map[string]registeredService
+}
+
+func (s *Server) updateConfiguration(subject string, update func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.frozen {
+		panic(fmt.Sprintf("invariant: %s cannot be changed after serving begins", subject))
+	}
+	update()
 }
 
 // SetMaxUnaryRequestBytes overrides the HTTP unary body-size cap. Pass 0 to
@@ -147,7 +175,16 @@ func (s *Server) SetMaxUnaryRequestBytes(n int64) {
 	if n <= 0 {
 		n = defaultHTTPMaxUnaryRequest
 	}
-	s.httpMaxUnaryRequest = n
+	s.updateConfiguration("HTTP unary request limit", func() { s.httpMaxUnaryRequest = n })
+}
+
+// SetMaxUnaryResponseBytes overrides the encoded HTTP unary response cap.
+// Pass 0 to reset to the default (16 MiB).
+func (s *Server) SetMaxUnaryResponseBytes(n int64) {
+	if n <= 0 {
+		n = defaultHTTPMaxUnaryResponse
+	}
+	s.updateConfiguration("HTTP unary response limit", func() { s.httpMaxUnaryResponse = n })
 }
 
 // SetMaxStreamRequestBytes overrides the Connect streaming request envelope
@@ -156,7 +193,16 @@ func (s *Server) SetMaxStreamRequestBytes(n int64) {
 	if n <= 0 {
 		n = defaultConnectStreamMaxRequest
 	}
-	s.connectStreamMaxRequest = n
+	s.updateConfiguration("HTTP stream request limit", func() { s.connectStreamMaxRequest = n })
+}
+
+// SetMaxStreamResponseBytes overrides the per-message encoded Connect stream
+// response cap. Pass 0 to reset to the default (16 MiB).
+func (s *Server) SetMaxStreamResponseBytes(n int64) {
+	if n <= 0 {
+		n = defaultConnectStreamMaxResponse
+	}
+	s.updateConfiguration("HTTP stream response limit", func() { s.connectStreamMaxResponse = n })
 }
 
 // ConfigureMethod registers a per-method override. The method path is the
@@ -176,10 +222,12 @@ func (s *Server) SetMaxStreamRequestBytes(n int64) {
 //
 // Last write wins; re-calling overrides the previous config for that method.
 func (s *Server) ConfigureMethod(methodPath string, cfg MethodConfig) {
-	if s.methodConfigs == nil {
-		s.methodConfigs = make(map[string]MethodConfig)
-	}
-	s.methodConfigs[methodPath] = cfg
+	s.updateConfiguration("method configuration", func() {
+		if s.methodConfigs == nil {
+			s.methodConfigs = make(map[string]MethodConfig)
+		}
+		s.methodConfigs[methodPath] = cfg
+	})
 }
 
 // methodUnaryCap returns the effective unary cap for one tool. Looks up
@@ -194,6 +242,16 @@ func (s *Server) methodUnaryCap(t *Tool) int64 {
 	return s.httpMaxUnaryRequest
 }
 
+func (s *Server) methodUnaryResponseCap(t *Tool) int64 {
+	if t != nil && s.methodConfigs != nil {
+		path := "/" + t.ServiceFullName + "/" + t.MethodName
+		if cfg, ok := s.methodConfigs[path]; ok && cfg.MaxUnaryResponseBytes > 0 {
+			return cfg.MaxUnaryResponseBytes
+		}
+	}
+	return s.httpMaxUnaryResponse
+}
+
 // methodStreamCap is the streaming-request counterpart to methodUnaryCap.
 func (s *Server) methodStreamCap(t *Tool) int64 {
 	if t != nil && s.methodConfigs != nil {
@@ -205,23 +263,38 @@ func (s *Server) methodStreamCap(t *Tool) int64 {
 	return s.connectStreamMaxRequest
 }
 
+func (s *Server) methodStreamResponseCap(t *Tool) int64 {
+	if t != nil && s.methodConfigs != nil {
+		path := "/" + t.ServiceFullName + "/" + t.MethodName
+		if cfg, ok := s.methodConfigs[path]; ok && cfg.MaxStreamResponseBytes > 0 {
+			return cfg.MaxStreamResponseBytes
+		}
+	}
+	return s.connectStreamMaxResponse
+}
+
 // Use registers a unary interceptor. Runs in registration order (first registered
 // = outermost) on every unary tool invocation across all projections. Stream RPCs
 // are not affected — use UseStream for those.
-func (s *Server) Use(interceptor UnaryServerInterceptor) {
-	s.interceptors = append(s.interceptors, interceptor)
+func (s *Server) Use(interceptor grpc.UnaryServerInterceptor) {
+	s.updateConfiguration("shared unary interceptors", func() {
+		s.interceptors = append(s.interceptors, interceptor)
+	})
 }
 
 // UseStream registers a server-streaming interceptor. Mirrors Use but for
 // server-streaming RPCs. Same registration-order semantics.
-func (s *Server) UseStream(interceptor StreamServerInterceptor) {
-	s.streamInterceptors = append(s.streamInterceptors, interceptor)
+func (s *Server) UseStream(interceptor grpc.StreamServerInterceptor) {
+	s.updateConfiguration("shared stream interceptors", func() {
+		s.streamInterceptors = append(s.streamInterceptors, interceptor)
+	})
 }
 
 // UseHTTPHeaderProvider sets an optional outbound header provider for ConnectHTTP.
-// The provider is called for every outbound HTTP request.
+// The current provider is called for every outbound HTTP request. Like other
+// configuration, it may be changed until serving or invocation begins.
 func (s *Server) UseHTTPHeaderProvider(provider HTTPHeaderProvider) {
-	s.httpHeaderProvider = provider
+	s.updateConfiguration("HTTP header provider", func() { s.httpHeaderProvider = provider })
 }
 
 // Include adds glob patterns for methods to include. Only methods matching at
@@ -230,20 +303,17 @@ func (s *Server) UseHTTPHeaderProvider(provider HTTPHeaderProvider) {
 // Use "*" to match any sequence of characters (including dots).
 // Examples: "temporal.api.workflowservice.v1.WorkflowService.*", "*.StartWorkflow*".
 func (s *Server) Include(patterns ...string) {
-	s.includes = append(s.includes, patterns...)
+	s.updateConfiguration("include filters", func() { s.includes = append(s.includes, patterns...) })
 }
 
 // Exclude adds glob patterns for methods to exclude. Methods matching any
-// exclude pattern are skipped during registration. Exclude is applied after
+// exclude pattern are skipped during projection registration. Exclude is applied after
 // include. Patterns use the same syntax as Include.
 func (s *Server) Exclude(patterns ...string) {
-	s.excludes = append(s.excludes, patterns...)
+	s.updateConfiguration("exclude filters", func() { s.excludes = append(s.excludes, patterns...) })
 }
 
-// shouldInclude returns true if the method should be registered based on
-// the configured include/exclude patterns and INVARIANT_INCLUDE/INVARIANT_EXCLUDE
-// environment variables.
-func (s *Server) shouldInclude(serviceFullName, methodName string) bool {
+func (s *Server) shouldIncludeLocked(serviceFullName, methodName string) bool {
 	fullPath := serviceFullName + "." + methodName
 
 	includes := s.includes
@@ -318,44 +388,56 @@ func splitPatterns(s string) []string {
 }
 
 func newServer(parsed *invpb.ParsedDescriptor) *Server {
-	return &Server{
-		parsed:                  parsed,
-		schemaGen:               newSchemaGenerator(parsed),
-		tools:                   make(map[string]*Tool),
-		httpMaxUnaryRequest:     defaultHTTPMaxUnaryRequest,
-		connectStreamMaxRequest: defaultConnectStreamMaxRequest,
+	return newServerWithFDS(parsed, nil)
+}
+
+func newServerWithFDS(parsed *invpb.ParsedDescriptor, fds *descriptorpb.FileDescriptorSet, grpcOptions ...grpc.ServerOption) *Server {
+	s := &Server{
+		parsed:                   parsed,
+		schemaGen:                newSchemaGenerator(parsed),
+		tools:                    make(map[string]*Tool),
+		httpMaxUnaryRequest:      defaultHTTPMaxUnaryRequest,
+		httpMaxUnaryResponse:     defaultHTTPMaxUnaryResponse,
+		connectStreamMaxRequest:  defaultConnectStreamMaxRequest,
+		connectStreamMaxResponse: defaultConnectStreamMaxResponse,
+		registeredServices:       make(map[string]registeredService),
+		httpMetadataMapper:       DefaultHTTPMetadataMapper,
+		fds:                      fds,
 	}
+	s.grpcServer = s.newNativeGRPCServer(grpcOptions...)
+	return s
 }
 
 // ServerFromDescriptor reads a descriptor file and returns a configured Server.
-func ServerFromDescriptor(path string) (*Server, error) {
+func ServerFromDescriptor(path string, grpcOptions ...grpc.ServerOption) (*Server, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return serverFromRawBytes(data)
+	return serverFromRawBytes(data, grpcOptions...)
 }
 
 // ServerFromBytes parses an embedded FileDescriptorSet and returns a configured Server.
-func ServerFromBytes(data []byte) (*Server, error) {
-	return serverFromRawBytes(data)
+func ServerFromBytes(data []byte, grpcOptions ...grpc.ServerOption) (*Server, error) {
+	return serverFromRawBytes(data, grpcOptions...)
 }
 
-func serverFromRawBytes(data []byte) (*Server, error) {
+func serverFromRawBytes(data []byte, grpcOptions ...grpc.ServerOption) (*Server, error) {
 	var fds descriptorpb.FileDescriptorSet
 	if err := proto.Unmarshal(data, &fds); err != nil {
 		return nil, fmt.Errorf("unmarshal FileDescriptorSet: %w", err)
 	}
 	parsed := parseFileDescriptorSet(&fds)
-	srv := newServer(parsed)
-	srv.fds = &fds
-	return srv, nil
+	return newServerWithFDS(parsed, &fds, grpcOptions...), nil
 }
 
 // Register discovers methods on servicer that match the service's RPCs and
 // creates tools for each unary (non-streaming) method.
 // If serviceName is empty, auto-matches by finding services whose RPC method
 // names exist on the servicer.
+//
+// Deprecated: implement the generated server interface and call its
+// Register<Service>Server function with this Server.
 func (s *Server) Register(servicer any, serviceName ...string) error {
 	var services map[string]*invpb.ServiceInfo
 
@@ -381,47 +463,25 @@ func (s *Server) Register(servicer any, serviceName ...string) error {
 		}
 	}
 
-	servicerVal := reflect.ValueOf(servicer)
-
-	for svcFullName, svcInfo := range services {
-		for methodName, methodInfo := range svcInfo.Methods {
-			// Client-streaming and bidi are out of scope — opinionated.
-			if methodInfo.ClientStreaming {
-				continue
-			}
-
-			if !s.shouldInclude(svcFullName, methodName) {
-				continue
-			}
-
-			method := servicerVal.MethodByName(methodName)
-			if !method.IsValid() {
-				continue
-			}
-
-			toolName := svcInfo.Name + "." + methodName
-			description := methodInfo.Comment
-			if description == "" {
-				description = toolName
-			}
-
-			if err := s.addTool(&Tool{
-				Name:            toolName,
-				Description:     description,
-				InputSchema:     s.schemaGen.MessageToSchema(methodInfo.InputType),
-				Handler:         method.Interface(),
-				InputType:       methodInfo.InputType,
-				OutputType:      methodInfo.OutputType,
-				ServiceFullName: svcFullName,
-				MethodName:      methodName,
-				ServerStreaming: methodInfo.ServerStreaming,
-			}); err != nil {
-				return err
-			}
-		}
+	names := make([]string, 0, len(services))
+	for name := range services {
+		names = append(names, name)
 	}
-
-	return nil
+	slices.Sort(names)
+	registrations := make([]registeredService, 0, len(names))
+	for _, svcFullName := range names {
+		svcInfo := services[svcFullName]
+		desc, err := s.legacyServiceDesc(servicer, svcFullName, svcInfo)
+		if err != nil {
+			return err
+		}
+		registrations = append(registrations, registeredService{desc: desc, service: servicer})
+	}
+	subject := "reflection services"
+	if len(registrations) == 1 {
+		subject = fmt.Sprintf("%q", registrations[0].desc.ServiceName)
+	}
+	return s.registerServices(registrations, subject)
 }
 
 // addTool registers a Tool, rejecting collisions and pre-building the per-Tool
@@ -438,23 +498,49 @@ func (s *Server) addTool(t *Tool) error {
 			t.Name, existing.ServiceFullName, t.ServiceFullName,
 		)
 	}
-	if t.ServerStreaming {
+	if registered, ok := t.Handler.(*registeredStreamHandler); ok {
+		t.streamDesc = registered.method
+		t.serviceImpl = registered.service
+	} else if t.ServerStreaming {
 		if handler, err := buildStreamHandler(t.Handler); err == nil {
 			t.streamHandler = handler
 		} else {
 			buildErr := err
 			t.streamHandler = func(any, ServerStream) error { return buildErr }
 		}
+	} else if registered, ok := t.Handler.(*registeredUnaryHandler); ok {
+		t.serviceImpl = registered.service
+		t.invokeHandler = func(ctx context.Context, req any) (any, error) {
+			return registered.method.Handler(
+				registered.service,
+				ctx,
+				func(dst any) error { return copyProtoMessage(dst, req) },
+				s.sharedUnaryInterceptor,
+			)
+		}
 	} else {
 		if handler, err := buildInvokeHandler(t.Handler); err == nil {
-			t.invokeHandler = handler
+			t.invokeHandler = func(ctx context.Context, req any) (any, error) {
+				return s.sharedUnaryInterceptor(ctx, req, t.callInfo, handler)
+			}
 		} else {
 			buildErr := err
 			t.invokeHandler = func(context.Context, any) (any, error) { return nil, buildErr }
 		}
 	}
-	t.newRequest = buildRequestFactory(t.Handler)
-	t.callInfo = &ServerCallInfo{FullMethod: "/" + t.ServiceFullName + "/" + t.MethodName}
+	if t.newRequest == nil {
+		t.newRequest = s.messageFactory(t.InputType)
+	}
+	if t.newRequest == nil {
+		t.newRequest = buildRequestFactory(t.Handler)
+	}
+	fullMethod := "/" + t.ServiceFullName + "/" + t.MethodName
+	server := t.serviceImpl
+	if server == nil {
+		server = s
+	}
+	t.callInfo = &grpc.UnaryServerInfo{Server: server, FullMethod: fullMethod}
+	t.streamInfo = &grpc.StreamServerInfo{FullMethod: fullMethod, IsServerStream: true}
 	s.tools[t.Name] = t
 	return nil
 }
@@ -516,7 +602,7 @@ func isStreamHandlerType(ht reflect.Type) bool {
 
 // buildStreamHandler reflects on a server-streaming handler and returns a
 // proto-in/stream-out closure. Reflection runs once at registration.
-func buildStreamHandler(handler any) (StreamHandler, error) {
+func buildStreamHandler(handler any) (legacyStreamHandler, error) {
 	hv := reflect.ValueOf(handler)
 	ht := hv.Type()
 	if !isStreamHandlerType(ht) {
@@ -653,12 +739,62 @@ func (s *Server) matchServicer(servicer any) map[string]*invpb.ServiceInfo {
 	return matched
 }
 
-// Connect registers a gRPC client connection's methods as tools.
-// The caller creates and manages the *grpc.ClientConn; Connect only reads from it.
-// Use Include/Exclude to filter which services and methods are registered.
-func (s *Server) Connect(conn *grpc.ClientConn) error {
+// remoteProxyService is the captured implementation behind descriptor-driven
+// remote clients. Its grpc.MethodDesc handlers forward directly through the
+// caller-owned client connection; there is no hidden in-memory transport hop.
+type remoteProxyService struct{}
+
+type protoUnaryCaller interface {
+	callProto(context.Context, proto.Message) (proto.Message, error)
+}
+
+func proxyUnaryMethodDesc(
+	methodName string,
+	fullMethod string,
+	newRequest func() proto.Message,
+	caller protoUnaryCaller,
+) grpc.MethodDesc {
+	return grpc.MethodDesc{
+		MethodName: methodName,
+		Handler: func(service any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+			if newRequest == nil {
+				return nil, status.Errorf(codes.Internal, "no request type registered for %s", fullMethod)
+			}
+			request := newRequest()
+			if err := dec(request); err != nil {
+				return nil, err
+			}
+			terminal := func(ctx context.Context, request any) (any, error) {
+				message, ok := request.(proto.Message)
+				if !ok {
+					return nil, status.Errorf(codes.Internal, "request for %s does not implement proto.Message: %T", fullMethod, request)
+				}
+				return caller.callProto(ctx, message)
+			}
+			if interceptor == nil {
+				return terminal(ctx, request)
+			}
+			return interceptor(ctx, request, &grpc.UnaryServerInfo{
+				Server: service, FullMethod: fullMethod,
+			}, terminal)
+		},
+	}
+}
+
+// ConnectGRPC registers a gRPC client connection's methods as tools.
+// The caller creates and owns the grpc.ClientConnInterface. Default call
+// options are applied to every projected unary call.
+// Use Include/Exclude to filter optional projection tools; the native proxy
+// service retains every supported unary method.
+func (s *Server) ConnectGRPC(conn grpc.ClientConnInterface, defaultCallOptions ...grpc.CallOption) error {
+	if err := s.ensureRegistrationOpen("gRPC connection"); err != nil {
+		return err
+	}
 	if s.fds == nil {
 		return errors.New("connect requires a Server created via ServerFromDescriptor or ServerFromBytes")
+	}
+	if conn == nil {
+		return errors.New("connect requires a non-nil grpc.ClientConnInterface")
 	}
 
 	files, err := s.buildProtoFiles()
@@ -666,17 +802,13 @@ func (s *Server) Connect(conn *grpc.ClientConn) error {
 		return err
 	}
 
-	services := s.parsed.Services
-
-	for svcFullName, svcInfo := range services {
+	serviceDescs := make(map[string]*grpc.ServiceDesc)
+	serviceImpls := make(map[string]*remoteProxyService)
+	for svcFullName, svcInfo := range s.parsed.Services {
 		for methodName, methodInfo := range svcInfo.Methods {
 			// Streaming RPCs aren't proxied — opinionated. Proxy-streaming would
 			// duplicate gRPC's own forwarding story without adding value.
 			if methodInfo.ClientStreaming || methodInfo.ServerStreaming {
-				continue
-			}
-
-			if !s.shouldInclude(svcFullName, methodName) {
 				continue
 			}
 
@@ -690,27 +822,50 @@ func (s *Server) Connect(conn *grpc.ClientConn) error {
 			}
 
 			methodPath := fmt.Sprintf("/%s/%s", svcFullName, methodName)
-			toolName := svcInfo.Name + "." + methodName
-			description := methodInfo.Comment
-			if description == "" {
-				description = toolName
+			desc := serviceDescs[svcFullName]
+			if desc == nil {
+				desc = &grpc.ServiceDesc{
+					ServiceName: svcFullName,
+					HandlerType: (*legacyGRPCService)(nil),
+					Metadata:    reqDesc.ParentFile().Path(),
+				}
+				serviceDescs[svcFullName] = desc
+				serviceImpls[svcFullName] = &remoteProxyService{}
 			}
-
-			if err := s.addTool(&Tool{
-				Name:            toolName,
-				Description:     description,
-				InputSchema:     s.schemaGen.MessageToSchema(methodInfo.InputType),
-				Handler:         &grpcDynamicHandler{conn: conn, methodPath: methodPath, reqDesc: reqDesc, respDesc: respDesc},
-				InputType:       methodInfo.InputType,
-				OutputType:      methodInfo.OutputType,
-				ServiceFullName: svcFullName,
-				MethodName:      methodName,
-			}); err != nil {
-				return err
+			caller := &grpcDynamicHandler{
+				conn:               conn,
+				methodPath:         methodPath,
+				reqDesc:            reqDesc,
+				respDesc:           respDesc,
+				newResponse:        s.messageFactory(methodInfo.OutputType),
+				defaultCallOptions: slices.Clone(defaultCallOptions),
 			}
+			desc.Methods = append(desc.Methods, proxyUnaryMethodDesc(
+				methodName, methodPath, s.messageFactory(methodInfo.InputType), caller,
+			))
 		}
 	}
-	return nil
+
+	names := make([]string, 0, len(serviceDescs))
+	for name := range serviceDescs {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	registrations := make([]registeredService, 0, len(names))
+	for _, name := range names {
+		registrations = append(registrations, registeredService{
+			desc: serviceDescs[name], service: serviceImpls[name],
+		})
+	}
+	return s.registerServices(registrations, "gRPC connection")
+}
+
+// Connect is the compatibility spelling for ConnectGRPC.
+//
+// Deprecated: use ConnectGRPC to supply a grpc.ClientConnInterface and optional
+// default grpc.CallOption values.
+func (s *Server) Connect(conn grpc.ClientConnInterface) error {
+	return s.ConnectGRPC(conn)
 }
 
 // Projection specifies a protocol to serve.
@@ -723,8 +878,11 @@ type Projection struct {
 // HTTP returns a projection that serves HTTP on the given port.
 func HTTP(port int) Projection { return Projection{kind: "http", port: port} }
 
-// GRPC returns a projection that serves gRPC on the given port.
-// Optional grpc.ServerOption values (TLS, keepalive, etc.) are passed to grpc.NewServer.
+// GRPC returns the deprecated port-owning gRPC projection. The variadic options
+// remain for source compatibility but are rejected at serve time; pass ordinary
+// grpc.ServerOption values to ServerFromDescriptor/ServerFromBytes instead.
+//
+// Deprecated: create a listener and call Server.Serve.
 func GRPC(port int, opts ...grpc.ServerOption) Projection {
 	return Projection{kind: "grpc", port: port, grpcOpts: opts}
 }
@@ -735,19 +893,20 @@ func MCP() Projection { return Projection{kind: "mcp"} }
 // CLI returns a projection that runs as a CLI from os.Args.
 func CLI() Projection { return Projection{kind: "cli"} }
 
-// Serve starts the specified projections and blocks until ctx is canceled
+// ServeProjections starts the specified optional projections and blocks until ctx is canceled
 // or the first projection returns an error.
 //
 //	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 //	defer cancel()
-//	server.Serve(ctx, invariant.HTTP(8080))
-//	server.Serve(ctx, invariant.HTTP(8080), invariant.GRPC(50051))
+//	server.ServeProjections(ctx, invariant.HTTP(8080))
+//	server.ServeProjections(ctx, invariant.HTTP(8080), invariant.MCP())
 //
 // On error or cancellation, all projections receive a graceful shutdown signal.
-func (s *Server) Serve(ctx context.Context, projections ...Projection) error {
+func (s *Server) ServeProjections(ctx context.Context, projections ...Projection) error {
 	if len(projections) == 0 {
 		return errors.New("no projections specified")
 	}
+	s.freeze()
 	if len(projections) == 1 {
 		return s.serveOne(ctx, projections[0])
 	}
@@ -788,6 +947,7 @@ func (s *Server) serveOne(ctx context.Context, p Projection) error {
 // tool is server-streaming — use InvokeStream for those. Both errors project
 // to the right code through every projection.
 func (s *Server) Invoke(ctx context.Context, toolName string, req proto.Message) (proto.Message, error) {
+	s.freeze()
 	tool, ok := s.tools[toolName]
 	if !ok {
 		var available []string
@@ -808,6 +968,7 @@ func (s *Server) Invoke(ctx context.Context, toolName string, req proto.Message)
 //
 // Like Invoke, this is the in-process entry point — no projection required.
 func (s *Server) InvokeStream(ctx context.Context, toolName string, req proto.Message, send func(proto.Message) error) error {
+	s.freeze()
 	tool, ok := s.tools[toolName]
 	if !ok {
 		var available []string
@@ -826,8 +987,14 @@ func (s *Server) InvokeStream(ctx context.Context, toolName string, req proto.Me
 
 // Tools returns a snapshot of the registered tool names to their Tool metadata.
 func (s *Server) Tools() map[string]*Tool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	out := make(map[string]*Tool, len(s.tools))
-	maps.Copy(out, s.tools)
+	for name, tool := range s.tools {
+		snapshot := *tool
+		snapshot.InputSchema = cloneMap(tool.InputSchema)
+		out[name] = &snapshot
+	}
 	return out
 }
 
@@ -838,6 +1005,8 @@ func (s *Server) Tools() map[string]*Tool {
 // consume them differently from unary tools. The MCP spec reserves `_meta`
 // for exactly this kind of server-specific annotation.
 func (s *Server) ToolCatalog() []map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	names := make([]string, 0, len(s.tools))
 	for name := range s.tools {
 		names = append(names, name)
@@ -850,7 +1019,7 @@ func (s *Server) ToolCatalog() []map[string]any {
 		entry := map[string]any{
 			"name":        t.Name,
 			"description": t.Description,
-			"inputSchema": t.InputSchema,
+			"inputSchema": cloneMap(t.InputSchema),
 		}
 		if t.ServerStreaming {
 			entry["_meta"] = map[string]any{"streaming": true}

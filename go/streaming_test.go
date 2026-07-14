@@ -80,7 +80,7 @@ func TestStreamRegistrationFlagsTool(t *testing.T) {
 	tool, ok := srv.tools["GreetService.StreamGreet"]
 	require.True(t, ok, "StreamGreet should register as a tool")
 	assert.True(t, tool.ServerStreaming)
-	assert.NotNil(t, tool.streamHandler)
+	assert.NotNil(t, tool.streamDesc)
 	assert.Nil(t, tool.invokeHandler)
 }
 
@@ -125,10 +125,10 @@ func TestStreamInvocationCollectsAllChunks(t *testing.T) {
 func TestStreamInterceptorWraps(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
 	var saw atomic.Int32
-	srv.UseStream(func(req any, stream ServerStream, info *ServerCallInfo, handler StreamHandler) error {
+	srv.UseStream(func(service any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		saw.Add(1)
 		assert.Equal(t, "/greet.v1.GreetService/StreamGreet", info.FullMethod)
-		return handler(req, stream)
+		return handler(service, stream)
 	})
 
 	tool := srv.tools["GreetService.StreamGreet"]
@@ -341,7 +341,7 @@ func TestStreamingHTTPRejectsNonStreamContentType(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.Equal(t, http.StatusUnsupportedMediaType, resp.StatusCode)
 	var envelope map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
 	assert.Equal(t, "invalid_argument", envelope["code"])

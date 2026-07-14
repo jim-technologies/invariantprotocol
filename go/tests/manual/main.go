@@ -22,15 +22,12 @@ import (
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protodesc"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/descriptorpb"
-	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // GreetServicer implements GreetService RPCs using generated proto types.
-type GreetServicer struct{}
+type GreetServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func (s *GreetServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	return &greetpb.GreetResponse{Message: "Hi " + req.Name + "!"}, nil
@@ -45,6 +42,21 @@ func (s *GreetServicer) GreetGroup(_ context.Context, req *greetpb.GreetGroupReq
 		Messages: messages,
 		Count:    int32(len(messages)),
 	}, nil
+}
+
+func (s *GreetServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream greetpb.GreetService_StreamGreetServer) error {
+	count := int(req.GetCount())
+	if count <= 0 {
+		count = 1
+	}
+	for i := range count {
+		if err := stream.Send(&greetpb.GreetResponse{
+			Message: fmt.Sprintf("Hi %s #%d", req.GetName(), i+1),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func descriptorPath() string {
@@ -73,18 +85,16 @@ func runMCP() error {
 			return fmt.Errorf("connect to %s: %w", remote, err)
 		}
 		defer conn.Close()
-		if err := server.Connect(conn); err != nil {
+		if err := server.ConnectGRPC(conn); err != nil {
 			return fmt.Errorf("register from %s: %w", remote, err)
 		}
 	} else {
-		if err := server.Register(&GreetServicer{}); err != nil {
-			return err
-		}
+		greetpb.RegisterGreetServiceServer(server, &GreetServicer{})
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	return server.Serve(ctx, invariant.MCP())
+	return server.ServeProjections(ctx, invariant.MCP())
 }
 
 func runGRPC() error {
@@ -97,86 +107,11 @@ func runGRPC() error {
 		}
 	}
 
-	// Build proto file registry for dynamic message creation
-	data, err := os.ReadFile(descriptorPath())
+	server, err := invariant.ServerFromDescriptor(descriptorPath())
 	if err != nil {
-		return fmt.Errorf("read descriptor: %w", err)
+		return fmt.Errorf("load descriptor: %w", err)
 	}
-	var fds descriptorpb.FileDescriptorSet
-	if err := proto.Unmarshal(data, &fds); err != nil {
-		return fmt.Errorf("unmarshal descriptor: %w", err)
-	}
-	files, err := protodesc.NewFiles(&fds)
-	if err != nil {
-		return fmt.Errorf("build file descriptors: %w", err)
-	}
-
-	lookup := func(name string) protoreflect.MessageDescriptor {
-		d, err := files.FindDescriptorByName(protoreflect.FullName(name))
-		if err != nil {
-			panic(fmt.Sprintf("message %q not found: %v", name, err))
-		}
-		return d.(protoreflect.MessageDescriptor)
-	}
-
-	reqDesc := lookup("greet.v1.GreetRequest")
-	respDesc := lookup("greet.v1.GreetResponse")
-	groupReqDesc := lookup("greet.v1.GreetGroupRequest")
-	groupRespDesc := lookup("greet.v1.GreetGroupResponse")
-
-	s := grpc.NewServer()
-	s.RegisterService(&grpc.ServiceDesc{
-		ServiceName: "greet.v1.GreetService",
-		HandlerType: (*any)(nil),
-		Methods: []grpc.MethodDesc{
-			{
-				MethodName: "Greet",
-				Handler: func(_ any, _ context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
-					req := dynamicpb.NewMessage(reqDesc)
-					if err := dec(req); err != nil {
-						return nil, err
-					}
-					name := req.Get(reqDesc.Fields().ByName("name")).String()
-
-					resp := dynamicpb.NewMessage(respDesc)
-					resp.Set(respDesc.Fields().ByName("message"), protoreflect.ValueOfString("Hi "+name+"!"))
-					if moodField := reqDesc.Fields().ByName("mood"); req.Has(moodField) {
-						resp.Set(respDesc.Fields().ByName("mood"), req.Get(moodField))
-					}
-					tagsField := reqDesc.Fields().ByName("tags")
-					reqTags := req.Get(tagsField).Map()
-					if reqTags.Len() > 0 {
-						respTags := resp.Mutable(respDesc.Fields().ByName("tags")).Map()
-						reqTags.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
-							respTags.Set(k, v)
-							return true
-						})
-					}
-					return resp, nil
-				},
-			},
-			{
-				MethodName: "GreetGroup",
-				Handler: func(_ any, _ context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
-					req := dynamicpb.NewMessage(groupReqDesc)
-					if err := dec(req); err != nil {
-						return nil, err
-					}
-					people := req.Get(groupReqDesc.Fields().ByName("people")).List()
-
-					resp := dynamicpb.NewMessage(groupRespDesc)
-					msgsList := resp.Mutable(groupRespDesc.Fields().ByName("messages")).List()
-					for i := 0; i < people.Len(); i++ {
-						person := people.Get(i).Message()
-						name := person.Get(person.Descriptor().Fields().ByName("name")).String()
-						msgsList.Append(protoreflect.ValueOfString("Hi " + name))
-					}
-					resp.Set(groupRespDesc.Fields().ByName("count"), protoreflect.ValueOfInt32(int32(people.Len())))
-					return resp, nil
-				},
-			},
-		},
-	}, struct{}{})
+	greetpb.RegisterGreetServiceServer(server, &GreetServicer{})
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -184,13 +119,13 @@ func runGRPC() error {
 	}
 	fmt.Fprintf(os.Stderr, "gRPC server listening on port %d\n", lis.Addr().(*net.TCPAddr).Port)
 
-	// Block until Ctrl-C
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	go s.Serve(lis)
-	<-ctx.Done()
-	s.GracefulStop()
-	return nil
+	go func() {
+		<-ctx.Done()
+		server.GracefulStop()
+	}()
+	return server.Serve(lis)
 }
 
 func runCLI() error {
@@ -205,16 +140,14 @@ func runCLI() error {
 			return fmt.Errorf("connect to %s: %w", remote, err)
 		}
 		defer conn.Close()
-		if err := server.Connect(conn); err != nil {
+		if err := server.ConnectGRPC(conn); err != nil {
 			return fmt.Errorf("register from %s: %w", remote, err)
 		}
 	} else {
-		if err := server.Register(&GreetServicer{}); err != nil {
-			return err
-		}
+		greetpb.RegisterGreetServiceServer(server, &GreetServicer{})
 	}
 
-	return server.Serve(context.Background(), invariant.CLI())
+	return server.ServeProjections(context.Background(), invariant.CLI())
 }
 
 func main() {

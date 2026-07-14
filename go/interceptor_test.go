@@ -123,7 +123,12 @@ func TestInterceptorFiresOnGRPC(t *testing.T) {
 
 	files, err := srv.buildProtoFiles()
 	require.NoError(t, err)
-	gs := grpcpkg.NewServer()
+	var nativeCalls int
+	gs := grpcpkg.NewServer(grpcpkg.UnaryInterceptor(func(ctx context.Context, req any, info *grpcpkg.UnaryServerInfo, handler grpcpkg.UnaryHandler) (any, error) {
+		nativeCalls++
+		assert.Equal(t, "/greet.v1.GreetService/Greet", info.FullMethod)
+		return handler(ctx, req)
+	}))
 	type svcEntry struct{ methods []grpcpkg.MethodDesc }
 	svcMap := make(map[string]*svcEntry)
 	for _, tool := range srv.tools {
@@ -167,6 +172,7 @@ func TestInterceptorFiresOnGRPC(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, gRPC")
 	assert.Equal(t, []string{"A-before", "A-after"}, log)
+	assert.Equal(t, 1, nativeCalls, "grpc.ServerOption interceptor must execute exactly once")
 }
 
 // --- Chain order ---

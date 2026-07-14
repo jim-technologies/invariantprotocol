@@ -3,6 +3,7 @@ package invariant
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,12 +19,15 @@ import (
 
 	invpb "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1"
 	annotationspb "google.golang.org/genproto/googleapis/api/annotations"
+	statuspb "google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 type httpDynamicHandler struct {
@@ -35,6 +39,7 @@ type httpDynamicHandler struct {
 	maxRetries     int
 	reqDesc        protoreflect.MessageDescriptor
 	respDesc       protoreflect.MessageDescriptor
+	newResponse    func() proto.Message
 	methodPath     string
 }
 
@@ -70,6 +75,10 @@ func (h *httpDynamicHandler) callProto(ctx context.Context, req proto.Message) (
 	}
 
 	for attempt := 0; ; attempt++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, status.Errorf(contextErrCode(ctxErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, ctxErr)
+		}
+
 		var bodyReader io.Reader
 		if len(bodyBytes) > 0 {
 			bodyReader = bytes.NewReader(bodyBytes)
@@ -92,6 +101,9 @@ func (h *httpDynamicHandler) callProto(ctx context.Context, req proto.Message) (
 
 		httpResp, err := h.client.Do(httpReq) //nolint:gosec // base URL is explicit caller configuration for remote proxy mode
 		if err != nil {
+			if ctxErr := httpCallContextError(ctx, err); ctxErr != nil {
+				return nil, status.Errorf(contextErrCode(ctxErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, ctxErr)
+			}
 			if h.shouldRetry(attempt, 0) {
 				if sleepErr := sleepWithContext(ctx, httpRetryDelay(attempt, "")); sleepErr != nil {
 					return nil, status.Errorf(contextErrCode(sleepErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, sleepErr)
@@ -103,11 +115,17 @@ func (h *httpDynamicHandler) callProto(ctx context.Context, req proto.Message) (
 
 		rawResp, readErr := io.ReadAll(io.LimitReader(httpResp.Body, httpClientMaxResponseBytes+1))
 		_ = httpResp.Body.Close()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, status.Errorf(contextErrCode(ctxErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, ctxErr)
+		}
 		if readErr == nil && int64(len(rawResp)) > httpClientMaxResponseBytes {
 			return nil, status.Errorf(codes.ResourceExhausted,
 				"upstream HTTP response exceeds %d byte limit", httpClientMaxResponseBytes)
 		}
 		if readErr != nil {
+			if ctxErr := httpCallContextError(ctx, readErr); ctxErr != nil {
+				return nil, status.Errorf(contextErrCode(ctxErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, ctxErr)
+			}
 			if h.shouldRetry(attempt, httpResp.StatusCode) {
 				if sleepErr := sleepWithContext(ctx, httpRetryDelay(attempt, httpResp.Header.Get(retryAfterHeader))); sleepErr != nil {
 					return nil, status.Errorf(contextErrCode(sleepErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, sleepErr)
@@ -118,6 +136,9 @@ func (h *httpDynamicHandler) callProto(ctx context.Context, req proto.Message) (
 		}
 
 		if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, status.Errorf(contextErrCode(ctxErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, ctxErr)
+			}
 			if h.shouldRetry(attempt, httpResp.StatusCode) {
 				if sleepErr := sleepWithContext(ctx, httpRetryDelay(attempt, httpResp.Header.Get(retryAfterHeader))); sleepErr != nil {
 					return nil, status.Errorf(contextErrCode(sleepErr), "http call %s %s canceled: %v", h.binding.method, endpointURL, sleepErr)
@@ -127,7 +148,12 @@ func (h *httpDynamicHandler) callProto(ctx context.Context, req proto.Message) (
 			return nil, httpClientError(httpResp.StatusCode, rawResp)
 		}
 
-		resp := dynamicpb.NewMessage(h.respDesc)
+		var resp proto.Message
+		if h.newResponse != nil {
+			resp = h.newResponse()
+		} else {
+			resp = dynamicpb.NewMessage(h.respDesc)
+		}
 		trimmed := bytes.TrimSpace(rawResp)
 		if len(trimmed) == 0 {
 			return resp, nil
@@ -188,6 +214,9 @@ func (h *httpDynamicHandler) applyDynamicHeaders(ctx context.Context, httpReq *h
 // Routes are derived from google.api.http annotations when present, otherwise
 // fallback to canonical RPC route: POST /{serviceFullName}/{method}.
 func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
+	if err := s.ensureRegistrationOpen("HTTP connection"); err != nil {
+		return err
+	}
 	if s.fds == nil {
 		return errors.New("connect HTTP requires a Server created via ServerFromDescriptor or ServerFromBytes")
 	}
@@ -203,6 +232,15 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 		return errors.New("base URL must include host")
 	}
 	headers := outboundHTTPHeadersFromEnv()
+	headerProvider := func(ctx context.Context, request *OutboundHTTPRequest) (map[string]string, error) {
+		s.mu.RLock()
+		provider := s.httpHeaderProvider
+		s.mu.RUnlock()
+		if provider == nil {
+			return nil, nil
+		}
+		return provider(ctx, request)
+	}
 
 	files, err := s.buildProtoFiles()
 	if err != nil {
@@ -224,13 +262,11 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 		services = map[string]*invpb.ServiceInfo{name: svcInfo}
 	}
 
+	serviceDescs := make(map[string]*grpc.ServiceDesc)
+	serviceImpls := make(map[string]*remoteProxyService)
 	for svcFullName, svcInfo := range services {
 		for methodName, methodInfo := range svcInfo.Methods {
 			if methodInfo.ClientStreaming || methodInfo.ServerStreaming {
-				continue
-			}
-
-			if !s.shouldInclude(svcFullName, methodName) {
 				continue
 			}
 
@@ -249,38 +285,46 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 				return fmt.Errorf("build HTTP binding for %s: %w", methodPath, err)
 			}
 
-			toolName := svcInfo.Name + "." + methodName
-			description := methodInfo.Comment
-			if description == "" {
-				description = toolName
+			desc := serviceDescs[svcFullName]
+			if desc == nil {
+				desc = &grpc.ServiceDesc{
+					ServiceName: svcFullName,
+					HandlerType: (*legacyGRPCService)(nil),
+					Metadata:    reqDesc.ParentFile().Path(),
+				}
+				serviceDescs[svcFullName] = desc
+				serviceImpls[svcFullName] = &remoteProxyService{}
 			}
-
-			if err := s.addTool(&Tool{
-				Name:        toolName,
-				Description: description,
-				InputSchema: s.schemaGen.MessageToSchema(methodInfo.InputType),
-				Handler: &httpDynamicHandler{
-					client:         &http.Client{Timeout: defaultHTTPClientTimeout},
-					baseURL:        parsedBaseURL,
-					binding:        binding,
-					headers:        headers,
-					headerProvider: s.httpHeaderProvider,
-					maxRetries:     defaultHTTPClientMaxRetries,
-					reqDesc:        reqDesc,
-					respDesc:       respDesc,
-					methodPath:     methodPath,
-				},
-				InputType:       methodInfo.InputType,
-				OutputType:      methodInfo.OutputType,
-				ServiceFullName: svcFullName,
-				MethodName:      methodName,
-			}); err != nil {
-				return err
+			caller := &httpDynamicHandler{
+				client:         &http.Client{Timeout: defaultHTTPClientTimeout},
+				baseURL:        parsedBaseURL,
+				binding:        binding,
+				headers:        headers,
+				headerProvider: headerProvider,
+				maxRetries:     defaultHTTPClientMaxRetries,
+				reqDesc:        reqDesc,
+				respDesc:       respDesc,
+				newResponse:    s.messageFactory(methodInfo.OutputType),
+				methodPath:     methodPath,
 			}
+			desc.Methods = append(desc.Methods, proxyUnaryMethodDesc(
+				methodName, methodPath, s.messageFactory(methodInfo.InputType), caller,
+			))
 		}
 	}
 
-	return nil
+	names := make([]string, 0, len(serviceDescs))
+	for name := range serviceDescs {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	registrations := make([]registeredService, 0, len(names))
+	for _, name := range names {
+		registrations = append(registrations, registeredService{
+			desc: serviceDescs[name], service: serviceImpls[name],
+		})
+	}
+	return s.registerServices(registrations, "HTTP connection")
 }
 
 func (s *Server) httpRulesByMethodPath() (map[string]*annotationspb.HttpRule, error) {
@@ -687,14 +731,18 @@ func httpClientError(statusCode int, body []byte) error {
 	msg := fmt.Sprintf("HTTP %d", statusCode)
 
 	type envelope struct {
-		Code    string           `json:"code"`
-		Message string           `json:"message"`
-		Details []map[string]any `json:"details"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Details []struct {
+			Type  string `json:"type"`
+			Value string `json:"value"`
+		} `json:"details"`
 	}
 	var payload struct {
 		envelope
 		Error envelope `json:"error"`
 	}
+	var details []*anypb.Any
 	if err := json.Unmarshal(body, &payload); err == nil {
 		env := payload.envelope
 		if env.Code == "" && payload.Error.Code != "" {
@@ -704,11 +752,41 @@ func httpClientError(statusCode int, body []byte) error {
 			msg = env.Message
 		}
 		if env.Code != "" {
-			code = grpcCodeFromName(env.Code)
+			if envelopeCode := grpcCodeFromName(env.Code); envelopeCode != codes.OK {
+				code = envelopeCode
+			}
+		}
+		for _, detail := range env.Details {
+			if detail.Type == "" {
+				continue
+			}
+			value, err := base64.RawStdEncoding.DecodeString(detail.Value)
+			if err != nil {
+				value, err = base64.StdEncoding.DecodeString(detail.Value)
+			}
+			if err == nil {
+				details = append(details, &anypb.Any{TypeUrl: "type.googleapis.com/" + detail.Type, Value: value})
+			}
 		}
 	}
+	if code == codes.OK {
+		code = codes.Unknown
+	}
 
-	return status.Error(code, msg)
+	return status.FromProto(&statuspb.Status{Code: int32(code), Message: msg, Details: details}).Err()
+}
+
+func httpCallContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	return nil
 }
 
 func grpcCodeFromHTTPStatus(statusCode int) codes.Code {
@@ -747,6 +825,9 @@ func grpcCodeFromHTTPStatus(statusCode int) codes.Code {
 // emit either format. grpcCodeName is canonical lowercase.
 func grpcCodeFromName(name string) codes.Code {
 	lower := strings.ToLower(name)
+	if lower == "cancelled" { //nolint:misspell // accept the legacy British spelling from remote peers
+		return codes.Canceled
+	}
 	for i := codes.OK; i <= codes.Unauthenticated; i++ {
 		if grpcCodeName(i) == lower {
 			return i
@@ -810,7 +891,7 @@ func parseRetryAfterDelay(raw string) (time.Duration, bool) {
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
 	if delay <= 0 {
-		return nil
+		return ctx.Err()
 	}
 	timer := time.NewTimer(delay)
 	defer timer.Stop()

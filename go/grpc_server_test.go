@@ -10,11 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/reflection"
 )
 
 // grpcServerServicer implements GreetService RPCs using generated proto types.
-type grpcServerServicer struct{}
+type grpcServerServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func (s *grpcServerServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	return &greetpb.GreetResponse{Message: "Hello, " + req.Name}, nil
@@ -28,51 +29,14 @@ func startServeGRPC(t *testing.T) (addr string, stop func()) {
 	t.Helper()
 	srv, err := ServerFromDescriptor(descriptorPath())
 	require.NoError(t, err)
-	require.NoError(t, srv.Register(&grpcServerServicer{}))
+	greetpb.RegisterGreetServiceServer(srv, &grpcServerServicer{})
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
 	addr = lis.Addr().String()
 
-	// Build the gRPC server manually (reusing the internal logic)
-	// to avoid the blocking ServeGRPC call.
-	files, err := srv.buildProtoFiles()
-	require.NoError(t, err)
-
-	gs := grpc.NewServer()
-
-	type svcEntry struct {
-		methods []grpc.MethodDesc
-	}
-	svcMap := make(map[string]*svcEntry)
-	for _, tool := range srv.tools {
-		entry, ok := svcMap[tool.ServiceFullName]
-		if !ok {
-			entry = &svcEntry{}
-			svcMap[tool.ServiceFullName] = entry
-		}
-		reqMD, err := findMessageDescriptor(files, tool.InputType)
-		require.NoError(t, err)
-		respMD, err := findMessageDescriptor(files, tool.OutputType)
-		require.NoError(t, err)
-		entry.methods = append(entry.methods, grpc.MethodDesc{
-			MethodName: tool.MethodName,
-			Handler:    srv.grpcMethodHandler(tool, reqMD, respMD),
-		})
-	}
-	type grpcServicer any
-	for svcName, entry := range svcMap {
-		gs.RegisterService(&grpc.ServiceDesc{
-			ServiceName: svcName,
-			HandlerType: (*grpcServicer)(nil),
-			Methods:     entry.methods,
-		}, struct{}{})
-	}
-
-	reflection.Register(gs)
-
-	go func() { _ = gs.Serve(lis) }()
-	return addr, gs.Stop
+	go func() { _ = srv.Serve(lis) }()
+	return addr, srv.Stop
 }
 
 func TestServeGRPCGreet(t *testing.T) {
@@ -137,11 +101,11 @@ func TestServeGRPCGreetGroup(t *testing.T) {
 	assert.Contains(t, result, "count")
 }
 
-func TestServeGRPCRequiresFDS(t *testing.T) {
+func TestServeGRPCRejectsNilListener(t *testing.T) {
 	srv := newServer(mustParse(t))
-	err := srv.serveGRPC(t.Context(), 0)
+	err := srv.ServeGRPC(nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerFromDescriptor or ServerFromBytes")
+	assert.Contains(t, err.Error(), "requires a listener")
 }
 
 // TestServeGRPCViaConnect uses Connect() to proxy through our served gRPC server,

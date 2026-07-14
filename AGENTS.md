@@ -8,15 +8,16 @@ One protobuf definition → all protocols. Write a `.proto` file with comments, 
 
 - **MCP** (Model Context Protocol) — AI agents discover and call your RPCs as tools
 - **CLI** — humans and shell-based agents call RPCs from the terminal
-- **HTTP** — REST-style endpoints with `google.api.http` transcoding support
-- **gRPC** — standard gRPC server with dynamic dispatch (no generated server stubs)
+- **HTTP** — Connect endpoints over the canonical gRPC method paths
+- **gRPC** — native generated-service registration and normal grpc-go serving
 
 The core idea: proto comments become tool descriptions, field comments become JSON Schema descriptions, enums become constrained choices. Zero glue code.
 
 ## Architecture
 
 ```
-.proto → buf build → descriptor.binpb → Invariant runtime → MCP / CLI / HTTP / gRPC
+.proto + generated gRPC service → invariant.Server → native gRPC / HTTP / MCP / CLI
+             descriptor.binpb ────────────────┘
 ```
 
 Go, Python, Rust, and TypeScript implementations follow the same flow where
@@ -24,7 +25,9 @@ their runtime surface exists:
 
 1. **Descriptor parsing** (`descriptor.go` / `descriptor.py`) — extract services, methods, messages, enums, and source comments from `FileDescriptorSet`
 2. **Schema generation** (`schema.go` / `schema.py`) — convert proto message types to JSON Schema
-3. **Tool registration** — `Register()` (local servicer), `Connect()` (gRPC proxy), `ConnectHTTP()` (HTTP proxy)
+3. **Service registration** — generated `Register<Service>Server` functions are
+   primary in Go; reflection-based `Register()` is compatibility-only.
+   `ConnectGRPC()` and `ConnectHTTP()` register remote unary projections.
 4. **Invoke dispatch** (`mcp.go:invoke` / `server.py:_invoke`) — proto-in/proto-out core with interceptor chain
 5. **Projections** — boundary converters that translate each protocol's wire format to/from proto messages
 
@@ -64,7 +67,10 @@ Python is async-only. `register()` rejects sync handlers via `inspect.iscoroutin
 
 ### Graceful shutdown
 
-Go's `Server.Serve(ctx, projections...)` honors the context: cancellation triggers `http.Server.Shutdown` and `grpc.Server.GracefulStop` on every running projection. Python's `await server.serve(...)` propagates `asyncio.CancelledError` to all projection tasks.
+Go's native lifecycle is `Server.Serve(net.Listener)` plus `GracefulStop()` or
+`Stop()`. `Server.ServeProjections(ctx, ...)` runs optional HTTP/MCP/CLI
+projections and honors cancellation. Python's `await server.serve(...)`
+propagates `asyncio.CancelledError` to all projection tasks.
 
 ## Convention over configuration
 
@@ -80,15 +86,32 @@ Go's `Server.Serve(ctx, projections...)` honors the context: cancellation trigge
 
 ## Code style
 
-- **No micro-optimizations.** The binary marshal/unmarshal path in `invoke()` for converting `dynamicpb.Message` to typed protos IS justified — it's the hot path for gRPC proxying and the alternative (JSON round-trip) is measurably slower. But don't add similar optimizations elsewhere without a clear need.
+- **No micro-optimizations.** Generated registration and proxy setup cache typed
+  request/response factories. A binary marshal/unmarshal conversion is justified
+  only on compatibility paths where concrete generated and dynamic message types
+  must cross; don't add similar optimizations without a measured need.
 - **No unnecessary abstractions.** Three similar lines of code is better than a premature helper function.
 - **Tests should test behavior, not properties.** Consolidate granular property-check tests into comprehensive behavior tests. A single `TestParseServices` that checks name, comment, methods, and types is better than 5 separate tests each checking one field.
 - **Error handling should be practical.** Don't add validation for things that can't happen. Trust internal code paths.
 
 ## Things to know
 
-### Go `Serve()` with multiple projections
-When serving multiple projections, goroutines run in parallel and the first error causes `Serve()` to return. Other projection goroutines will continue running as the process exits. This is fine — these are long-running servers meant to run until process termination.
+### Go native and projected serving
+`Server.Serve(listener)` owns the canonical native gRPC lifecycle. Pass ordinary
+`grpc.ServerOption` values to `ServerFromDescriptor` or `ServerFromBytes`.
+`ServeProjections(ctx, ...)`
+runs optional projections in parallel; the first completion cancels the others
+and waits for their shutdown.
+
+Generated service registration and configuration freeze when native serving or
+projection execution begins. Because `grpc.ServiceRegistrar` cannot return an
+error, a late generated registration panics deterministically. Register services,
+filters, shared interceptors, HTTP limits, and metadata mappers before serving.
+
+Constructor `grpc.ServerOption` interceptors apply only to native gRPC. Explicit
+`Use` / `UseStream` grpc-go interceptors apply once to every projection, including
+native gRPC; registering the same function in both places intentionally runs it
+twice.
 
 ### MCP protocol compliance
 MCP uses JSON-RPC 2.0 over stdio. Key rules:
@@ -97,15 +120,26 @@ MCP uses JSON-RPC 2.0 over stdio. Key rules:
 - Method not found returns error code `-32601`
 
 ### Include/Exclude filtering
-Both Go and Python support glob-based filtering of which methods get registered:
+Both Go and Python support glob-based filtering of which methods enter optional
+projection catalogs:
 - `server.Include("*.Greet")` / `server.include("*.Greet")`
 - `server.Exclude("*Poll*")` / `server.exclude("*Poll*")`
 - Environment variables: `INVARIANT_INCLUDE`, `INVARIANT_EXCLUDE` (comma-separated)
 - `*` matches any characters including dots
 - Exclude is applied after include
+- Configure filters before generated, reflection, or proxy registration; they
+  determine which methods enter the projection catalog at registration time.
+- Go native gRPC always retains the complete generated `ServiceDesc`. Filters
+  do not mutate the canonical gRPC service or make its methods uncallable.
 
 ### HTTP is Connect-only
-The HTTP projection serves only the canonical Connect route: `POST /{package.Service}/{Method}`. Body is `application/json` or `application/proto`. There is no server-side `google.api.http` REST routing — those annotations are still read by the `connect_http` *client* for proxying to legacy REST APIs we don't own.
+The HTTP projection serves only the canonical Connect route: `POST /{package.Service}/{Method}`. Unary bodies use `application/json` or `application/proto`; streaming uses the Connect streaming content types. There is no server-side `google.api.http` REST routing — those annotations are still read by the `connect_http` *client* for proxying to legacy REST APIs we don't own.
+
+HTTP request headers are untrusted. The default mapper forwards only tracing and
+correlation values; a custom `HTTPMetadataMapper` still cannot assert authorization,
+tenant, principal, role, user, protocol, or `invariant-internal-*` metadata.
+Authenticate in HTTP middleware and inject trusted incoming gRPC metadata into
+the request context.
 
 ### HTTP error format
 Connect-style envelope only: `{"code": "invalid_argument", "message": "...", "details": [...]}`. Lowercase code, no wrapper, no toggle. The `connect_http` client is tolerant — accepts both this format and the legacy wrapped `{"error": {...}}` format from remote services.
@@ -119,13 +153,13 @@ Connect-style envelope only: `{"code": "invalid_argument", "message": "...", "de
   HTTP handler is built — registration is synchronous, so by the time we
   answer requests we are ready. Don't gate on app-level health (no liveness
   signal hooks); users wanting that can register their own service.
-- No gRPC `grpc.health.v1.Health` service is auto-registered — adding it
-  for Python would pull a new dep. Users wanting it can register one as a
-  normal service. For most use cases a TCP healthcheck on the gRPC port is
-  enough.
+- No gRPC `grpc.health.v1.Health` service is auto-registered. In Go, register
+  grpc-go's normal health server with `grpc_health_v1.RegisterHealthServer`;
+  `invariant.Server` implements `grpc.ServiceRegistrar`. Other languages can
+  register a health service normally when needed.
 
 ### Panic / exception recovery
-- Go: `chainedInvoke` and `invokeStream` install a `defer recover()` that
+- Go: the shared unary and stream interceptor terminals install a `defer recover()` that
   converts panics into `codes.Internal` status errors so a single goroutine
   bug can't crash the server. The wrapped error names the method path for
   triage.
@@ -152,17 +186,19 @@ Connect-style envelope only: `{"code": "invalid_argument", "message": "...", "de
 - `projections::serve::serve(server, projections, cancel)` runs an iterable
   of `Projection::{Http, Grpc, McpStdio}` in parallel. The first projection
   to complete (or the cancellation token firing) signals the rest to shut
-  down. Mirrors Go's `Server.Serve(ctx, projections...)` and Python's
+  down. Mirrors Go's `Server.ServeProjections(ctx, projections...)` and Python's
   `await server.serve(http=..., grpc=..., mcp=True)`.
 
 ### Resource limits
-- HTTP unary requests cap at 16 MiB (`httpMaxUnaryRequest` / `HTTP_MAX_UNARY_REQUEST`).
-  Exceeded → `resource_exhausted`. Set per-route via your own middleware if
-  you need different limits per tool.
-- Connect streaming request envelopes cap at 16 MiB
-  (`connectStreamMaxRequest` / `CONNECT_STREAM_MAX_REQUEST`). The framing
-  header is inspected before any data is read, so a forged size won't
-  allocate a giant buffer.
+- Go HTTP unary request and encoded response bodies each default to independent
+  16 MiB caps. Connect stream request and encoded response messages also have
+  independent 16 MiB per-message caps. Exceeded → `resource_exhausted`.
+  `ConfigureMethod` can override each limit for one full gRPC method.
+- Connect streaming request framing is inspected before payload allocation, so
+  a forged size won't allocate a giant buffer. Streaming response limits apply
+  per message, not to the lifetime of a stream.
+- Native `grpc.MaxRecvMsgSize` and `grpc.MaxSendMsgSize` remain normal gRPC
+  protobuf-message limits; they do not govern standalone HTTP JSON bytes.
 - `Connect-Timeout-Ms` is honored on every HTTP path: unary, streaming, and
   the `/mcp` JSON-RPC transport. On streaming, the deadline-exceeded error
   is delivered in the end-stream envelope rather than HTTP status — that's
@@ -176,7 +212,10 @@ Always registered. `grpcurl`, Buf Studio, and Connect debug clients work without
 `invariant.Validation()` (Go) / `invariant.validation()` (Python) — opt-in interceptor running `protovalidate`. Failures short-circuit with `invalid_argument` plus field-level `BadRequest` details.
 
 ### Performance targets
-Both languages hit ~1 µs for direct `Invoke()`. The HTTP path stays under 30 µs (Go) and 600 µs (Python — uvicorn + httpx overhead dominates). The HTTPProto path caches descriptors and the typed `reflect.Type` at `HTTPHandler()` build time so per-request work stays minimal — never call `protodesc.NewFiles` per request. See `go/benchmarks_test.go` and `python/bench/bench.py`.
+Use `go/benchmarks_test.go` and `python/bench/bench.py` as the current reference.
+Go generated registration precomputes typed request factories, so the HTTP
+request path must not rebuild descriptor registries or discover handler types
+per call. Never call `protodesc.NewFiles` on a request path.
 
 ### Proto descriptor requirement
 `buf build --include-source-info -o descriptor.binpb` — the `--include-source-info` flag is critical, otherwise comments won't be available for tool descriptions.
@@ -185,7 +224,7 @@ Both languages hit ~1 µs for direct `Invoke()`. The HTTP path stays under 30 µ
 
 ```bash
 flox activate
-make test      # run all tests (Go + Python)
+make test      # run all tests (Go + Python + Rust + TypeScript)
 make lint      # lint all code
 make fmt       # auto-format
 make generate  # regenerate proto stubs
@@ -204,12 +243,16 @@ CI (`.github/workflows/ci.yml`) runs everything inside `flox activate`, so contr
 
 ## Streaming
 
-Server-streaming RPCs are projected across all four surfaces. Client-streaming
-and bidi are intentionally not — declared methods of those kinds are silently
-skipped at registration time.
+Unary and server-streaming RPCs are projected across all four surfaces.
+Client-streaming and bidi methods remain fully available on native generated
+gRPC services, but are intentionally omitted from HTTP, MCP, CLI, and remote
+proxy projection catalogs.
 
-- **Handler shape (Go)**: `func(*Req, invariant.ServerStream) error`. Call
-  `stream.Send(resp)` per emitted message. Reflection auto-detects the shape.
+- **Handler shape (Go)**: implement the generated server interface, including
+  `func(*Req, grpc.ServerStreamingServer[Resp]) error`, and register it with
+  the generated `Register<Service>Server` function. The old
+  `func(*Req, invariant.ServerStream) error` reflection shape remains only as
+  a compatibility convenience.
 - **Handler shape (Python)**: `async def Method(self, request, context)` declared
   as an async generator (`yield response`). Registration rejects coroutines
   with a clear error so the mismatch is caught at startup.
@@ -230,7 +273,8 @@ skipped at registration time.
   `use` because the wire signatures genuinely differ (returns a stream, not a
   single value). Same registration order semantics — first registered =
   outermost.
-- **Proxying**: `Connect` (gRPC proxy) and `ConnectHTTP` (REST proxy) skip
+- **Proxying**: `ConnectGRPC` (gRPC proxy; `Connect` is a compatibility spelling)
+  and `ConnectHTTP` (REST proxy) skip
   streaming methods. Forwarding a stream through a proxy duplicates what gRPC
   already does, without adding value here.
 
@@ -246,7 +290,6 @@ directly.
 
 ## Not yet implemented
 
-- `response_body` mapping in server-side HTTP handler (client-side works)
-- Full path-template grammar beyond `{field}`, `{field=*}`, `{field=**}`
-- Client-side selection among `additional_bindings`
-- Client-streaming and bidi RPCs (intentional — opinionated cut)
+- Full `connect_http` client path-template grammar beyond `{field}`, `{field=*}`, `{field=**}`
+- `connect_http` client selection among `additional_bindings`
+- Client-streaming and bidi projections (native generated gRPC supports them)

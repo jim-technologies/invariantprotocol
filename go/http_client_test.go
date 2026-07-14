@@ -187,19 +187,20 @@ func TestConnectHTTPMapsRemoteErrors(t *testing.T) {
 	assert.Equal(t, "bad name", errObj["message"])
 }
 
-func TestConnectHTTPHandlerDirect(t *testing.T) {
+func TestConnectHTTPProgrammaticAndNative(t *testing.T) {
 	baseURL, stop := startAnnotatedHTTPBackend(t)
 	defer stop()
 
 	srv := connectHTTPServer(t, baseURL)
 
-	tool := srv.tools["GreetService.Greet"]
-	dh, ok := tool.Handler.(*httpDynamicHandler)
-	require.True(t, ok, "handler should be *httpDynamicHandler")
-
-	result, err := callDynamicJSON(t.Context(), dh, []byte(`{"name":"Direct"}`))
+	result, err := srv.Invoke(t.Context(), "GreetService.Greet", &greetpb.GreetRequest{Name: "Direct"})
 	require.NoError(t, err)
-	assert.Contains(t, result, "Hello, Direct")
+	assert.Equal(t, "Hello, Direct", result.(*greetpb.GreetResponse).GetMessage())
+
+	client := nativeRefactorStart(t, srv)
+	nativeResult, err := client.Greet(t.Context(), &greetpb.GreetRequest{Name: "Native"})
+	require.NoError(t, err)
+	assert.Equal(t, "Hello, Native", nativeResult.GetMessage())
 }
 
 func TestConnectHTTPCli(t *testing.T) {
@@ -496,10 +497,10 @@ func TestConnectHTTPUsesDynamicHeaderProvider(t *testing.T) {
 func TestConnectHTTPDynamicHeaderProviderError(t *testing.T) {
 	srv, err := ServerFromDescriptor(descriptorPath())
 	require.NoError(t, err)
+	require.NoError(t, srv.ConnectHTTP("http://localhost:1"))
 	srv.UseHTTPHeaderProvider(func(_ context.Context, _ *OutboundHTTPRequest) (map[string]string, error) {
 		return nil, errors.New("missing signing key")
 	})
-	require.NoError(t, srv.ConnectHTTP("http://localhost:1"))
 
 	_, err = srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"World"}`})
 	require.Error(t, err)

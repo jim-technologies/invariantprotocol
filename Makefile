@@ -64,6 +64,7 @@ bench: ## Run Go, Python, and Rust benchmarks.
 
 generate: ## Regenerate protobuf stubs.
 	cd proto && buf generate
+	cd python/tests/proto && buf generate
 
 deps: ## Tidy/update language dependency lockfiles.
 	cd go && go mod tidy
@@ -74,8 +75,8 @@ breaking: ## Check proto breaking changes against BASE_REF.
 
 verify-generate: ## Verify generated protobuf stubs are committed.
 	$(MAKE) generate
-	@if [ -n "$$(git status --porcelain --untracked-files=all -- go/gen python/src/invariant/gen)" ]; then \
+	@if [ -n "$$(git status --porcelain --untracked-files=all -- go/gen go/tests/gen python/src/invariant/gen python/tests/proto/gen)" ]; then \
 		echo "Generated files are out of date. Run 'make generate' and commit the results."; \
-		git status --short -- go/gen python/src/invariant/gen; \
+		git status --short -- go/gen go/tests/gen python/src/invariant/gen python/tests/proto/gen; \
 		exit 1; \
 	fi

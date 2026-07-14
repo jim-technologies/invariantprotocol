@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -16,10 +17,12 @@ import (
 // grpcDynamicHandler proxies tool calls to a remote gRPC server using dynamic
 // proto messages (no generated Go stubs required).
 type grpcDynamicHandler struct {
-	conn       *grpc.ClientConn
-	methodPath string
-	reqDesc    protoreflect.MessageDescriptor
-	respDesc   protoreflect.MessageDescriptor
+	conn               grpc.ClientConnInterface
+	methodPath         string
+	reqDesc            protoreflect.MessageDescriptor
+	respDesc           protoreflect.MessageDescriptor
+	newResponse        func() proto.Message
+	defaultCallOptions []grpc.CallOption
 }
 
 func (h *grpcDynamicHandler) requestDescriptor() protoreflect.MessageDescriptor {
@@ -27,9 +30,24 @@ func (h *grpcDynamicHandler) requestDescriptor() protoreflect.MessageDescriptor 
 }
 
 func (h *grpcDynamicHandler) callProto(ctx context.Context, req proto.Message) (proto.Message, error) {
-	resp := dynamicpb.NewMessage(h.respDesc)
-	if err := h.conn.Invoke(ctx, h.methodPath, req, resp); err != nil {
-		return nil, fmt.Errorf("grpc call %s: %w", h.methodPath, err)
+	var resp proto.Message
+	if h.newResponse != nil {
+		resp = h.newResponse()
+	} else {
+		resp = dynamicpb.NewMessage(h.respDesc)
+	}
+	if incoming, ok := metadata.FromIncomingContext(ctx); ok {
+		outgoing, _ := metadata.FromOutgoingContext(ctx)
+		ctx = metadata.NewOutgoingContext(ctx, metadata.Join(outgoing, incoming))
+	}
+	var header, trailer metadata.MD
+	callOptions := append([]grpc.CallOption{}, h.defaultCallOptions...)
+	callOptions = append(callOptions, grpc.Header(&header), grpc.Trailer(&trailer))
+	err := h.conn.Invoke(ctx, h.methodPath, req, resp, callOptions...)
+	_ = grpc.SetHeader(ctx, header)
+	_ = grpc.SetTrailer(ctx, trailer)
+	if err != nil {
+		return nil, err
 	}
 	return resp, nil
 }

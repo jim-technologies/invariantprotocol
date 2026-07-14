@@ -6,22 +6,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protodesc"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
-	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // Connect content types.
 const (
+	jsonContentType        = "application/json"
 	protoContentType       = "application/proto"
 	connectStreamJSONType  = "application/connect+json"
 	connectStreamProtoType = "application/connect+proto"
@@ -32,8 +32,11 @@ const (
 	// (e.g. an object store) that legitimately need larger payloads. The
 	// defaults stay tight so a misconfigured server doesn't accept
 	// arbitrarily large bodies.
-	defaultHTTPMaxUnaryRequest     = 16 << 20
-	defaultConnectStreamMaxRequest = 16 << 20
+	defaultHTTPMaxUnaryRequest      = 16 << 20
+	defaultHTTPMaxUnaryResponse     = 16 << 20
+	defaultConnectStreamMaxRequest  = 16 << 20
+	defaultConnectStreamMaxResponse = 16 << 20
+	maxConnectControlEnvelope       = 1 << 20
 
 	// Kept for tests that exercise the default-cap behavior.
 	httpMaxUnaryRequest     = defaultHTTPMaxUnaryRequest
@@ -43,10 +46,11 @@ const (
 // httpToolEntry caches per-tool state used by the HTTP handler — built once at
 // HTTPHandler() time so per-request work stays minimal.
 type httpToolEntry struct {
-	tool     *Tool
-	reqDesc  protoreflect.MessageDescriptor
-	respDesc protoreflect.MessageDescriptor
-	reqType  reflect.Type // typed request struct, when handler is a local servicer
+	tool              *Tool
+	maxUnaryRequest   int64
+	maxUnaryResponse  int64
+	maxStreamRequest  int64
+	maxStreamResponse int64
 }
 
 // HTTPHandler returns an http.Handler that serves all registered tools over the
@@ -63,44 +67,17 @@ type httpToolEntry struct {
 //	GET  /                                — tool catalog (same shape as MCP tools/list)
 //	GET  /__invariant/tools               — tool catalog
 //	GET  /__invariant/descriptor.binpb    — raw FileDescriptorSet bytes
-func (s *Server) HTTPHandler() (http.Handler, error) {
+func (s *Server) HTTPHandler() (http.Handler, error) { //nolint:unparam // error result retained for public API compatibility
+	s.freeze()
 	entries := make(map[string]*httpToolEntry, len(s.tools))
 
-	// If we have an FDS, pre-resolve descriptors once. For binary proto and
-	// optimized JSON paths we want zero per-request descriptor lookups.
-	var files *protoregistry.Files
-	if s.fds != nil {
-		var err error
-		files, err = protodesc.NewFiles(s.fds)
-		if err != nil {
-			return nil, fmt.Errorf("build file descriptors: %w", err)
-		}
-	}
-
 	for _, t := range s.tools {
-		entry := &httpToolEntry{tool: t}
-		if files != nil {
-			reqDesc, err := findMessageDescriptor(files, t.InputType)
-			if err == nil {
-				entry.reqDesc = reqDesc
-			}
-			respDesc, err := findMessageDescriptor(files, t.OutputType)
-			if err == nil {
-				entry.respDesc = respDesc
-			}
-		}
-		// For local servicer handlers, cache the typed request reflect.Type so
-		// binary-proto requests can decode directly into the handler's type
-		// without a dynamicpb intermediate.
-		if _, dyn := t.Handler.(*grpcDynamicHandler); !dyn {
-			if _, dyn2 := t.Handler.(*httpDynamicHandler); !dyn2 {
-				if hv := reflect.ValueOf(t.Handler); hv.Kind() == reflect.Func {
-					ht := hv.Type()
-					if ht.NumIn() == 2 {
-						entry.reqType = ht.In(1)
-					}
-				}
-			}
+		entry := &httpToolEntry{
+			tool:              t,
+			maxUnaryRequest:   s.methodUnaryCap(t),
+			maxUnaryResponse:  s.methodUnaryResponseCap(t),
+			maxStreamRequest:  s.methodStreamCap(t),
+			maxStreamResponse: s.methodStreamResponseCap(t),
 		}
 		entries["/"+t.ServiceFullName+"/"+t.MethodName] = entry
 	}
@@ -151,8 +128,10 @@ func (s *Server) serveHTTP(ctx context.Context, port int) error {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// A fixed WriteTimeout is an absolute deadline on HTTP/1.x responses
+		// and would terminate healthy long-lived Connect streams.
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	errc := make(chan error, 1)
@@ -161,8 +140,12 @@ func (s *Server) serveHTTP(ctx context.Context, port int) error {
 	select {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		shutdownErr := srv.Shutdown(shutdownCtx)
+		cancel()
+		if shutdownErr != nil {
+			closeErr := srv.Close()
+			return errors.Join(ctx.Err(), fmt.Errorf("HTTP graceful shutdown: %w", shutdownErr), closeErr)
+		}
 		return ctx.Err()
 	case err := <-errc:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -175,7 +158,12 @@ func (s *Server) serveHTTP(ctx context.Context, port int) error {
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, entry *httpToolEntry) {
 	ctx, cancel := applyConnectTimeout(r)
 	defer cancel()
+	trustedMetadata, _ := metadata.FromIncomingContext(ctx)
+	ctx = metadata.NewIncomingContext(ctx, metadata.Join(trustedMetadata, s.incomingHTTPMetadata(r)))
 	r = r.WithContext(ctx)
+	requestBody := r.Body
+	stopBodyClose := context.AfterFunc(ctx, func() { _ = requestBody.Close() })
+	defer stopBodyClose()
 
 	// Streaming tools speak Connect's streaming protocol (envelope frames).
 	// They never accept plain application/json on the wire — Connect splits
@@ -186,29 +174,58 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, entry *httpT
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.methodUnaryCap(entry.tool)))
-	if err != nil {
-		httpError(w, invalidArgumentError("read body: "+err.Error()))
+	ctx, transport := withProjectionUnaryTransport(r.Context(), entry.tool.callInfo.FullMethod)
+	r = r.WithContext(ctx)
+
+	contentType := r.Header.Get("Content-Type")
+	jsonRequest := matchContentType(contentType, jsonContentType)
+	protoRequest := isProtoContentType(contentType)
+	if !jsonRequest && !protoRequest {
+		httpUnsupportedMediaTypeWithLimit(w, "unary tools require Content-Type: "+jsonContentType+" or "+protoContentType, entry.maxUnaryResponse)
+		return
+	}
+	if encoding := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))); encoding != "" && encoding != "identity" {
+		httpErrorWithLimit(w, status.Errorf(codes.Unimplemented, "Content-Encoding %q is not supported", encoding), entry.maxUnaryResponse)
 		return
 	}
 
-	if isProtoContentType(r.Header.Get("Content-Type")) {
-		s.handleHTTPProto(w, r, entry, body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, entry.maxUnaryRequest))
+	if err != nil {
+		if contextErr := r.Context().Err(); contextErr != nil {
+			httpErrorWithLimit(w, status.FromContextError(contextErr).Err(), entry.maxUnaryResponse)
+			return
+		}
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			httpErrorWithLimit(w, status.Errorf(codes.ResourceExhausted, "request body exceeds %d byte limit", entry.maxUnaryRequest), entry.maxUnaryResponse)
+		} else {
+			httpErrorWithLimit(w, invalidArgumentError("read body: "+err.Error()), entry.maxUnaryResponse)
+		}
+		return
+	}
+
+	if protoRequest {
+		s.handleHTTPProto(w, r, entry, body, transport)
 		return
 	}
 
 	resp, err := s.invokeJSON(r.Context(), entry.tool, body)
+	if err == nil {
+		err = r.Context().Err()
+	}
 	if err != nil {
-		httpError(w, err)
+		writeUnaryProjectionMetadata(w.Header(), transport)
+		httpErrorWithLimit(w, err, entry.maxUnaryResponse)
+		return
+	}
+	writeUnaryProjectionMetadata(w.Header(), transport)
+
+	if int64(len(resp)) > entry.maxUnaryResponse {
+		httpErrorWithLimit(w, status.Errorf(codes.ResourceExhausted, "encoded response exceeds %d byte limit", entry.maxUnaryResponse), entry.maxUnaryResponse)
 		return
 	}
 
-	if wantsProto(r.Header.Get("Accept")) {
-		s.writeProtoResponse(w, entry, []byte(resp))
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", jsonContentType)
 	_, _ = w.Write([]byte(resp)) //nolint:gosec // server-generated JSON
 }
 
@@ -224,43 +241,59 @@ func (s *Server) handleHTTPStream(w http.ResponseWriter, r *http.Request, entry 
 	ct := r.Header.Get("Content-Type")
 	binary := isConnectStreamProto(ct)
 	if !binary && !isConnectStreamJSON(ct) {
-		httpError(w, invalidArgumentError("streaming tools require Content-Type: "+connectStreamJSONType+" or "+connectStreamProtoType))
+		httpUnsupportedMediaTypeWithLimit(w, "streaming tools require Content-Type: "+connectStreamJSONType+" or "+connectStreamProtoType, maxConnectControlEnvelope)
 		return
 	}
+	respCT := connectStreamJSONType
+	if binary {
+		respCT = connectStreamProtoType
+	}
 
-	reqBytes, err := readConnectEnvelope(r.Body, int(s.methodStreamCap(entry.tool)))
+	reqBytes, err := readConnectEnvelope(r.Body, entry.maxStreamRequest)
 	if err != nil {
-		httpError(w, invalidArgumentError("read request envelope: "+err.Error()))
+		if contextErr := r.Context().Err(); contextErr != nil {
+			err = status.FromContextError(contextErr).Err()
+		}
+		if _, ok := status.FromError(err); !ok {
+			err = invalidArgumentError("read request envelope: " + err.Error())
+		}
+		writeConnectStreamError(w, respCT, err)
 		return
 	}
 
 	req, err := s.newRequest(entry.tool)
 	if err != nil {
-		httpError(w, err)
+		writeConnectStreamError(w, respCT, err)
 		return
 	}
 	if len(reqBytes) > 0 {
 		if binary {
 			if err := proto.Unmarshal(reqBytes, req); err != nil {
-				httpError(w, invalidArgumentError("decode binary proto: "+err.Error()))
+				writeConnectStreamError(w, respCT, invalidArgumentError("decode binary proto: "+err.Error()))
 				return
 			}
 		} else if err := protojson.Unmarshal(reqBytes, req); err != nil {
-			httpError(w, invalidArgumentFromJSONError(err))
+			writeConnectStreamError(w, respCT, invalidArgumentFromJSONError(err))
 			return
 		}
 	}
 
-	respCT := connectStreamJSONType
-	if binary {
-		respCT = connectStreamProtoType
-	}
-	w.Header().Set("Content-Type", respCT)
-	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
 
 	jsonOpts := protojson.MarshalOptions{UseProtoNames: true}
-	stream := newCallbackStream(r.Context(), func(msg proto.Message) error {
+	committed := false
+	var stream *projectedServerStream
+	commit := func() {
+		if committed {
+			return
+		}
+		header, _ := stream.metadata()
+		writeConnectMetadataHeaders(w.Header(), header, false)
+		w.Header().Set("Content-Type", respCT)
+		w.WriteHeader(http.StatusOK)
+		committed = true
+	}
+	stream = newProjectedServerStream(r.Context(), entry.tool.streamInfo.FullMethod, req, func(msg proto.Message) error {
 		var payload []byte
 		var marshalErr error
 		if binary {
@@ -271,6 +304,10 @@ func (s *Server) handleHTTPStream(w http.ResponseWriter, r *http.Request, entry 
 		if marshalErr != nil {
 			return fmt.Errorf("marshal stream chunk: %w", marshalErr)
 		}
+		if int64(len(payload)) > entry.maxStreamResponse {
+			return status.Errorf(codes.ResourceExhausted, "encoded stream response message exceeds %d byte limit", entry.maxStreamResponse)
+		}
+		commit()
 		if err := writeConnectEnvelope(w, 0, payload); err != nil {
 			return err
 		}
@@ -279,17 +316,21 @@ func (s *Server) handleHTTPStream(w http.ResponseWriter, r *http.Request, entry 
 		}
 		return nil
 	})
-	defer stream.close()
-
-	streamErr := s.invokeStream(entry.tool, req, stream)
-	// End-of-stream envelope: empty JSON on success, error envelope on failure.
-	endPayload := []byte("{}")
-	if streamErr != nil {
-		buf, encErr := json.Marshal(map[string]any{"error": errorPayload(streamErr)})
-		if encErr == nil {
-			endPayload = buf
+	stream.setHeaderSender(func() error {
+		commit()
+		if flusher != nil {
+			flusher.Flush()
 		}
+		return nil
+	})
+
+	streamErr := s.invokeGRPCStream(entry.tool, stream)
+	if streamErr == nil {
+		streamErr = r.Context().Err()
 	}
+	commit()
+	_, trailer := stream.metadata()
+	endPayload := connectEndStreamPayload(streamErr, trailer)
 	_ = writeConnectEnvelope(w, connectEndStreamFlag, endPayload)
 	if flusher != nil {
 		flusher.Flush()
@@ -305,10 +346,24 @@ func (s *Server) handleHTTPStream(w http.ResponseWriter, r *http.Request, entry 
 func (s *Server) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := applyConnectTimeout(r)
 	defer cancel()
+	trustedMetadata, _ := metadata.FromIncomingContext(ctx)
+	ctx = metadata.NewIncomingContext(ctx, metadata.Join(trustedMetadata, s.incomingHTTPMetadata(r)))
+	requestBody := r.Body
+	stopBodyClose := context.AfterFunc(ctx, func() { _ = requestBody.Close() })
+	defer stopBodyClose()
 
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, s.httpMaxUnaryRequest))
 	if err != nil {
-		httpError(w, invalidArgumentError("read body: "+err.Error()))
+		if contextErr := ctx.Err(); contextErr != nil {
+			httpErrorWithLimit(w, status.FromContextError(contextErr).Err(), s.httpMaxUnaryResponse)
+			return
+		}
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			httpErrorWithLimit(w, status.Errorf(codes.ResourceExhausted, "request body exceeds %d byte limit", s.httpMaxUnaryRequest), s.httpMaxUnaryResponse)
+		} else {
+			httpErrorWithLimit(w, invalidArgumentError("read body: "+err.Error()), s.httpMaxUnaryResponse)
+		}
 		return
 	}
 
@@ -342,33 +397,46 @@ func isConnectStreamProto(ct string) bool {
 }
 
 func matchContentType(ct, want string) bool {
-	if ct == "" {
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
 		return false
 	}
-	if i := strings.Index(ct, ";"); i >= 0 {
-		ct = ct[:i]
-	}
-	return strings.TrimSpace(ct) == want
+	return mediaType == want
 }
 
 // readConnectEnvelope reads a single Connect envelope frame from r. The
 // envelope header (flags+length) must be present; data is read up to size.
 // maxSize is enforced to avoid unbounded allocations from a hostile client.
-func readConnectEnvelope(r io.Reader, maxSize int) ([]byte, error) {
+func readConnectEnvelope(r io.Reader, maxSize int64) ([]byte, error) {
 	var hdr [5]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return nil, err
 	}
-	size := uint32(hdr[1])<<24 | uint32(hdr[2])<<16 | uint32(hdr[3])<<8 | uint32(hdr[4])
-	if maxSize > 0 && size > uint32(maxSize) {
-		return nil, fmt.Errorf("envelope size %d exceeds max %d", size, maxSize)
+	if reserved := hdr[0] &^ byte(0x03); reserved != 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "request envelope has unsupported reserved flags 0x%02x", reserved)
 	}
-	if size == 0 {
-		return nil, nil
+	if hdr[0]&byte(0x01) != 0 {
+		return nil, status.Error(codes.Unimplemented, "compressed request envelopes are not supported")
+	}
+	if hdr[0]&connectEndStreamFlag != 0 {
+		return nil, status.Error(codes.InvalidArgument, "request envelope must not use the end-stream flag")
+	}
+	size := uint32(hdr[1])<<24 | uint32(hdr[2])<<16 | uint32(hdr[3])<<8 | uint32(hdr[4])
+	if maxSize > 0 && int64(size) > maxSize {
+		return nil, status.Errorf(codes.ResourceExhausted, "request envelope size %d exceeds %d byte limit", size, maxSize)
 	}
 	buf := make([]byte, size)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	if size > 0 {
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil, err
+		}
+	}
+	extra, err := io.ReadAll(io.LimitReader(r, 1))
+	if err != nil {
 		return nil, err
+	}
+	if len(extra) != 0 {
+		return nil, status.Error(codes.InvalidArgument, "stream request body must contain exactly one envelope")
 	}
 	return buf, nil
 }
@@ -377,7 +445,10 @@ func readConnectEnvelope(r io.Reader, maxSize int) ([]byte, error) {
 func writeConnectEnvelope(w io.Writer, flags byte, payload []byte) error {
 	var hdr [5]byte
 	hdr[0] = flags
-	size := uint32(len(payload))
+	size, err := connectEnvelopeSize(uint64(len(payload)))
+	if err != nil {
+		return err
+	}
 	hdr[1] = byte(size >> 24)
 	hdr[2] = byte(size >> 16)
 	hdr[3] = byte(size >> 8)
@@ -393,6 +464,13 @@ func writeConnectEnvelope(w io.Writer, flags byte, payload []byte) error {
 	return nil
 }
 
+func connectEnvelopeSize(size uint64) (uint32, error) {
+	if size > uint64(^uint32(0)) {
+		return 0, status.Errorf(codes.ResourceExhausted, "Connect envelope payload size %d exceeds uint32 framing limit", size)
+	}
+	return uint32(size), nil
+}
+
 // applyConnectTimeout honors the Connect-Timeout-Ms request header. Returns
 // the request's existing context unchanged if the header is missing or invalid.
 // Caller must always defer the returned cancel.
@@ -400,6 +478,14 @@ func applyConnectTimeout(r *http.Request) (context.Context, context.CancelFunc) 
 	raw := r.Header.Get("Connect-Timeout-Ms")
 	if raw == "" {
 		return r.Context(), func() {}
+	}
+	if len(raw) > 10 {
+		return r.Context(), func() {}
+	}
+	for _, digit := range raw {
+		if digit < '0' || digit > '9' {
+			return r.Context(), func() {}
+		}
 	}
 	ms, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || ms <= 0 {
@@ -410,73 +496,44 @@ func applyConnectTimeout(r *http.Request) (context.Context, context.CancelFunc) 
 }
 
 // handleHTTPProto handles requests with Content-Type: application/proto.
-// When the handler is a local servicer with a typed request struct, the body
-// is decoded directly into that struct (no dynamicpb intermediate). For proxy
-// handlers (gRPC/HTTP), falls back to dynamicpb.
-func (s *Server) handleHTTPProto(w http.ResponseWriter, r *http.Request, entry *httpToolEntry, body []byte) {
-	var req proto.Message
-
-	switch {
-	case entry.reqType != nil:
-		// Fast path: decode directly into the handler's typed request.
-		req = reflect.New(entry.reqType.Elem()).Interface().(proto.Message)
-		if len(body) > 0 {
-			if err := proto.Unmarshal(body, req); err != nil {
-				httpError(w, invalidArgumentError("decode binary proto: "+err.Error()))
-				return
-			}
-		}
-	case entry.reqDesc != nil:
-		// Proxy path: dynamicpb (descriptor known but no typed handler).
-		dyn := dynamicpb.NewMessage(entry.reqDesc)
-		if len(body) > 0 {
-			if err := proto.Unmarshal(body, dyn); err != nil {
-				httpError(w, invalidArgumentError("decode binary proto: "+err.Error()))
-				return
-			}
-		}
-		req = dyn
-	default:
-		httpError(w, invalidArgumentError("binary proto requires a Server created via ServerFromDescriptor or ServerFromBytes"))
+// Registration precomputes a typed request factory, so decoding does not need
+// a descriptor lookup or a dynamic-message conversion on the request path.
+func (s *Server) handleHTTPProto(w http.ResponseWriter, r *http.Request, entry *httpToolEntry, body []byte, transport *projectionUnaryTransport) {
+	req, err := s.newRequest(entry.tool)
+	if err != nil {
+		httpErrorWithLimit(w, invalidArgumentError("binary proto requires a Server created via ServerFromDescriptor or ServerFromBytes"), entry.maxUnaryResponse)
 		return
+	}
+	if len(body) > 0 {
+		if err := proto.Unmarshal(body, req); err != nil {
+			httpErrorWithLimit(w, invalidArgumentError("decode binary proto: "+err.Error()), entry.maxUnaryResponse)
+			return
+		}
 	}
 
 	resp, err := s.invoke(r.Context(), entry.tool, req)
+	if err == nil {
+		err = r.Context().Err()
+	}
 	if err != nil {
-		httpError(w, err)
+		writeUnaryProjectionMetadata(w.Header(), transport)
+		httpErrorWithLimit(w, err, entry.maxUnaryResponse)
 		return
 	}
 
 	respBytes, err := proto.Marshal(resp)
 	if err != nil {
-		httpError(w, fmt.Errorf("encode binary proto: %w", err))
+		writeUnaryProjectionMetadata(w.Header(), transport)
+		httpErrorWithLimit(w, fmt.Errorf("encode binary proto: %w", err), entry.maxUnaryResponse)
+		return
+	}
+	if int64(len(respBytes)) > entry.maxUnaryResponse {
+		writeUnaryProjectionMetadata(w.Header(), transport)
+		httpErrorWithLimit(w, status.Errorf(codes.ResourceExhausted, "encoded response exceeds %d byte limit", entry.maxUnaryResponse), entry.maxUnaryResponse)
 		return
 	}
 
-	w.Header().Set("Content-Type", protoContentType)
-	_, _ = w.Write(respBytes)
-}
-
-// writeProtoResponse re-encodes a JSON response string as binary proto using
-// the cached response descriptor.
-func (s *Server) writeProtoResponse(w http.ResponseWriter, entry *httpToolEntry, jsonBytes []byte) {
-	if entry.respDesc == nil {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(jsonBytes) //nolint:gosec
-		return
-	}
-	resp := dynamicpb.NewMessage(entry.respDesc)
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(jsonBytes, resp); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(jsonBytes) //nolint:gosec
-		return
-	}
-	respBytes, err := proto.Marshal(resp)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(jsonBytes) //nolint:gosec
-		return
-	}
+	writeUnaryProjectionMetadata(w.Header(), transport)
 	w.Header().Set("Content-Type", protoContentType)
 	_, _ = w.Write(respBytes)
 }
@@ -508,35 +565,64 @@ func (s *Server) handleDescriptor(w http.ResponseWriter) {
 	_, _ = w.Write(bytes)
 }
 
-// httpError writes a Connect-style error envelope:
-//
-//	{"code": "invalid_argument", "message": "...", "details": [...]}
-func httpError(w http.ResponseWriter, err error) {
+func httpErrorWithLimit(w http.ResponseWriter, err error, maxBytes int64) {
 	st := statusFromError(err)
+	payload, marshalErr := json.Marshal(connectErrorPayload(err))
+	if marshalErr != nil {
+		st = status.New(codes.Internal, "encode Connect error")
+		payload = []byte(`{"code":"internal","message":"encode Connect error"}`)
+	}
+	if maxBytes > 0 && int64(len(payload)) > maxBytes {
+		st = status.New(codes.ResourceExhausted, "encoded error response exceeds configured byte limit")
+		payload, _ = json.Marshal(connectErrorPayload(st.Err()))
+		if int64(len(payload)) > maxBytes {
+			payload = nil
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(grpcCodeToHTTPStatus(st.Code()))
-	_ = json.NewEncoder(w).Encode(errorPayload(err))
+	_, _ = w.Write(payload)
+}
+
+func httpUnsupportedMediaTypeWithLimit(w http.ResponseWriter, message string, maxBytes int64) {
+	err := status.Error(codes.InvalidArgument, message)
+	payload, _ := json.Marshal(connectErrorPayload(err))
+	if maxBytes > 0 && int64(len(payload)) > maxBytes {
+		payload = nil
+	}
+	w.Header().Set("Content-Type", jsonContentType)
+	w.WriteHeader(http.StatusUnsupportedMediaType)
+	_, _ = w.Write(payload)
+}
+
+func writeConnectStreamError(w http.ResponseWriter, contentType string, err error) {
+	payload := connectEndStreamPayload(err, nil)
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	_ = writeConnectEnvelope(w, connectEndStreamFlag, payload)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func connectEndStreamPayload(streamErr error, trailer metadata.MD) []byte {
+	end := map[string]any{}
+	if streamErr != nil {
+		end["error"] = connectErrorPayload(streamErr)
+	}
+	if encoded := connectEndStreamMetadata(trailer); len(encoded) > 0 {
+		end["metadata"] = encoded
+	}
+	payload, err := json.Marshal(end)
+	if err == nil && len(payload) <= maxConnectControlEnvelope {
+		return payload
+	}
+	fallback, _ := json.Marshal(map[string]any{"error": connectErrorPayload(status.Error(
+		codes.ResourceExhausted, "Connect control envelope exceeds configured byte limit",
+	))})
+	return fallback
 }
 
 func isProtoContentType(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.Index(ct, ";"); i >= 0 {
-		ct = ct[:i]
-	}
-	return strings.TrimSpace(ct) == protoContentType
-}
-
-func wantsProto(accept string) bool {
-	for part := range strings.SplitSeq(accept, ",") {
-		mt := strings.TrimSpace(part)
-		if i := strings.Index(mt, ";"); i >= 0 {
-			mt = mt[:i]
-		}
-		if strings.TrimSpace(mt) == protoContentType {
-			return true
-		}
-	}
-	return false
+	return matchContentType(ct, protoContentType)
 }

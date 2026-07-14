@@ -5,3 +5,6 @@ plugins:
   - protoc_builtin: go
     out: ../../../go/tests/gen
     opt: paths=source_relative
+  - remote: buf.build/grpc/go:v1.6.0
+    out: ../../../go/tests/gen
+    opt: paths=source_relative
