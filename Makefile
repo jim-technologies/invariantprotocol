@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help check lint fmt fmt-check test typecheck proto-comments public-surface audit bench generate deps verify-generate breaking
+.PHONY: help check version-check lint fmt fmt-check test typecheck proto-comments public-surface audit bench generate deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
@@ -11,26 +11,29 @@ help: ## Show available make targets.
 # languages (Go, Python, Rust, TypeScript) plus proto/comment gates. CI runs
 # `flox activate -- make check` so contributors and CI hit the identical
 # toolchain and gates.
-check: fmt-check lint typecheck proto-comments public-surface test ## Run the canonical validation gate.
+check: version-check fmt-check lint typecheck proto-comments public-surface test ## Run the canonical validation gate.
 
-typescript/node_modules/.package-lock.json: typescript/package-lock.json typescript/package.json
-	cd typescript && npm ci
+node_modules/.package-lock.json: package-lock.json package.json
+	npm ci
+
+version-check: ## Verify every language package uses the root VERSION.
+	python3 scripts/check_versions.py
 
 fmt-check: ## Verify formatting without modifying files.
-	cd go && test -z "$$(gofmt -l .)" || { echo "gofmt: files need formatting:"; gofmt -l .; exit 1; }
-	cd python && ruff format --check src/ tests/
+	test -z "$$(gofmt -l go)" || { echo "gofmt: files need formatting:"; gofmt -l go; exit 1; }
+	cd python && ruff format --check src/ tests/ ../scripts/
 	cd rust && cargo fmt --check
 	cd proto && buf format --diff --exit-code
 
 lint: ## Run Go, Python, Rust, and proto linters.
-	cd go && golangci-lint run ./...
-	cd python && ruff check src/ tests/
+	golangci-lint run ./...
+	cd python && ruff check src/ tests/ ../scripts/
 	cd rust && cargo clippy --all-targets -- -D warnings
 	cd proto && buf lint
 
-typecheck: typescript/node_modules/.package-lock.json ## Run Python and TypeScript static type checks.
+typecheck: node_modules/.package-lock.json ## Run Python and TypeScript static type checks.
 	cd python && uv run ty check
-	cd typescript && npm run lint
+	npm run lint
 
 proto-comments: ## Verify projected proto comments are complete.
 	cd python && uv run invariant-check-proto-comments tests/proto/descriptor.binpb
@@ -42,20 +45,19 @@ audit: ## Scan Python dependencies for known vulnerabilities.
 	cd python && uv run pip-audit
 
 fmt: ## Format code and apply safe linter fixes.
-	cd go && gofmt -w . && golangci-lint run --fix ./...
-	cd python && ruff format src/ tests/ && ruff check --fix src/ tests/
+	gofmt -w go && golangci-lint run --fix ./...
+	cd python && ruff format src/ tests/ ../scripts/ && ruff check --fix src/ tests/ ../scripts/
 	cd rust && cargo fmt
 	cd proto && buf format -w
 
-test: typescript/node_modules/.package-lock.json ## Run Go, Python, Rust, and TypeScript tests.
-	cd go && go test ./...
-	cd go/tests/manual && go test ./...
+test: node_modules/.package-lock.json ## Run Go, Python, Rust, and TypeScript tests.
+	go test ./...
 	cd python && uv run python -m pytest tests/
 	cd rust && cargo test
-	cd typescript && npm test
+	npm test
 
 bench: ## Run Go, Python, and Rust benchmarks.
-	cd go && go test -bench=. -benchtime=2s -run=^$$ ./...
+	go test -bench=. -benchtime=2s -run=^$$ ./...
 	cd python && uv run python bench/bench.py
 	cd rust && cargo bench --bench bench -- --warm-up-time 1 --measurement-time 2
 
@@ -66,11 +68,10 @@ generate: ## Regenerate protobuf stubs.
 	cd python/tests/proto && buf generate --template buf.validate.gen.yaml
 
 deps: ## Tidy/update language dependency lockfiles.
-	cd go && go get -u all && go mod tidy
-	cd go/tests/manual && go get -u all && go mod tidy
+	go get -u all && go mod tidy
 	cd python && uv lock --upgrade
 	cd rust && cargo update
-	cd typescript && npm update
+	npm update
 	cd python/tests/proto && buf dep update
 
 breaking: ## Check proto breaking changes against BASE_REF.

@@ -7,7 +7,6 @@ import re
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 SKIP_DIRS = {
@@ -107,9 +106,7 @@ PRIVATE_TERMS = (
     "jim-technologies",
 )
 
-PRIVATE_PATTERNS = tuple(
-    (term, re.compile(re.escape(term), re.IGNORECASE)) for term in PRIVATE_TERMS
-)
+PRIVATE_PATTERNS = tuple((term, re.compile(re.escape(term), re.IGNORECASE)) for term in PRIVATE_TERMS)
 
 
 def should_scan(path: Path) -> bool:
@@ -149,10 +146,7 @@ def main() -> int:
 
     if findings:
         print("Public-surface scan failed. Remove private/product-specific references.")
-        print(
-            "Only public package coordinates are allowlisted: "
-            + ", ".join(PUBLIC_PACKAGE_ALLOWLIST)
-        )
+        print("Only public package coordinates are allowlisted: " + ", ".join(PUBLIC_PACKAGE_ALLOWLIST))
         print()
         print("\n".join(findings))
         return 1

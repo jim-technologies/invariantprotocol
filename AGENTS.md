@@ -234,12 +234,20 @@ make generate  # regenerate proto stubs
 
 ## Dependency boundaries
 
+The root `VERSION` is the release version for every language package. CI checks
+that package metadata and runtime version constants stay synchronized.
+Releases use one repository tag, `vX.Y.Z`; do not create new language-prefixed
+tags.
+
 Four lockfiles:
 
 - **`.flox/env/manifest.toml`** — language toolchains and CLI tools (`python3`, `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`). May also pin nix-built Python packages when uv would otherwise need a C toolchain inside the flox sandbox.
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev dep. `uv run` resolves against this.
-- **`go/go.mod` + `go/go.sum`** — every Go dep.
-- **`typescript/package.json` + `typescript/package-lock.json`** — every TypeScript runtime and dev dep. `npm ci` resolves against this.
+- **`go.mod` + `go.sum`** — every Go dep. The root module keeps Go packages in
+  `go/` while allowing one repository-wide `vX.Y.Z` release tag.
+- **`package.json` + `package-lock.json`** — every TypeScript runtime and dev
+  dep. TypeScript source remains in `typescript/`; `npm ci` resolves from the
+  repository root.
 
 CI (`.github/workflows/ci.yml`) runs everything inside `flox activate`, so contributors and CI hit the same toolchain by construction.
 

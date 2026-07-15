@@ -1,12 +1,52 @@
 # Changelog
 
-All notable changes to this project are documented here. Versions are tagged
-repo-wide; entries call out implementation scope when a feature has not reached
-all four implementations yet.
+All notable changes to this project are documented here. Go, Python, Rust, and
+TypeScript share the version in `VERSION` and are released together from one
+repository tag named `vX.Y.Z`.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
+
+## v0.6.0 — 2026-07-14
+
+### Changed
+
+- **One version and one release tag.** Every language package now reports
+  `0.6.0`, with the repository-root `VERSION` as the source of truth. CI checks
+  package manifests, lockfiles, runtime version constants, changelog state, and
+  release tags for drift. Future releases use only a plain root tag such as
+  `v0.6.0`; the historical `go/v*` tags remain immutable but are retired.
+- **Go is now part of the root repository module.** The module path is
+  `github.com/jim-technologies/invariantprotocol`, while the package remains in
+  `go/`, so source imports stay
+  `github.com/jim-technologies/invariantprotocol/go`. The manual example is
+  part of the same module instead of maintaining a second dependency graph.
+- **TypeScript has one npm package boundary.** The publishable manifest,
+  dependency lock, scripts, and development dependencies now live at the
+  repository root; TypeScript source and configuration remain under
+  `typescript/`.
+- **Release automation follows the monorepo boundary.** Dependabot, Make
+  targets, linting, tests, dependency updates, and tag-triggered CI now operate
+  on the root Go and npm packages.
+
+### Go module migration
+
+The old module requirement was:
+
+```text
+github.com/jim-technologies/invariantprotocol/go v0.3.1
+```
+
+Starting with this release, require the repository module instead:
+
+```text
+github.com/jim-technologies/invariantprotocol v0.6.0
+```
+
+Go source imports do not change. Plain tags from `v0.2.0` through `v0.5.0`
+predate the root Go module and are retracted there; the old `go/v*` releases
+remain available under the historical nested module path.
 
 ## v0.5.0 — 2026-07-14
 

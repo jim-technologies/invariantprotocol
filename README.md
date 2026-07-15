@@ -614,26 +614,32 @@ healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 ## Install
 
+All four language packages use the version in `VERSION` and ship together from
+one repository tag. Release `0.6.0`, for example, uses only the tag `v0.6.0`.
+The retired `go/v*` tags apply only to the historical nested Go module.
+
 **Go:**
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go
+go get github.com/jim-technologies/invariantprotocol@v0.6.0
 ```
+
+Go code continues to import `github.com/jim-technologies/invariantprotocol/go`.
 
 **Python:**
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.6.0#subdirectory=python"
 ```
 
 **Rust:**
 ```toml
 # Cargo.toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", branch = "main" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.6.0" }
 ```
 
 **TypeScript (source package):**
 ```bash
-npm install "github:jim-technologies/invariantprotocol#v0.5.0"
+npm install "github:jim-technologies/invariantprotocol#v0.6.0"
 ```
 
 ## TypeScript
@@ -742,7 +748,7 @@ Reading: Rust is fastest on unary (direct + HTTP). Go is fastest per-chunk on st
 Run yourself:
 
 ```bash
-cd go && go test -bench=. -benchtime=2s -run=^$ ./...
+go test -bench=. -benchtime=2s -run=^$ ./...
 cd python && uv run python bench/bench.py
 cd rust && cargo bench --bench bench
 ```

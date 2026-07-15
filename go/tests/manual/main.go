@@ -60,7 +60,10 @@ func (s *GreetServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream gree
 }
 
 func descriptorPath() string {
-	_, thisFile, _, _ := runtime.Caller(0)
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("resolve source path")
+	}
 	return filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "python", "tests", "proto", "descriptor.binpb")
 }
 

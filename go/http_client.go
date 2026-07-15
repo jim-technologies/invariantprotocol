@@ -57,7 +57,7 @@ const (
 	baseHTTPClientRetryDelay     = 100 * time.Millisecond
 	maxHTTPClientRetryDelay      = 2 * time.Second
 	retryAfterHeader             = "Retry-After"
-	defaultOutboundHTTPUserAgent = "invariant-protocol/0.1"
+	defaultOutboundHTTPUserAgent = serverName + "/" + serverVersion
 	// Cap response bodies from upstream services we proxy through. A hostile
 	// or buggy upstream could otherwise stream gigabytes back and OOM us.
 	// Same 16 MiB shape as the inbound caps; users wanting more can wrap.

@@ -274,7 +274,7 @@ describe("projections", () => {
     const started = await startGrpc(server);
     grpcServers.push(started.server);
 
-    const protoPath = resolve(here, "../node_modules/@grpc/reflection/build/proto/grpc/reflection/v1/reflection.proto");
+    const protoPath = resolve(here, "../../node_modules/@grpc/reflection/build/proto/grpc/reflection/v1/reflection.proto");
     const pkgDef = protoLoader.loadSync(protoPath, { oneofs: true });
     const pkg = grpc.loadPackageDefinition(pkgDef) as any;
     const client = new pkg.grpc.reflection.v1.ServerReflection(started.address, grpc.credentials.createInsecure());

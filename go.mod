@@ -1,4 +1,4 @@
-module github.com/jim-technologies/invariantprotocol/go
+module github.com/jim-technologies/invariantprotocol
 
 go 1.26.4
 
@@ -25,3 +25,8 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Plain repository tags before v0.6.0 predate the root Go module and do not
+// contain its packages. The historical go/v* tags remain valid for the old
+// nested module path.
+retract [v0.2.0, v0.5.0]
