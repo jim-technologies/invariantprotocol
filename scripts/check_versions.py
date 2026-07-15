@@ -102,6 +102,10 @@ def main() -> int:
     if readme_versions != {version}:
         errors.append(f"README.md release tags are {sorted(readme_versions)}; expected only {version!r}")
 
+    go_install = f"go get github.com/jim-technologies/invariantprotocol/go@v{version}"
+    if go_install not in readme_install:
+        errors.append(f"README.md must install the Go package with {go_install!r}")
+
     if os.environ.get("GITHUB_REF_TYPE") == "tag":
         expected_tag = f"v{version}"
         actual_tag = os.environ.get("GITHUB_REF_NAME")

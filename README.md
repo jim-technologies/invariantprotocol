@@ -620,10 +620,15 @@ The retired `go/v*` tags apply only to the historical nested Go module.
 
 **Go:**
 ```bash
-go get github.com/jim-technologies/invariantprotocol@v0.6.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.6.0
 ```
 
-Go code continues to import `github.com/jim-technologies/invariantprotocol/go`.
+This follows Go's conventional one-module-per-repository layout: `go.mod` is at
+the repository root and the Go package lives in `go/`. Code imports
+`github.com/jim-technologies/invariantprotocol/go`, while a consumer's `go.mod`
+records the containing module as
+`github.com/jim-technologies/invariantprotocol v0.6.0`. The `/go` suffix is a
+package directory, not a separate version or tag namespace.
 
 **Python:**
 ```bash

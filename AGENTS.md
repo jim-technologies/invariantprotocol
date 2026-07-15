@@ -244,7 +244,11 @@ Four lockfiles:
 - **`.flox/env/manifest.toml`** — language toolchains and CLI tools (`python3`, `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`). May also pin nix-built Python packages when uv would otherwise need a C toolchain inside the flox sandbox.
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev dep. `uv run` resolves against this.
 - **`go.mod` + `go.sum`** — every Go dep. The root module keeps Go packages in
-  `go/` while allowing one repository-wide `vX.Y.Z` release tag.
+  `go/` while allowing one repository-wide `vX.Y.Z` release tag. Consumers run
+  `go get github.com/jim-technologies/invariantprotocol/go@vX.Y.Z` and import
+  that package path; their `go.mod` records the root module
+  `github.com/jim-technologies/invariantprotocol`. Never recreate a nested Go
+  module or new `go/vX.Y.Z` tags.
 - **`package.json` + `package-lock.json`** — every TypeScript runtime and dev
   dep. TypeScript source remains in `typescript/`; `npm ci` resolves from the
   repository root.
