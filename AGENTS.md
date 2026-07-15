@@ -239,6 +239,16 @@ that package metadata and runtime version constants stay synchronized.
 Releases use one repository tag, `vX.Y.Z`; do not create new language-prefixed
 tags.
 
+Invariant-owned packages are distributed only from Git. Do not publish them to,
+or document installation from, PyPI, the npm registry, crates.io, or another
+language registry. Release documentation may use the shared root tag;
+production installations may use each tool's full-commit revision syntax. Keep
+registry guards enabled where the ecosystem supports them (`private: true` for
+npm and `publish = false` for Cargo, plus the `Private :: Do Not Upload`
+Python classifier). Repository policy and the absence of publication
+automation remain additional guardrails. Keep the clean Git-install check for
+all four language packages in CI.
+
 Four lockfiles:
 
 - **`.flox/env/manifest.toml`** — language toolchains and CLI tools (`python3`, `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`). May also pin nix-built Python packages when uv would otherwise need a C toolchain inside the flox sandbox.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that every publishable package uses the repository release version."""
+"""Verify Git-distributed packages share one version and cannot be published."""
 
 from __future__ import annotations
 
@@ -42,6 +42,13 @@ def main() -> int:
     pyproject = read_toml("python/pyproject.toml")
     uv_lock = read_toml("python/uv.lock")
     cargo = read_toml("rust/Cargo.toml")
+
+    if package.get("private") is not True:
+        errors.append("package.json must set private=true for Git-only distribution")
+    if cargo["package"].get("publish") is not False:
+        errors.append("rust/Cargo.toml must set publish=false for Git-only distribution")
+    if "Private :: Do Not Upload" not in pyproject["project"].get("classifiers", []):
+        errors.append("python/pyproject.toml must prohibit PyPI uploads")
 
     uv_projects = [
         item
@@ -98,6 +105,8 @@ def main() -> int:
         errors.append(f"latest CHANGELOG.md release is {changelog_version!r}; expected {version!r}")
 
     readme_install = captured("README.md", r"(?s)^## Install\s+(.*?)^## ")
+    if "distributed only from Git" not in readme_install:
+        errors.append("README.md must document Git-only distribution")
     readme_versions = set(re.findall(r"\bv([0-9]+\.[0-9]+\.[0-9]+)\b", readme_install))
     if readme_versions != {version}:
         errors.append(f"README.md release tags are {sorted(readme_versions)}; expected only {version!r}")

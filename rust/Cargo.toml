@@ -1,11 +1,12 @@
 [package]
 name = "invariant-protocol"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 rust-version = "1.95"
 description = "Project gRPC services into Connect/gRPC/MCP/CLI interfaces from proto descriptors"
 license = "Apache-2.0"
 repository = "https://github.com/jim-technologies/invariantprotocol"
+publish = false
 
 [lib]
 name = "invariant"

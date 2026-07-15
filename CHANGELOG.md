@@ -8,6 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
 but never silent behaviour regressions.
 
+## v0.6.1 — 2026-07-15
+
+### Changed
+
+- **Git-only distribution is explicit and guarded.** Invariant-owned packages
+  install from a repository tag or immutable commit rather than PyPI, the npm
+  registry, crates.io, or another language registry. npm and Cargo metadata
+  prohibit accidental publication, PyPI rejects the package's private
+  classifier, and CI verifies clean Git consumers.
+
 ## v0.6.0 — 2026-07-14
 
 ### Changed

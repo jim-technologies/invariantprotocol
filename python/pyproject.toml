@@ -1,8 +1,9 @@
 [project]
 name = "invariant-protocol"
-version = "0.6.0"
+version = "0.6.1"
 description = "Project gRPC services into MCP, CLI, and HTTP interfaces from proto descriptors"
 requires-python = ">=3.14"
+classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "protobuf>=7.35.1",
     "grpcio>=1.82.1",

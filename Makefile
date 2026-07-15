@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help check version-check lint fmt fmt-check test typecheck proto-comments public-surface audit bench generate deps verify-generate breaking
+.PHONY: help check version-check git-install-check lint fmt fmt-check test typecheck proto-comments public-surface audit bench generate deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
@@ -18,6 +18,9 @@ node_modules/.package-lock.json: package-lock.json package.json
 
 version-check: ## Verify every language package uses the root VERSION.
 	python3 scripts/check_versions.py
+
+git-install-check: ## Install every language package from the current Git commit.
+	scripts/check_git_installs.sh
 
 fmt-check: ## Verify formatting without modifying files.
 	test -z "$$(gofmt -l go)" || { echo "gofmt: files need formatting:"; gofmt -l go; exit 1; }

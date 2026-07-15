@@ -78,7 +78,7 @@ export type ToolCatalogEntry = {
 };
 
 export const SERVER_NAME = "invariant-protocol";
-export const SERVER_VERSION = "0.6.0";
+export const SERVER_VERSION = "0.6.1";
 
 export class Server {
   readonly name = SERVER_NAME;

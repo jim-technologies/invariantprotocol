@@ -614,38 +614,55 @@ healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 ## Install
 
+Invariant-owned packages are distributed only from Git. They are not published
+to PyPI, the npm registry, crates.io, or another language registry. Release
+examples use the shared root tag; production builds that require a commit-level
+pin can use each tool's commit-revision syntax. The language package managers
+below build and install that Git source—they are not registry distribution
+channels for Invariant. Third-party dependencies still resolve through their
+normal ecosystem registries or proxies. Go module proxies may transparently
+cache public Git revisions during normal `go get` resolution; no separate Go
+artifact is published.
+
 All four language packages use the version in `VERSION` and ship together from
-one repository tag. Release `0.6.0`, for example, uses only the tag `v0.6.0`.
+one repository tag. Release `0.6.1`, for example, uses only the tag `v0.6.1`.
 The retired `go/v*` tags apply only to the historical nested Go module.
 
 **Go:**
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.6.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.6.1
 ```
 
 This follows Go's conventional one-module-per-repository layout: `go.mod` is at
 the repository root and the Go package lives in `go/`. Code imports
 `github.com/jim-technologies/invariantprotocol/go`, while a consumer's `go.mod`
 records the containing module as
-`github.com/jim-technologies/invariantprotocol v0.6.0`. The `/go` suffix is a
+`github.com/jim-technologies/invariantprotocol v0.6.1`. The `/go` suffix is a
 package directory, not a separate version or tag namespace.
 
 **Python:**
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.6.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.6.1#subdirectory=python"
 ```
 
 **Rust:**
 ```toml
 # Cargo.toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.6.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.6.1" }
 ```
+
+The crates.io package named `invariant-protocol` belongs to an unrelated
+project. Use the Git dependency above.
 
 **TypeScript (source package):**
 ```bash
-npm install "github:jim-technologies/invariantprotocol#v0.6.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.6.1"
 ```
+
+For a full commit pin, replace `@v0.6.1` with `@COMMIT_SHA` in the Go and
+Python commands, use `rev = "COMMIT_SHA"` instead of `tag` for Cargo, and use
+`#COMMIT_SHA` for npm.
 
 ## TypeScript
 
