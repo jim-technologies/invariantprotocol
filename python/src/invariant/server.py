@@ -816,15 +816,17 @@ class Server:
             services = {service_name: svc_info}
         else:
             services = self.parsed.services
+        duplicate_services = sorted(set(services) & self._registered_services.keys())
+        if duplicate_services:
+            raise ValueError(f"Services are already registered: {duplicate_services}")
+
         rules = http_rules_by_method_path(self._fds)
         pool = self._require_descriptor_pool("connect_http")
-        staged_specs: list[tuple[Any, Any, str, str, str, Any, Any]] = []
+        staged_specs: list[tuple[Any, Any, str, str, str, Any, Any, bool]] = []
         staged_names: set[str] = set()
         for svc_full_name, svc_info in services.items():
             for method_name, method_info in svc_info.methods.items():
                 if method_info.client_streaming or method_info.server_streaming:
-                    continue
-                if not self._should_include(svc_full_name, method_name):
                     continue
 
                 method_path = f"/{svc_full_name}/{method_name}"
@@ -833,17 +835,19 @@ class Server:
                 pool.FindMessageTypeByName(method_info.output_type)
                 binding = client_binding_for_method(rules.get(method_path), svc_full_name, method_name)
                 tool_name = f"{svc_info.name}.{method_name}"
-                if tool_name in staged_names:
-                    raise ValueError(f"Tool {tool_name!r} would be registered more than once")
-                staged_names.add(tool_name)
-                existing = self._tools.get(tool_name)
-                if existing is not None:
-                    raise ValueError(
-                        f"Tool {tool_name!r} is already registered by {existing.service_full_name!r}; "
-                        f"cannot register {svc_full_name!r}."
-                    )
+                projected = self._should_include(svc_full_name, method_name)
+                if projected:
+                    if tool_name in staged_names:
+                        raise ValueError(f"Tool {tool_name!r} would be registered more than once")
+                    staged_names.add(tool_name)
+                    existing = self._tools.get(tool_name)
+                    if existing is not None:
+                        raise ValueError(
+                            f"Tool {tool_name!r} is already registered by {existing.service_full_name!r}; "
+                            f"cannot register {svc_full_name!r}."
+                        )
                 staged_specs.append(
-                    (svc_info, method_info, svc_full_name, method_name, method_path, req_class, binding)
+                    (svc_info, method_info, svc_full_name, method_name, method_path, req_class, binding, projected)
                 )
 
         connection = HTTPConnection(
@@ -853,8 +857,19 @@ class Server:
             options=options,
             observer=observer,
         )
+        staged_services: dict[str, dict[str, _RpcMethodHandler]] = {}
+        staged_native_tools: list[Tool] = []
         staged_tools: list[Tool] = []
-        for svc_info, method_info, svc_full_name, method_name, method_path, req_class, binding in staged_specs:
+        for (
+            svc_info,
+            method_info,
+            svc_full_name,
+            method_name,
+            method_path,
+            req_class,
+            binding,
+            projected,
+        ) in staged_specs:
             handler = HTTPDynamicHandler(
                 connection=connection,
                 binding=binding,
@@ -868,25 +883,29 @@ class Server:
                 request_deserializer=req_class.FromString,
                 response_serializer=lambda message: message.SerializeToString(),
             )
+            staged_services.setdefault(svc_full_name, {})[method_name] = rpc_handler
             tool_name = f"{svc_info.name}.{method_name}"
-            staged_tools.append(
-                Tool(
-                    name=tool_name,
-                    description=method_info.comment or tool_name,
-                    input_schema=self.schema_gen.message_to_schema(method_info.input_type),
-                    handler=handler,
-                    input_type=method_info.input_type,
-                    output_type=method_info.output_type,
-                    service_full_name=svc_full_name,
-                    method_name=method_name,
-                    request_factory=req_class,
-                    rpc_handler=rpc_handler,
-                )
+            tool = Tool(
+                name=tool_name,
+                description=method_info.comment or tool_name,
+                input_schema=self.schema_gen.message_to_schema(method_info.input_type),
+                handler=handler,
+                input_type=method_info.input_type,
+                output_type=method_info.output_type,
+                service_full_name=svc_full_name,
+                method_name=method_name,
+                request_factory=req_class,
+                rpc_handler=rpc_handler,
             )
+            staged_native_tools.append(tool)
+            if projected:
+                staged_tools.append(tool)
 
         self._http_connections.append(connection)
-        for tool in staged_tools:
+        self._registered_services.update(staged_services)
+        for tool in staged_native_tools:
             self._native_tools[(tool.service_full_name, tool.method_name)] = tool
+        for tool in staged_tools:
             self._tools[tool.name] = tool
         self._registration_started = True
 

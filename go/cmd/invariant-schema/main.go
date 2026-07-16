@@ -113,7 +113,7 @@ func runCompile(args []string, stderr io.Writer) error {
 	}
 	bundle, err := data.CompileDescriptorBytes(descriptor, messages, previous)
 	if err != nil {
-		return fmt.Errorf("compile descriptor: %w", err)
+		return err
 	}
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(bundle)
 	if err != nil {

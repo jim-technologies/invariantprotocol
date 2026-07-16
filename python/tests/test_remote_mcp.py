@@ -119,6 +119,14 @@ def _mcp_request(msg_id, method, params=None):
     return json.dumps(msg)
 
 
+def _initialize_params() -> dict:
+    return {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {},
+        "clientInfo": {"name": "invariant-test", "version": "1.0"},
+    }
+
+
 async def _run_remote_mcp_session(grpc_port: int, messages: list[str]) -> list[dict]:
     """Send JSON-RPC messages to a remote-mode MCP server via stdio.
 
@@ -179,7 +187,7 @@ async def test_remote_mcp_tools_list(server):
         responses = await _run_remote_mcp_session(
             port,
             [
-                _mcp_request(0, "initialize", {}),
+                _mcp_request(0, "initialize", _initialize_params()),
                 _mcp_request(1, "tools/list", {}),
             ],
         )
@@ -199,7 +207,7 @@ async def test_remote_mcp_tool_call(server):
         responses = await _run_remote_mcp_session(
             port,
             [
-                _mcp_request(0, "initialize", {}),
+                _mcp_request(0, "initialize", _initialize_params()),
                 _mcp_request(
                     1,
                     "tools/call",
@@ -220,7 +228,7 @@ async def test_remote_mcp_tool_call_with_enum(server):
         responses = await _run_remote_mcp_session(
             port,
             [
-                _mcp_request(0, "initialize", {}),
+                _mcp_request(0, "initialize", _initialize_params()),
                 _mcp_request(
                     1,
                     "tools/call",

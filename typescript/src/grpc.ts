@@ -20,8 +20,8 @@ import { StatusSchema } from "./gen/google/rpc/status_pb.js";
 import {
   serverInternal,
   type ManagedHandlerContext,
+  type RemoteServiceSpec,
   type Server,
-  type Tool,
   type UnaryHandler,
 } from "./server.js";
 
@@ -32,9 +32,29 @@ export function createGrpcServer(server: Server, options?: grpc.ServerOptions): 
   for (const spec of serviceSpecs) {
     grpcServer.addService(grpcServiceDefinitionForService(spec.service), grpcImplementation(server, spec));
   }
+  const remoteServiceSpecs = server[serverInternal].registeredRemoteServiceSpecs();
+  for (const spec of remoteServiceSpecs) {
+    grpcServer.addService(grpcServiceDefinitionForRemoteService(spec), grpcRemoteImplementation(server, spec));
+  }
 
-  const serviceNames = serviceSpecs.map((spec) => spec.service.typeName).sort();
-  new ReflectionService(reflectionPackageDefinition(server), { services: serviceNames }).addToServer(grpcServer);
+  const reflectedMethods = new Map<string, Set<string>>();
+  for (const spec of serviceSpecs) {
+    reflectedMethods.set(spec.service.typeName, new Set(spec.service.methods.map((method) => method.name)));
+  }
+  for (const spec of remoteServiceSpecs) {
+    reflectedMethods.set(
+      spec.service.typeName,
+      new Set(
+        spec.service.methods
+          .filter((method) => spec.handlers.has(method.localName))
+          .map((method) => method.name),
+      ),
+    );
+  }
+  const serviceNames = [...reflectedMethods.keys()].sort();
+  new ReflectionService(reflectionPackageDefinition(server, reflectedMethods), { services: serviceNames }).addToServer(
+    grpcServer,
+  );
 
   return grpcServer;
 }
@@ -76,7 +96,6 @@ function messageForBinary(desc: DescMessage, value: unknown): MessageShape<DescM
 export function grpcProxyHandler(
   client: grpc.Client,
   methodName: string,
-  tool: Tool,
   defaultCallOptions: grpc.CallOptions = {},
 ): UnaryHandler {
   return (request, context) =>
@@ -159,9 +178,9 @@ function grpcImplementation(server: Server, spec: ServiceImplSpec): grpc.Untyped
         void (async () => {
           const scope = grpcHandlerContext(server, method, call);
           let headerSent = false;
-          const sendHeader = () => {
+          const sendHeader = (invalidBinaryCode: ConnectCode | null = ConnectCode.Internal) => {
             if (!headerSent) {
-              call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader));
+              call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader, invalidBinaryCode));
               headerSent = true;
             }
           };
@@ -173,12 +192,12 @@ function grpcImplementation(server: Server, spec: ServiceImplSpec): grpc.Untyped
               scope.context,
             )) {
               sendHeader();
-              call.write(response);
+              await writeGrpcResponse(call, response, scope.context.signal);
             }
             sendHeader();
-            call.end(grpcMetadataFromHeaders(scope.context.responseTrailer));
+            call.end(grpcMetadataFromHeaders(scope.context.responseTrailer, ConnectCode.Internal));
           } catch (e) {
-            sendHeader();
+            sendHeader(null);
             call.destroy(toGrpcError(e, scope.context.responseTrailer, methodPath(method)));
           } finally {
             scope.finish();
@@ -186,29 +205,7 @@ function grpcImplementation(server: Server, spec: ServiceImplSpec): grpc.Untyped
         })();
       };
     } else if (method.methodKind === "unary") {
-      out[method.localName] = (
-        call: grpc.ServerUnaryCall<MessageShape<DescMessage>, MessageShape<DescMessage>>,
-        callback: grpc.sendUnaryData<MessageShape<DescMessage>>,
-      ) => {
-        void (async () => {
-          const scope = grpcHandlerContext(server, method, call);
-          try {
-            const response = await server[serverInternal].invokeUnaryMethod(
-              method,
-              methodSpec.impl as never,
-              call.request,
-              scope.context,
-            );
-            call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader));
-            callback(null, response, grpcMetadataFromHeaders(scope.context.responseTrailer));
-          } catch (e) {
-            call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader));
-            callback(toGrpcError(e, scope.context.responseTrailer, methodPath(method)));
-          } finally {
-            scope.finish();
-          }
-        })();
-      };
+      out[method.localName] = grpcUnaryImplementation(server, method, methodSpec.impl as UnaryHandler);
     } else if (method.methodKind === "client_streaming") {
       out[method.localName] = (
         call: grpc.ServerReadableStream<MessageShape<DescMessage>, MessageShape<DescMessage>>,
@@ -223,14 +220,14 @@ function grpcImplementation(server: Server, spec: ServiceImplSpec): grpc.Untyped
               call,
               scope.context,
             );
-            call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader));
+            call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader, ConnectCode.Internal));
             callback(
               null,
               response,
-              grpcMetadataFromHeaders(scope.context.responseTrailer),
+              grpcMetadataFromHeaders(scope.context.responseTrailer, ConnectCode.Internal),
             );
           } catch (e) {
-            call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader));
+            call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader, null));
             callback(toGrpcError(e, scope.context.responseTrailer, methodPath(method)));
           } finally {
             scope.finish();
@@ -244,9 +241,9 @@ function grpcImplementation(server: Server, spec: ServiceImplSpec): grpc.Untyped
         void (async () => {
           const scope = grpcHandlerContext(server, method, call);
           let headerSent = false;
-          const sendHeader = () => {
+          const sendHeader = (invalidBinaryCode: ConnectCode | null = ConnectCode.Internal) => {
             if (!headerSent) {
-              call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader));
+              call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader, invalidBinaryCode));
               headerSent = true;
             }
           };
@@ -258,12 +255,12 @@ function grpcImplementation(server: Server, spec: ServiceImplSpec): grpc.Untyped
               scope.context,
             )) {
               sendHeader();
-              call.write(response);
+              await writeGrpcResponse(call, response, scope.context.signal);
             }
             sendHeader();
-            call.end(grpcMetadataFromHeaders(scope.context.responseTrailer));
+            call.end(grpcMetadataFromHeaders(scope.context.responseTrailer, ConnectCode.Internal));
           } catch (e) {
-            sendHeader();
+            sendHeader(null);
             call.destroy(toGrpcError(e, scope.context.responseTrailer, methodPath(method)));
           } finally {
             scope.finish();
@@ -273,6 +270,57 @@ function grpcImplementation(server: Server, spec: ServiceImplSpec): grpc.Untyped
     }
   }
   return out;
+}
+
+function grpcServiceDefinitionForRemoteService(spec: RemoteServiceSpec): grpc.ServiceDefinition {
+  const out: Record<string, grpc.MethodDefinition<MessageShape<DescMessage>, MessageShape<DescMessage>>> = {};
+  for (const method of spec.service.methods) {
+    if (spec.handlers.has(method.localName)) {
+      out[method.localName] = grpcMethodDefinition(method);
+    }
+  }
+  return out;
+}
+
+function grpcRemoteImplementation(server: Server, spec: RemoteServiceSpec): grpc.UntypedServiceImplementation {
+  const out: grpc.UntypedServiceImplementation = {};
+  for (const method of spec.service.methods) {
+    const handler = spec.handlers.get(method.localName);
+    if (handler) {
+      out[method.localName] = grpcUnaryImplementation(server, method, handler);
+    }
+  }
+  return out;
+}
+
+function grpcUnaryImplementation(
+  server: Server,
+  method: DescMethod,
+  handler: UnaryHandler,
+): (
+  call: grpc.ServerUnaryCall<MessageShape<DescMessage>, MessageShape<DescMessage>>,
+  callback: grpc.sendUnaryData<MessageShape<DescMessage>>,
+) => void {
+  return (call, callback) => {
+    void (async () => {
+      const scope = grpcHandlerContext(server, method, call);
+      try {
+        const response = await server[serverInternal].invokeUnaryMethod(
+          method,
+          handler,
+          call.request,
+          scope.context,
+        );
+        call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader, ConnectCode.Internal));
+        callback(null, response, grpcMetadataFromHeaders(scope.context.responseTrailer, ConnectCode.Internal));
+      } catch (e) {
+        call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader, null));
+        callback(toGrpcError(e, scope.context.responseTrailer, methodPath(method)));
+      } finally {
+        scope.finish();
+      }
+    })();
+  };
 }
 
 function grpcHandlerContext(
@@ -290,13 +338,19 @@ function grpcHandlerContext(
   const cancellation = new AbortController();
   const cancel = () => cancellation.abort(new ConnectError("request canceled", ConnectCode.Canceled));
   call.once("cancelled", cancel);
+  const requestHeader = headersFromGrpcMetadata(call.metadata);
   const context = server[serverInternal].createContext(method, {
     protocolName: "grpc",
     requestMethod: "POST",
     url: `grpc://${call.getHost()}${call.getPath()}`,
     timeoutMs: grpcTimeoutMs(call.getDeadline()),
     requestSignal: cancellation.signal,
-    requestHeader: headersFromGrpcMetadata(call.metadata),
+    requestHeader,
+  });
+  Object.assign(context, {
+    requestHeader,
+    responseHeader: new GrpcMetadataHeaders(context.responseHeader),
+    responseTrailer: new GrpcMetadataHeaders(context.responseTrailer),
   });
   return {
     context,
@@ -312,11 +366,68 @@ function grpcTimeoutMs(deadline: grpc.Deadline): number | undefined {
   return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : undefined;
 }
 
+async function writeGrpcResponse(
+  call:
+    | grpc.ServerWritableStream<MessageShape<DescMessage>, MessageShape<DescMessage>>
+    | grpc.ServerDuplexStream<MessageShape<DescMessage>, MessageShape<DescMessage>>,
+  response: MessageShape<DescMessage>,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted || call.cancelled) {
+    throw grpcCancellationError(signal);
+  }
+  if (call.write(response)) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      call.off("drain", onDrain);
+      call.off("error", onError);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(grpcCancellationError(signal));
+    };
+    call.once("drain", onDrain);
+    call.once("error", onError);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted || call.cancelled) {
+      onAbort();
+    }
+  });
+}
+
+function grpcCancellationError(signal: AbortSignal): unknown {
+  return signal.reason ?? new ConnectError("request canceled", ConnectCode.Canceled);
+}
+
 function toGrpcError(err: unknown, responseTrailer: Headers | undefined, fullMethod: string): grpc.ServiceError {
-  const connect = toConnectError(normalizeHandlerError(err, fullMethod));
-  const trailerHeaders = new Headers(responseTrailer);
-  connect.metadata.forEach((value, key) => trailerHeaders.append(key, value));
-  const metadata = grpcMetadataFromHeaders(trailerHeaders);
+  let connect = toConnectError(normalizeHandlerError(err, fullMethod));
+  const trailerHeaders =
+    responseTrailer instanceof GrpcMetadataHeaders
+      ? responseTrailer.clone()
+      : new GrpcMetadataHeaders(responseTrailer);
+  connect.metadata.forEach((value, key) => {
+    if (!trailerHeaders.has(key)) {
+      trailerHeaders.append(key, value);
+    }
+  });
+  let metadata: grpc.Metadata;
+  try {
+    metadata = grpcMetadataFromHeaders(trailerHeaders, ConnectCode.Internal);
+  } catch (metadataError) {
+    connect = toConnectError(normalizeHandlerError(metadataError, fullMethod));
+    metadata = new grpc.Metadata();
+  }
   if (connect.details.length > 0) {
     const status = create(StatusSchema, {
       code: connect.code,
@@ -362,8 +473,51 @@ function connectErrorFromGrpc(error: grpc.ServiceError): ConnectError {
   return new ConnectError(error.details || error.message, error.code as unknown as ConnectCode, trailer);
 }
 
+class GrpcMetadataHeaders extends Headers {
+  readonly #values = new Map<string, string[]>();
+
+  constructor(init?: HeadersInit) {
+    super();
+    if (init !== undefined) {
+      new Headers(init).forEach((value, key) => this.append(key, value));
+    }
+  }
+
+  override append(name: string, value: string): void {
+    super.append(name, value);
+    const key = name.toLowerCase();
+    const values = this.#values.get(key) ?? [];
+    values.push(String(value));
+    this.#values.set(key, values);
+  }
+
+  override set(name: string, value: string): void {
+    super.set(name, value);
+    this.#values.set(name.toLowerCase(), [String(value)]);
+  }
+
+  override delete(name: string): void {
+    super.delete(name);
+    this.#values.delete(name.toLowerCase());
+  }
+
+  metadataValues(): ReadonlyMap<string, readonly string[]> {
+    return this.#values;
+  }
+
+  clone(): GrpcMetadataHeaders {
+    const clone = new GrpcMetadataHeaders();
+    for (const [key, values] of this.#values) {
+      for (const value of values) {
+        clone.append(key, value);
+      }
+    }
+    return clone;
+  }
+}
+
 function headersFromGrpcMetadata(metadata: grpc.Metadata): Headers {
-  const headers = new Headers();
+  const headers = new GrpcMetadataHeaders();
   for (const [key, values] of Object.entries(metadata.toJSON())) {
     for (const value of values) {
       const encoded = Buffer.isBuffer(value) ? value.toString("base64") : value;
@@ -378,31 +532,77 @@ function headersFromGrpcMetadata(metadata: grpc.Metadata): Headers {
 }
 
 function appendGrpcMetadata(target: Headers, metadata: grpc.Metadata): void {
-  headersFromGrpcMetadata(metadata).forEach((value, key) => {
-    if (!reservedGrpcHeader(key)) {
-      target.append(key, value);
+  for (const [key, values] of Object.entries(metadata.toJSON())) {
+    if (reservedGrpcHeader(key)) {
+      continue;
     }
-  });
+    for (const value of values) {
+      target.append(key, Buffer.isBuffer(value) ? value.toString("base64") : value);
+    }
+  }
 }
 
-function grpcMetadataFromHeaders(headers: Headers): grpc.Metadata {
+function grpcMetadataFromHeaders(
+  headers: Headers,
+  invalidBinaryCode: ConnectCode | null = ConnectCode.InvalidArgument,
+): grpc.Metadata {
   const metadata = new grpc.Metadata();
-  headers.forEach((value, rawKey) => {
+  const entries =
+    headers instanceof GrpcMetadataHeaders
+      ? headers.metadataValues()
+      : new Map([...headers.entries()].map(([key, value]) => [key, [value]] as const));
+  for (const [rawKey, values] of entries) {
     const key = rawKey.toLowerCase();
     if (reservedGrpcHeader(key)) {
-      return;
+      continue;
     }
-    if (key.endsWith("-bin")) {
-      try {
-        metadata.add(key, Buffer.from(value, "base64"));
-      } catch {
-        // Invalid binary metadata cannot be represented by grpc-js.
+    for (const value of values) {
+      if (key.endsWith("-bin")) {
+        for (const item of commaSeparatedBinaryMetadataValues(value)) {
+          const decoded = decodeGrpcBinaryMetadata(item);
+          if (decoded === undefined) {
+            if (invalidBinaryCode !== null) {
+              throw new ConnectError(
+                `binary gRPC metadata '${key}' is not valid base64`,
+                invalidBinaryCode,
+              );
+            }
+            continue;
+          }
+          metadata.add(key, decoded);
+        }
+      } else {
+        metadata.add(key, value);
       }
-      return;
     }
-    metadata.add(key, value);
-  });
+  }
   return metadata;
+}
+
+function commaSeparatedBinaryMetadataValues(value: string): string[] {
+  return value.split(",").map((item) => item.trim());
+}
+
+function decodeGrpcBinaryMetadata(value: string): Buffer | undefined {
+  const encoded = value.trim();
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+    return undefined;
+  }
+  const unpadded = encoded.replace(/=+$/, "");
+  const paddingLength = encoded.length - unpadded.length;
+  const remainder = unpadded.length % 4;
+  if (remainder === 1) {
+    return undefined;
+  }
+  const expectedPaddingLength = remainder === 0 ? 0 : 4 - remainder;
+  if (paddingLength !== 0 && paddingLength !== expectedPaddingLength) {
+    return undefined;
+  }
+  const decoded = Buffer.from(unpadded, "base64");
+  if (decoded.toString("base64").replace(/=+$/, "") !== unpadded) {
+    return undefined;
+  }
+  return decoded;
 }
 
 function reservedGrpcHeader(key: string): boolean {
@@ -416,13 +616,30 @@ function reservedGrpcHeader(key: string): boolean {
   );
 }
 
-function reflectionPackageDefinition(server: Server): PackageDefinition {
+function reflectionPackageDefinition(
+  server: Server,
+  reflectedMethods: ReadonlyMap<string, ReadonlySet<string>>,
+): PackageDefinition {
   const out: Record<string, unknown> = {};
   for (const file of server.parsed.fds.file) {
-    out[file.name || file.package || "descriptor"] = {
+    const reflectedFile = fromBinary(
+      FileDescriptorProtoSchema,
+      toBinary(FileDescriptorProtoSchema, file),
+    );
+    reflectedFile.service = reflectedFile.service.filter((service) => {
+      const serviceName = file.package ? `${file.package}.${service.name}` : service.name;
+      const methods = reflectedMethods.get(serviceName);
+      if (!methods) {
+        return false;
+      }
+      service.method = service.method.filter((method) => methods.has(method.name));
+      return true;
+    });
+    reflectedFile.sourceCodeInfo = undefined;
+    out[reflectedFile.name || reflectedFile.package || "descriptor"] = {
       format: "Protocol Buffer 3 DescriptorProto",
       type: {},
-      fileDescriptorProtos: [Buffer.from(toBinary(FileDescriptorProtoSchema, file))],
+      fileDescriptorProtos: [Buffer.from(toBinary(FileDescriptorProtoSchema, reflectedFile))],
     };
   }
   return out as PackageDefinition;

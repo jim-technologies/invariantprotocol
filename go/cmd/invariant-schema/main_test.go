@@ -75,6 +75,28 @@ func TestCompileRetainsPreviousBundleAutomatically(t *testing.T) {
 	assert.Equal(t, secondBytes, thirdBytes, "deterministic compilation must not churn a committed bundle")
 }
 
+func TestCompileRejectsEmptyStorageNamesBeforeWriting(t *testing.T) {
+	directory := t.TempDir()
+	descriptorPath := filepath.Join(directory, "descriptor.binpb")
+	bundlePath := filepath.Join(directory, "schema.binpb")
+	writeDescriptor(t, descriptorPath, field("_", 1))
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"compile",
+		"--descriptor", descriptorPath,
+		"--message", "example.v1.Record",
+		"--output", bundlePath,
+	}, &stdout, &stderr)
+	require.EqualError(t, err,
+		`compile descriptor: dataset "example.v1.Record": compile message "example.v1.Record": protobuf field "example.v1.Record._" normalizes to an empty storage name within protobuf message "example.v1.Record"`,
+	)
+	assert.Empty(t, stdout.String())
+	assert.Empty(t, stderr.String())
+	_, statErr := os.Stat(bundlePath)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
 func TestArrowWritesOnlyIPCToStdoutAndDiagnosticsToStderr(t *testing.T) {
 	bundlePath := writeBundle(t, oneFieldBundle("example.v1.Record"))
 	var stdout, stderr bytes.Buffer

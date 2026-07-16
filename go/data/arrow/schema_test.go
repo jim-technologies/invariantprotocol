@@ -74,9 +74,19 @@ func TestSchemaAndIPCRoundTrip(t *testing.T) {
 	require.Equal(t, arrowlib.Nanosecond, elapsed.Unit)
 	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED, diagnostic(t, diagnostics, "elapsed").GetCompatibility())
 
-	_, ok = fieldByName(t, schema, "attributes").Type.(*extensions.JSONType)
-	require.True(t, ok)
-	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED, diagnostic(t, diagnostics, "attributes").GetCompatibility())
+	for _, test := range []struct {
+		name       string
+		limitation string
+	}{
+		{name: "attributes", limitation: "numbers to be finite"},
+		{name: "opaque", limitation: "type URL to resolve"},
+	} {
+		_, ok = fieldByName(t, schema, test.name).Type.(*extensions.JSONType)
+		require.True(t, ok)
+		jsonDiagnostic := diagnostic(t, diagnostics, test.name)
+		require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED, jsonDiagnostic.GetCompatibility())
+		require.Contains(t, jsonDiagnostic.GetMessage(), test.limitation)
+	}
 
 	var encoded bytes.Buffer
 	require.NoError(t, invariantarrow.WriteIPC(&encoded, schema))

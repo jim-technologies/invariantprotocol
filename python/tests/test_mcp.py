@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 
+import greet_pb2
 from conftest import DESCRIPTOR_PATH, register_greet
 
 from invariant import Server
@@ -16,6 +17,14 @@ def _mcp_request(msg_id, method, params=None):
     if params is not None:
         msg["params"] = params
     return json.dumps(msg)
+
+
+def _initialize_params(protocol_version: str = "2025-11-25") -> dict:
+    return {
+        "protocolVersion": protocol_version,
+        "capabilities": {},
+        "clientInfo": {"name": "invariant-test", "version": "1.0"},
+    }
 
 
 def _run_mcp_session(messages: list[str]) -> list[dict]:
@@ -92,10 +101,33 @@ def test_mcp_initialize():
     assert responses[0]["result"]["serverInfo"]["name"] == "invariant-protocol"
 
 
+def test_mcp_initialize_validates_params_and_negotiates_version():
+    invalid_params = [
+        None,
+        {},
+        {"protocolVersion": 1, "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
+        {"protocolVersion": "2025-11-25", "capabilities": [], "clientInfo": {"name": "test", "version": "1"}},
+        {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": []},
+        {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": 1, "version": "1"}},
+        {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": 1}},
+    ]
+    responses = _run_mcp_session(
+        [
+            *[_mcp_request(index + 10, "initialize", params) for index, params in enumerate(invalid_params)],
+            _mcp_request(20, "initialize", _initialize_params("2099-01-01")),
+        ]
+    )
+    assert len(responses) == len(invalid_params) + 1
+    for index, response in enumerate(responses[:-1]):
+        assert response["id"] == index + 10
+        assert response["error"]["code"] == -32602
+    assert responses[-1]["result"]["protocolVersion"] == "2025-11-25"
+
+
 def test_mcp_tools_list():
     responses = _run_mcp_session(
         [
-            _mcp_request(0, "initialize", {}),
+            _mcp_request(0, "initialize", _initialize_params()),
             _mcp_request(1, "tools/list", {}),
         ]
     )
@@ -113,7 +145,7 @@ def test_mcp_tools_list():
 def test_mcp_tool_call():
     responses = _run_mcp_session(
         [
-            _mcp_request(0, "initialize", {}),
+            _mcp_request(0, "initialize", _initialize_params()),
             _mcp_request(
                 1,
                 "tools/call",
@@ -133,7 +165,7 @@ def test_mcp_tool_call():
 def test_mcp_tool_call_rejects_unknown_field():
     responses = _run_mcp_session(
         [
-            _mcp_request(0, "initialize", {}),
+            _mcp_request(0, "initialize", _initialize_params()),
             _mcp_request(
                 1,
                 "tools/call",
@@ -154,7 +186,7 @@ def test_mcp_tool_call_rejects_unknown_field():
 def test_mcp_tool_call_with_enum_and_tags():
     responses = _run_mcp_session(
         [
-            _mcp_request(0, "initialize", {}),
+            _mcp_request(0, "initialize", _initialize_params()),
             _mcp_request(
                 1,
                 "tools/call",
@@ -174,7 +206,7 @@ def test_mcp_tool_call_with_enum_and_tags():
 def test_mcp_tool_call_greet_group():
     responses = _run_mcp_session(
         [
-            _mcp_request(0, "initialize", {}),
+            _mcp_request(0, "initialize", _initialize_params()),
             _mcp_request(
                 1,
                 "tools/call",
@@ -198,7 +230,7 @@ def test_mcp_tool_call_greet_group():
 def test_mcp_tool_call_unknown():
     responses = _run_mcp_session(
         [
-            _mcp_request(0, "initialize", {}),
+            _mcp_request(0, "initialize", _initialize_params()),
             _mcp_request(
                 1,
                 "tools/call",
@@ -215,7 +247,7 @@ def test_mcp_tool_call_unknown():
 def test_mcp_ping():
     responses = _run_mcp_session(
         [
-            _mcp_request(0, "initialize", {}),
+            _mcp_request(0, "initialize", _initialize_params()),
             _mcp_request(1, "ping", {}),
         ]
     )
@@ -225,12 +257,126 @@ def test_mcp_ping():
 def test_mcp_unknown_method():
     responses = _run_mcp_session(
         [
-            _mcp_request(0, "initialize", {}),
+            _mcp_request(0, "initialize", _initialize_params()),
             _mcp_request(1, "unknown/method", {}),
         ]
     )
     assert "error" in responses[1]
     assert responses[1]["error"]["code"] == -32601
+
+
+def test_mcp_stdio_rejects_invalid_request_shapes_and_continues():
+    invalid_messages = [
+        "[]",
+        json.dumps({"jsonrpc": "1.0", "id": 1, "method": "ping"}),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": 7}),
+        json.dumps({"jsonrpc": "2.0", "id": None, "method": "ping"}),
+        json.dumps({"jsonrpc": "2.0", "id": True, "method": "ping"}),
+        json.dumps({"jsonrpc": "2.0", "id": 1.0, "method": "ping"}),
+        json.dumps({"jsonrpc": "2.0", "id": 9007199254740992, "method": "ping"}),
+        json.dumps({"jsonrpc": "2.0", "id": -9007199254740992, "method": "ping"}),
+    ]
+    notification = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    client_response = json.dumps({"jsonrpc": "2.0", "id": 7, "result": {}})
+    responses = _run_mcp_session(
+        [
+            *invalid_messages,
+            notification,
+            client_response,
+            _mcp_request(3, "ping", {}),
+        ]
+    )
+
+    assert responses[:-1] == [
+        {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32600, "message": "Invalid Request"},
+        }
+    ] * len(invalid_messages)
+    assert responses[-1]["result"] == {}
+
+
+def test_mcp_stdio_uses_strict_json_and_exact_client_response_shapes():
+    valid_client_responses = [
+        json.dumps({"jsonrpc": "2.0", "id": 7, "result": {}}),
+        json.dumps({"jsonrpc": "2.0", "error": {"code": -32000, "message": "ignored"}}),
+        json.dumps({"jsonrpc": "2.0", "id": "call-8", "error": {"code": -32001, "message": "ignored"}}),
+    ]
+    invalid_client_responses = [
+        json.dumps({"jsonrpc": "2.0", "id": None, "result": {}}),
+        json.dumps({"jsonrpc": "2.0", "id": 9, "result": []}),
+        json.dumps({"jsonrpc": "2.0", "id": 9007199254740992, "result": {}}),
+        json.dumps({"jsonrpc": "2.0", "error": {"code": True, "message": "invalid"}}),
+    ]
+    responses = _run_mcp_session(
+        [
+            '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"value":NaN}}',
+            '{"jsonrpc":"2.0","id":2,"method":"ping","params":{"value":Infinity}}',
+            *valid_client_responses,
+            *invalid_client_responses,
+            _mcp_request(10, "ping", {}),
+        ]
+    )
+
+    assert [response["error"]["code"] for response in responses[:-1]] == [
+        -32700,
+        -32700,
+        -32600,
+        -32600,
+        -32600,
+        -32600,
+    ]
+    assert responses[-1] == {"jsonrpc": "2.0", "id": 10, "result": {}}
+
+
+def test_mcp_numeric_ids_use_the_portable_safe_integer_range():
+    from invariant.projections.mcp import _id_key, _valid_jsonrpc_id
+
+    assert _valid_jsonrpc_id(9007199254740991)
+    assert _valid_jsonrpc_id(-9007199254740991)
+    assert not _valid_jsonrpc_id(9007199254740992)
+    assert not _valid_jsonrpc_id(-9007199254740992)
+    assert not _valid_jsonrpc_id(1.0)
+    assert _id_key(-0) == _id_key(0) == "int:0"
+
+    responses = _run_mcp_session(
+        [
+            '{"jsonrpc":"2.0","id":9007199254740991,"method":"ping"}',
+            '{"jsonrpc":"2.0","id":-9007199254740991,"method":"ping"}',
+            '{"jsonrpc":"2.0","id":-0,"method":"ping"}',
+        ]
+    )
+    assert [response["id"] for response in responses] == [9007199254740991, -9007199254740991, 0]
+
+
+def test_mcp_stdio_rejects_invalid_method_params_and_ignores_malformed_cancellation():
+    malformed_cancellation = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": [],
+        }
+    )
+    responses = _run_mcp_session(
+        [
+            _mcp_request(1, "tools/call", []),
+            _mcp_request(2, "tools/call", {"name": [], "arguments": {}}),
+            _mcp_request(3, "tools/call", {"name": "GreetService.Greet", "arguments": []}),
+            malformed_cancellation,
+            _mcp_request(4, "ping", []),
+            _mcp_request(5, "ping", {}),
+        ]
+    )
+
+    responses_by_id = {response["id"]: response for response in responses}
+    assert [responses_by_id[msg_id]["error"]["code"] for msg_id in (1, 2, 3, 4)] == [
+        -32602,
+        -32602,
+        -32602,
+        -32602,
+    ]
+    assert responses_by_id[5]["result"] == {}
 
 
 async def test_mcp_stdio_cancel_notification_cancels_inflight_tool(monkeypatch):
@@ -262,6 +408,93 @@ async def test_mcp_stdio_cancel_notification_cancels_inflight_tool(monkeypatch):
 
     runner = asyncio.create_task(mcp.serve_mcp(server))
     try:
+        reader.feed_data(
+            b'{"jsonrpc":"2.0","id":-0,"method":"tools/call",'
+            b'"params":{"name":"GreetService.Greet","arguments":{"name":"blocked"}}}\n'
+        )
+        await asyncio.wait_for(started.wait(), timeout=2)
+
+        cancellation = {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": 0, "reason": "client no longer needs it"},
+        }
+        reader.feed_data((json.dumps(cancellation) + "\n").encode())
+        reader.feed_eof()
+
+        await asyncio.wait_for(runner, timeout=2)
+        await asyncio.wait_for(cancelled.wait(), timeout=2)
+        assert context_was_cancelled == [True]
+        assert responses == []
+    finally:
+        if not runner.done():
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+        await server.stop(grace=0)
+
+
+async def test_mcp_cancellation_rejects_out_of_range_numeric_request_id():
+    from invariant.projections import mcp
+
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    session = mcp._StdioMCP(server)
+    task = asyncio.create_task(asyncio.Event().wait())
+    session._inflight[mcp._id_key(9007199254740991)] = task
+    try:
+        session._handle_notification(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": 9007199254740992},
+            }
+        )
+        await asyncio.sleep(0)
+        assert not task.cancelling()
+
+        session._handle_notification(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": 9007199254740991},
+            }
+        )
+        await asyncio.sleep(0)
+        assert task.cancelling()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await server.stop(grace=0)
+
+
+async def test_mcp_stdio_cancel_suppresses_response_when_handler_swallows_cancellation(monkeypatch):
+    from invariant.projections import mcp
+
+    started = asyncio.Event()
+    swallowed = asyncio.Event()
+
+    class CancellationSwallowingServicer:
+        async def Greet(self, request, context):
+            del request, context
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                swallowed.set()
+                return greet_pb2.GreetResponse(message="too late")
+
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    register_greet(server, CancellationSwallowingServicer())
+    reader = asyncio.StreamReader()
+    responses: list[dict] = []
+
+    async def stdin_reader():
+        return reader
+
+    monkeypatch.setattr(mcp, "_stdin_reader", stdin_reader)
+    monkeypatch.setattr(mcp, "_write_response", responses.append)
+
+    runner = asyncio.create_task(mcp.serve_mcp(server))
+    try:
         call = {
             "jsonrpc": "2.0",
             "id": "call-1",
@@ -270,18 +503,16 @@ async def test_mcp_stdio_cancel_notification_cancels_inflight_tool(monkeypatch):
         }
         reader.feed_data((json.dumps(call) + "\n").encode())
         await asyncio.wait_for(started.wait(), timeout=2)
-
         cancellation = {
             "jsonrpc": "2.0",
             "method": "notifications/cancelled",
-            "params": {"requestId": "call-1", "reason": "client no longer needs it"},
+            "params": {"requestId": "call-1"},
         }
         reader.feed_data((json.dumps(cancellation) + "\n").encode())
         reader.feed_eof()
 
         await asyncio.wait_for(runner, timeout=2)
-        await asyncio.wait_for(cancelled.wait(), timeout=2)
-        assert context_was_cancelled == [True]
+        await asyncio.wait_for(swallowed.wait(), timeout=2)
         assert responses == []
     finally:
         if not runner.done():

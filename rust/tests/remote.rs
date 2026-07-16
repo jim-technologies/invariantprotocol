@@ -3,8 +3,8 @@
 mod common;
 
 use common::{
-    DESCRIPTOR_PATH, TestGreetService, generated_client, greet, reflected_service_names,
-    reflection_has_file_for_symbol, serve_native,
+    DESCRIPTOR_PATH, TestGreetService, generated_client, greet, reflected_method_names,
+    reflected_service_names, serve_native,
 };
 use invariant::{Code, ProjectionContext, Response, Server, Status};
 use std::sync::Arc;
@@ -41,7 +41,7 @@ fn remote_http_registration_accepts_https_with_rustls_enabled() {
 }
 
 #[tokio::test]
-async fn remote_unary_proxy_is_not_reflected_as_a_complete_service() {
+async fn remote_unary_proxy_reflects_exactly_the_served_methods() {
     let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
     let proxy = Arc::new(Server::from_descriptor(DESCRIPTOR_PATH).unwrap());
     proxy.connect_grpc(channel, |client| client).unwrap();
@@ -49,11 +49,19 @@ async fn remote_unary_proxy_is_not_reflected_as_a_complete_service() {
 
     assert_eq!(
         reflected_service_names(address).await,
-        ["grpc.reflection.v1.ServerReflection".to_string()]
+        [
+            "grpc.reflection.v1.ServerReflection".to_string(),
+            "greet.v1.GreetService".to_string(),
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(
+        reflected_method_names(address, "greet.v1.GreetService").await,
+        ["Greet".to_string(), "GreetGroup".to_string()]
             .into_iter()
             .collect()
     );
-    assert!(!reflection_has_file_for_symbol(address, "greet.v1.GreetService").await);
     task.abort();
 }
 

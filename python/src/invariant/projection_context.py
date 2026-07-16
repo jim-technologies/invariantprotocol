@@ -158,6 +158,9 @@ class ProjectionContext(grpc.aio.ServicerContext[Any, Any]):
     def mark_initial_sent(self) -> None:
         self._initial_sent = True
 
+    def mark_cancelled(self) -> None:
+        self._cancelled = True
+
     def raise_for_status(self) -> None:
         if self._code not in (None, grpc.StatusCode.OK):
             raise self.status_error()

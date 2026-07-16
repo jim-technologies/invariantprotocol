@@ -67,6 +67,17 @@ func TestSchemaFieldIDsAndEmptyFileRoundTrip(t *testing.T) {
 
 	attributesNode := mapped.Root().Field(mapped.Root().FieldIndexByName("attributes")).(*parquetschema.PrimitiveNode)
 	require.Equal(t, "JSON", attributesNode.LogicalType().String())
+	for _, test := range []struct {
+		name       string
+		limitation string
+	}{
+		{name: "attributes", limitation: "numbers to be finite"},
+		{name: "opaque", limitation: "type URL to resolve"},
+	} {
+		jsonDiagnostic := diagnostic(t, diagnostics, test.name)
+		require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED, jsonDiagnostic.GetCompatibility())
+		require.Contains(t, jsonDiagnostic.GetMessage(), test.limitation)
+	}
 
 	arrowSchema, _, err := invariantarrow.Schema(dataset)
 	require.NoError(t, err)

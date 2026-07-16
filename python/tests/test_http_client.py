@@ -9,6 +9,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import greet_pb2
+import greet_pb2_grpc
 import grpc
 import pytest
 from conftest import DESCRIPTOR_PATH
@@ -113,6 +114,44 @@ async def test_shared_standard_interceptor_wraps_connect_http_projection():
         result = await server._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
         assert result["message"] == "Hello, World"
         assert seen == [("greet.v1.GreetRequest", "/greet.v1.GreetService/Greet")]
+    finally:
+        await server.stop()
+        backend.shutdown()
+
+
+async def test_connect_http_filters_only_optional_catalog_not_native_grpc_or_reflection():
+    from google.protobuf import descriptor_pb2
+    from grpc_reflection.v1alpha import reflection_pb2, reflection_pb2_grpc
+
+    backend, port = _start_annotated_http_backend()
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    server.exclude("*.Greet")
+    try:
+        server.connect_http(f"http://localhost:{port}")
+        assert "GreetService.Greet" not in server.tools
+        assert "GreetService.GreetGroup" in server.tools
+
+        native = server.grpc_server()
+        native_port = native.add_insecure_port("127.0.0.1:0")
+        await native.start()
+        async with grpc.aio.insecure_channel(f"127.0.0.1:{native_port}") as channel:
+            response = await greet_pb2_grpc.GreetServiceStub(channel).Greet(greet_pb2.GreetRequest(name="World"))
+            assert response.message == "Hello, World"
+
+            reflection_stub = reflection_pb2_grpc.ServerReflectionStub(channel)
+
+            async def requests():
+                yield reflection_pb2.ServerReflectionRequest(file_containing_symbol="greet.v1.GreetService")
+
+            reflection_responses = [response async for response in reflection_stub.ServerReflectionInfo(requests())]
+
+        reflected_files = [
+            descriptor_pb2.FileDescriptorProto.FromString(raw)
+            for raw in reflection_responses[0].file_descriptor_response.file_descriptor_proto
+        ]
+        greet_file = next(file for file in reflected_files if file.name == "greet.proto")
+        service = next(service for service in greet_file.service if service.name == "GreetService")
+        assert [method.name for method in service.method] == ["Greet", "GreetGroup"]
     finally:
         await server.stop()
         backend.shutdown()
@@ -1823,7 +1862,7 @@ async def test_connect_http_channel_options_read_timeout():
         try:
             with pytest.raises(InvariantError) as exc:
                 await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
-            assert exc.value.code == grpc.StatusCode.UNAVAILABLE
+            assert exc.value.code == grpc.StatusCode.DEADLINE_EXCEEDED
         finally:
             await srv.stop()
     finally:

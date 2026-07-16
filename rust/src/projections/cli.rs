@@ -21,6 +21,9 @@ where
         out.write_all(help.as_bytes())
             .await
             .map_err(|error| Status::internal(format!("write output: {error}")))?;
+        out.flush()
+            .await
+            .map_err(|error| Status::internal(format!("flush output: {error}")))?;
         return Ok(());
     }
 
@@ -61,6 +64,9 @@ where
     out.write_all(text.as_bytes())
         .await
         .map_err(|error| Status::internal(format!("write output: {error}")))?;
+    out.flush()
+        .await
+        .map_err(|error| Status::internal(format!("flush output: {error}")))?;
     Ok(())
 }
 
@@ -77,23 +83,63 @@ fn split_args(args: &[String]) -> Result<(String, String, Option<String>), Statu
         ));
     }
     let method = args[1].clone();
-    let mut request_value = None;
-    let mut i = 2;
-    while i < args.len() {
-        match args[i].as_str() {
-            "-r" => {
-                if i + 1 >= args.len() {
-                    return Err(Status::invalid_argument("missing value after -r"));
-                }
-                request_value = Some(args[i + 1].clone());
-                i += 2;
-            }
-            other => {
-                return Err(Status::invalid_argument(format!("unexpected arg: {other}")));
-            }
-        }
+    if args.len() == 2 {
+        return Ok((service, method, None));
     }
-    Ok((service, method, request_value))
+    if args[2] != "-r" {
+        return Err(Status::invalid_argument(format!(
+            "unexpected argument: {}",
+            args[2]
+        )));
+    }
+    let request_value = args
+        .get(3)
+        .ok_or_else(|| Status::invalid_argument("missing value after -r"))?
+        .clone();
+    if let Some(other) = args.get(4) {
+        return Err(Status::invalid_argument(format!(
+            "unexpected argument: {other}"
+        )));
+    }
+    Ok((service, method, Some(request_value)))
+}
+
+fn build_request(
+    tool: &Arc<crate::server::Tool>,
+    value: Option<&str>,
+) -> Result<DynamicMessage, Status> {
+    let Some(value) = value else {
+        return Ok(DynamicMessage::new(tool.input_desc.clone()));
+    };
+    let bytes: Vec<u8> = if std::path::Path::new(value).is_file() {
+        let path = std::path::Path::new(value);
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        if !matches!(extension.as_str(), "json" | "binpb" | "pb") {
+            return Err(Status::invalid_argument(format!(
+                "unsupported request file extension {extension:?} (use .json, .binpb, or .pb)"
+            )));
+        }
+        let data = std::fs::read(value)
+            .map_err(|e| Status::invalid_argument(format!("read {value}: {e}")))?;
+        match extension.as_str() {
+            "binpb" | "pb" => {
+                return DynamicMessage::decode(tool.input_desc.clone(), &data[..])
+                    .map_err(|e| Status::invalid_argument(format!("decode binary proto: {e}")));
+            }
+            "json" => data,
+            _ => unreachable!("validated request file extension"),
+        }
+    } else {
+        value.as_bytes().to_vec()
+    };
+    let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
+    let opts = prost_reflect::DeserializeOptions::new();
+    DynamicMessage::deserialize_with_options(tool.input_desc.clone(), &mut deserializer, &opts)
+        .map_err(|e| Status::invalid_argument(format!("proto: {e}")))
 }
 
 fn resolve_tool(server: &Server, service: &str, method: &str) -> Result<String, Status> {
@@ -110,41 +156,6 @@ fn resolve_tool(server: &Server, service: &str, method: &str) -> Result<String, 
     Err(Status::not_found(format!(
         "unknown service/method: {service} {method}"
     )))
-}
-
-fn build_request(
-    tool: &Arc<crate::server::Tool>,
-    value: Option<&str>,
-) -> Result<DynamicMessage, Status> {
-    let Some(value) = value else {
-        return Ok(DynamicMessage::new(tool.input_desc.clone()));
-    };
-    let bytes: Vec<u8> = if std::path::Path::new(value).is_file() {
-        let ext = std::path::Path::new(value)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|s| s.to_lowercase());
-        let data = std::fs::read(value)
-            .map_err(|e| Status::invalid_argument(format!("read {value}: {e}")))?;
-        match ext.as_deref() {
-            Some("binpb") | Some("pb") => {
-                return DynamicMessage::decode(tool.input_desc.clone(), &data[..])
-                    .map_err(|e| Status::invalid_argument(format!("decode binary proto: {e}")));
-            }
-            Some("json") | None => data,
-            Some(ext) => {
-                return Err(Status::invalid_argument(format!(
-                    "unsupported request file extension {ext:?} (use .json, .binpb, or .pb)"
-                )));
-            }
-        }
-    } else {
-        value.as_bytes().to_vec()
-    };
-    let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
-    let opts = prost_reflect::DeserializeOptions::new();
-    DynamicMessage::deserialize_with_options(tool.input_desc.clone(), &mut deserializer, &opts)
-        .map_err(|e| Status::invalid_argument(format!("proto: {e}")))
 }
 
 fn serialize_pretty(msg: &DynamicMessage) -> String {
@@ -165,7 +176,9 @@ fn serialize_compact(msg: &DynamicMessage) -> String {
 
 fn cli_help(server: &Server) -> String {
     let mut out = String::new();
-    out.push_str("Usage: <binary> <ServiceName> <Method> [-r request.json|'{json}']\n\n");
+    out.push_str(
+        "Usage: <binary> <ServiceName> <Method> [-r request.json|request.binpb|'{json}']\n\n",
+    );
     let tools = server.tools_snapshot();
     if tools.is_empty() {
         out.push_str("No tools registered.\n");

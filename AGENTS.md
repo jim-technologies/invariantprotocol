@@ -221,6 +221,11 @@ MCP uses JSON-RPC 2.0 and the stable `2025-11-25` protocol version. Key rules:
 - Requests without `id` are notifications — no response
 - Parse errors return a response with `null` id and error code `-32700`
 - Method not found returns error code `-32601`
+- Initialize requests require string `protocolVersion`, object `capabilities`,
+  and `clientInfo` with string `name` and `version`; unsupported requested
+  versions negotiate to the sole supported `2025-11-25` version.
+- Portable numeric request IDs are integers in the JavaScript-safe range
+  `-(2^53-1)` through `2^53-1`; use strings for larger identifiers.
 - Stdio sessions track in-flight calls for `notifications/cancelled`.
 - `POST /mcp` is stateless: cancellation and deadlines are scoped to that
   request, and a separate cancellation POST cannot target an earlier POST.
@@ -308,10 +313,11 @@ gRPC frame parser or a port-owning native projection.
 - Native receive/send limits remain ordinary grpc-go, grpcio, Tonic, or
   grpc-js controls. They do not govern standalone HTTP JSON bytes.
 - `Connect-Timeout-Ms` is honored on every HTTP path: unary, streaming, and
-  the `/mcp` JSON-RPC transport. On streaming, the deadline-exceeded error
-  is delivered in the end-stream envelope rather than HTTP status — that's
-  the Connect-correct shape (the response has already been started by the
-  time the deadline fires).
+  the `/mcp` JSON-RPC transport. The header is a positive integer of at most
+  ten ASCII digits; malformed values return `invalid_argument`. The one
+  absolute deadline covers body reading, decoding, and application work. On
+  streaming, a deadline that expires after the response starts is delivered in
+  the end-stream envelope rather than changing the HTTP status.
 
 ### gRPC reflection
 Go, Python, and TypeScript register reflection on their one native server.
@@ -369,7 +375,8 @@ all four language packages in CI.
 Dependency roots and lockfiles:
 
 - **`.flox/env/manifest.toml`** — language toolchains and CLI tools (`python3`,
-  `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`). Flox
+  `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`,
+  `protoc-gen-go-grpc`). Flox
   may provide a bootstrap Go command while `GOTOOLCHAIN` selects the exact
   checksum-verified patch release required by `go.mod` when the Flox catalog
   lags a security release.

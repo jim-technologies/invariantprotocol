@@ -198,6 +198,13 @@ func TestStreamingMCPSurfacesMidStreamError(t *testing.T) {
 
 func TestStreamingCLIWritesNDJSON(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
+	var interceptorCalls atomic.Int32
+	srv.UseStream(func(service any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		interceptorCalls.Add(1)
+		assert.Equal(t, "/greet.v1.GreetService/StreamGreet", info.FullMethod)
+		return handler(service, stream)
+	})
+
 	out, err := srv.cli(t.Context(), []string{"GreetService", "StreamGreet", "-r", `{"name":"Z","count":2}`})
 	require.NoError(t, err)
 
@@ -208,6 +215,7 @@ func TestStreamingCLIWritesNDJSON(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(line), &parsed), "line %d not JSON: %q", i, line)
 		assert.Equal(t, fmt.Sprintf("Hi Z #%d", i), parsed["message"])
 	}
+	assert.Equal(t, int32(1), interceptorCalls.Load())
 }
 
 // TestStreamingCLIFlushesPerChunk verifies that cliWrite emits each chunk to

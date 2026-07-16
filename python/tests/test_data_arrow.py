@@ -90,7 +90,10 @@ def test_maps_shared_bundle_to_arrow_with_stable_metadata() -> None:
     assert "mutual exclusivity" in by_path["choice_count"].message
     assert by_path["created_at"].compatibility == schema_pb2.MAPPING_COMPATIBILITY_RANGE_REDUCED
     assert by_path["elapsed"].compatibility == schema_pb2.MAPPING_COMPATIBILITY_RANGE_REDUCED
-    assert by_path["attributes"].compatibility == schema_pb2.MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED
+    assert by_path["attributes"].compatibility == schema_pb2.MAPPING_COMPATIBILITY_RANGE_REDUCED
+    assert "numbers to be finite" in by_path["attributes"].message
+    assert by_path["opaque"].compatibility == schema_pb2.MAPPING_COMPATIBILITY_RANGE_REDUCED
+    assert "type URL to resolve" in by_path["opaque"].message
     assert {"nested.id", "labels[]", "counters.key", "counters.value"} <= by_path.keys()
 
     closed = schema_pb2.DatasetSchema()
@@ -284,6 +287,29 @@ def test_arrow_table_rejects_invalid_protobuf_temporal_values(
 
     with pytest.raises(ValueError, match=message):
         arrow_table(dataset, [record])
+
+
+def test_arrow_table_reports_protojson_range_failures_with_source_context() -> None:
+    bundle = parse_schema_bundle(GOLDEN_BUNDLE.read_bytes())
+    dataset = find_dataset(bundle, "data.v1.CanonicalRecord")
+    assert dataset is not None
+
+    non_finite = data_pb2.CanonicalRecord()
+    non_finite.attributes.fields["bad"].number_value = float("inf")
+    with pytest.raises(
+        ValueError,
+        match=r"protobuf JSON field 'attributes'.*data\.v1\.CanonicalRecord\.attributes.*numbers to be finite",
+    ):
+        arrow_table(dataset, [non_finite])
+
+    unresolved = data_pb2.CanonicalRecord()
+    unresolved.opaque.type_url = "type.googleapis.com/example.v1.Missing"
+    unresolved.opaque.value = b"\x08\x01"
+    with pytest.raises(
+        ValueError,
+        match=r"protobuf JSON field 'opaque'.*data\.v1\.CanonicalRecord\.opaque.*type URL to resolve",
+    ):
+        arrow_table(dataset, [unresolved])
 
 
 def _metadata(owner: pa.Schema | pa.Field, key: str) -> str:

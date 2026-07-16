@@ -290,11 +290,25 @@ def _map_type(pa: Any, data_type: DataType, path: str) -> tuple[Any, list[Mappin
         return (
             pa.json_(pa.string()),
             [],
-            schema_pb2.MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+            schema_pb2.MAPPING_COMPATIBILITY_RANGE_REDUCED,
             f"protobuf {schema_pb2.JsonKind.Name(data_type.json.kind)} is encoded as RFC 8259 text in Arrow's "
-            "canonical JSON extension type",
+            f"canonical JSON extension type; {_json_range_reduction(data_type.json.kind)}",
         )
     raise ValueError(f"arrow: field {path!r} has an unspecified logical type")
+
+
+def _json_range_reduction(kind: int) -> str:
+    if kind == schema_pb2.JSON_KIND_ANY:
+        return (
+            "standard protobuf JSON requires each populated Any type URL to resolve to a known message descriptor; "
+            "embedded Struct, Value, and ListValue numbers must also be finite"
+        )
+    if kind in {schema_pb2.JSON_KIND_STRUCT, schema_pb2.JSON_KIND_VALUE, schema_pb2.JSON_KIND_LIST_VALUE}:
+        return (
+            "standard protobuf JSON requires Struct, Value, and ListValue numbers to be finite; "
+            "NaN and infinities are not representable"
+        )
+    return "standard protobuf JSON requires an explicitly supported dynamic JSON kind"
 
 
 def _map_primitive(pa: Any, kind: int) -> Any:
@@ -673,10 +687,10 @@ def _field_value(message: Message, field: Field, path: str) -> Any:
     elif field.presence == schema_pb2.PRESENCE_EXPLICIT and not message.HasField(descriptor.name):
         return None
 
-    return _convert_value(getattr(message, descriptor.name), field.type, path)
+    return _convert_value(getattr(message, descriptor.name), field.type, path, field.proto_full_name)
 
 
-def _convert_value(value: Any, data_type: DataType, path: str) -> Any:
+def _convert_value(value: Any, data_type: DataType, path: str, source: str) -> Any:
     kind = data_type.WhichOneof("kind")
     if kind == "primitive":
         if data_type.protobuf_type in _WRAPPER_TYPES:
@@ -692,16 +706,16 @@ def _convert_value(value: Any, data_type: DataType, path: str) -> Any:
         }
     if kind == "list":
         element = data_type.list.element
-        return [_convert_value(item, element.type, f"{path}[]") for item in value]
+        return [_convert_value(item, element.type, f"{path}[]", element.proto_full_name) for item in value]
     if kind == "map":
-        key_type = data_type.map.key.type
-        value_type = data_type.map.value.type
+        key = data_type.map.key
+        item = data_type.map.value
         return [
             (
-                _convert_value(key, key_type, f"{path}.key"),
-                _convert_value(item, value_type, f"{path}.value"),
+                _convert_value(entry_key, key.type, f"{path}.key", key.proto_full_name),
+                _convert_value(entry_value, item.type, f"{path}.value", item.proto_full_name),
             )
-            for key, item in sorted(value.items(), key=lambda entry: entry[0])
+            for entry_key, entry_value in sorted(value.items(), key=lambda entry: entry[0])
         ]
     if kind == "timestamp":
         return _timestamp_nanoseconds(value.seconds, value.nanos, path)
@@ -710,13 +724,19 @@ def _convert_value(value: Any, data_type: DataType, path: str) -> Any:
     if kind == "json":
         if not isinstance(value, Message):
             raise TypeError(f"arrow: JSON field {path!r} is not a protobuf message")
-        return json_format.MessageToJson(
-            value,
-            preserving_proto_field_name=False,
-            indent=None,
-            sort_keys=True,
-            ensure_ascii=False,
-        )
+        try:
+            return json_format.MessageToJson(
+                value,
+                preserving_proto_field_name=False,
+                indent=None,
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"arrow: protobuf JSON field {path!r} from {source!r} ({data_type.protobuf_type}) "
+                f"is outside the canonical ProtoJSON domain: {_json_range_reduction(data_type.json.kind)}: {error}"
+            ) from error
     raise ValueError(f"arrow: field {path!r} has an unspecified logical type")
 
 

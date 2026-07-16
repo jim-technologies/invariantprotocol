@@ -18,6 +18,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from google.protobuf import json_format
+from google.protobuf.message import DecodeError
 
 from invariant.errors import invalid_argument, invalid_argument_from_json_error
 from invariant.projection_context import ProjectionContext
@@ -62,7 +63,8 @@ async def stream_cli(server: Server, args: list[str], write) -> None:
 
       - once for help text
       - once for a unary response (pretty-printed JSON)
-      - once per chunk for server-streaming (compact JSON, newline-terminated)
+      - once per chunk for server-streaming (compact JSON; terminal writers add
+        the line ending)
 
     ``write`` should be a sync callable like ``print``; we do not await it.
     """
@@ -131,15 +133,27 @@ def _load_file_into_proto(msg: Any, path: str) -> None:
     ext = os.path.splitext(path)[1].lower()
 
     if ext in (".binpb", ".pb"):
-        with open(path, "rb") as f:
-            msg.ParseFromString(f.read())
+        try:
+            with open(path, "rb") as f:
+                encoded = f.read()
+        except OSError as error:
+            raise invalid_argument(f"read request file: {error}") from None
+        try:
+            msg.ParseFromString(encoded)
+        except DecodeError as error:
+            raise invalid_argument(f"decode binary proto: {error}") from None
         return
 
     if ext != ".json":
         raise invalid_argument(f"unsupported request file extension: {ext} (use .json, .binpb, or .pb)")
 
-    with open(path) as f:
-        d = json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except OSError as error:
+        raise invalid_argument(f"read request file: {error}") from None
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise invalid_argument(f"Cannot parse request file as JSON: {error}") from None
 
     try:
         json_format.ParseDict(d, msg)
@@ -176,6 +190,8 @@ def _split_args(
             raise ValueError("Missing value after -r.")
         request_value = args[i]
         i += 1
+    if i < len(args):
+        raise ValueError(f"Unexpected argument: {args[i]}")
 
     return service_name, method_name, request_value
 

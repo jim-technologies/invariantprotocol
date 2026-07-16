@@ -320,6 +320,16 @@ class HTTPDynamicHandler:
 
             try:
                 response, read_result, duration_ms = await self._send_once(target, body_bytes, headers)
+            except httpx.TimeoutException as e:
+                if self._should_retry(attempt, grpc.StatusCode.DEADLINE_EXCEEDED):
+                    retry_delay = _retry_delay_seconds(self._retry_policy, retry_backoff, None)
+                    if retry_delay is None:
+                        raise _request_timeout_error(self._method_path, target, e) from None
+                    delay, retry_backoff = retry_delay
+                    attempt += 1
+                    await _retry_sleep(delay)
+                    continue
+                raise _request_timeout_error(self._method_path, target, e) from None
             except httpx.RequestError as e:
                 if self._should_retry(attempt, grpc.StatusCode.UNAVAILABLE):
                     retry_delay = _retry_delay_seconds(self._retry_policy, retry_backoff, None)
@@ -970,6 +980,14 @@ def _request_error(method_path: str, url: str, err: httpx.RequestError) -> Invar
         grpc.StatusCode.UNAVAILABLE,
         f"HTTP request failed: {err}",
         [_error_info("HTTP_REQUEST_FAILED", method_path=method_path, url=url, metadata={"exception": str(err)})],
+    )
+
+
+def _request_timeout_error(method_path: str, url: str, err: httpx.TimeoutException) -> InvariantError:
+    return InvariantError(
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+        f"HTTP request deadline exceeded: {err}",
+        [_error_info("HTTP_REQUEST_TIMEOUT", method_path=method_path, url=url, metadata={"exception": str(err)})],
     )
 
 

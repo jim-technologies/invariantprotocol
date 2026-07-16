@@ -420,7 +420,7 @@ struct Registry {
     phase: Phase,
     tools: BTreeMap<String, Arc<Tool>>,
     services: BTreeSet<String>,
-    reflected_services: BTreeSet<String>,
+    reflected_methods: BTreeMap<String, BTreeSet<String>>,
     native_routes: Routes,
     shared_unary_middleware: Vec<SharedUnaryMiddleware>,
     shared_stream_middleware: Vec<SharedStreamMiddleware>,
@@ -464,7 +464,7 @@ impl Server {
                     phase: Phase::Configuring,
                     tools: BTreeMap::new(),
                     services: BTreeSet::new(),
-                    reflected_services: BTreeSet::new(),
+                    reflected_methods: BTreeMap::new(),
                     native_routes: Routes::default(),
                     shared_unary_middleware: Vec::new(),
                     shared_stream_middleware: Vec::new(),
@@ -595,6 +595,7 @@ impl Server {
             });
         }
 
+        let reflected_methods = service.methods.keys().cloned().collect();
         let mut registry = self.inner.registry.write();
         ensure_configuring(&registry, "service registration")?;
         if registry.services.contains(S::NAME) {
@@ -615,7 +616,9 @@ impl Server {
         }
         registry.native_routes = native.add_to_routes(std::mem::take(&mut registry.native_routes));
         registry.services.insert(S::NAME.to_string());
-        registry.reflected_services.insert(S::NAME.to_string());
+        registry
+            .reflected_methods
+            .insert(S::NAME.to_string(), reflected_methods);
         for tool in tools {
             if should_project(&registry, &tool.service_full_name, &tool.method_name) {
                 registry.tools.insert(tool.name.clone(), Arc::new(tool));
@@ -858,7 +861,12 @@ impl Server {
 
         let mut router = std::mem::take(&mut registry.native_routes).into_axum_router();
         for registration in registrations {
-            for tool in registration.tools {
+            let RemoteServiceRegistration {
+                service_name,
+                tools,
+            } = registration;
+            let reflected_methods = tools.iter().map(|tool| tool.method_name.clone()).collect();
+            for tool in tools {
                 let full_method = format!("/{}/{}", tool.service_full_name, tool.method_name);
                 let handler = tool.unary.clone().expect("remote unary handler");
                 let input = tool.input_desc.clone();
@@ -877,7 +885,10 @@ impl Server {
                     registry.tools.insert(tool.name.clone(), Arc::new(tool));
                 }
             }
-            registry.services.insert(registration.service_name);
+            registry
+                .reflected_methods
+                .insert(service_name.clone(), reflected_methods);
+            registry.services.insert(service_name);
         }
         registry.native_routes = Routes::from(router);
         Ok(())
@@ -1063,8 +1074,8 @@ impl Server {
         &self.inner.parsed
     }
 
-    pub(crate) fn reflected_service_names(&self) -> BTreeSet<String> {
-        self.inner.registry.read().reflected_services.clone()
+    pub(crate) fn reflected_service_methods(&self) -> BTreeMap<String, BTreeSet<String>> {
+        self.inner.registry.read().reflected_methods.clone()
     }
 
     pub fn tool_catalog(&self) -> Vec<Value> {
@@ -1115,7 +1126,9 @@ impl Server {
         let handler = tool.stream.clone().ok_or_else(|| {
             Status::failed_precondition(format!("tool {tool_name:?} is unary — use invoke"))
         })?;
-        handler(request).await
+        let full_method = format!("/{}/{}", tool.service_full_name, tool.method_name);
+        let response = handler(request).await?;
+        Ok(response.map(|stream| recover_response_stream(stream, full_method)))
     }
 
     #[doc(hidden)]
@@ -1135,19 +1148,23 @@ impl Server {
     }
 
     #[doc(hidden)]
-    pub async fn invoke_typed_stream<Req, Resp, F, Fut>(
+    pub async fn invoke_typed_stream<Req, Item, F, Fut>(
         &self,
         request: Request<Req>,
         info: ServerCallInfo,
         terminal: F,
-    ) -> Result<Response<Resp>, Status>
+    ) -> Result<Response<BoxResponseStream<Item>>, Status>
     where
         Req: Send + 'static,
-        Resp: Send + 'static,
+        Item: Send + 'static,
         F: Fn(Request<Req>) -> Fut + Clone + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<Response<Resp>, Status>> + Send + 'static,
+        Fut: std::future::Future<Output = Result<Response<BoxResponseStream<Item>>, Status>>
+            + Send
+            + 'static,
     {
-        self.run_typed(request, info, terminal, true).await
+        let full_method = info.full_method.clone();
+        let response = self.run_typed(request, info, terminal, true).await?;
+        Ok(response.map(|stream| recover_response_stream(stream, full_method)))
     }
 
     #[doc(hidden)]
@@ -1329,6 +1346,7 @@ fn filter_incoming_metadata(mapped: MetadataMap) -> MetadataMap {
 
 pub(crate) fn reserved_incoming_metadata(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
+    let logical_key = key.strip_suffix("-bin").unwrap_or(&key);
     if [
         "grpc-",
         "connect-",
@@ -1350,12 +1368,12 @@ pub(crate) fn reserved_incoming_metadata(key: &str) -> bool {
         "identity-",
     ]
     .iter()
-    .any(|prefix| key.starts_with(prefix))
+    .any(|prefix| logical_key.starts_with(prefix))
     {
         return true;
     }
     matches!(
-        key.as_str(),
+        logical_key,
         "authorization"
             | "proxy-authorization"
             | "cookie"
@@ -1390,4 +1408,28 @@ fn panic_message(panic: &Box<dyn Any + Send>) -> String {
         return message.clone();
     }
     "<non-string panic>".to_string()
+}
+
+fn recover_response_stream<T>(
+    mut stream: BoxResponseStream<T>,
+    full_method: String,
+) -> BoxResponseStream<T>
+where
+    T: Send + 'static,
+{
+    Box::pin(async_stream::stream! {
+        loop {
+            match AssertUnwindSafe(stream.next()).catch_unwind().await {
+                Ok(Some(item)) => yield item,
+                Ok(None) => break,
+                Err(panic) => {
+                    yield Err(Status::internal(format!(
+                        "panic in {full_method}: {}",
+                        panic_message(&panic)
+                    )));
+                    break;
+                }
+            }
+        }
+    })
 }

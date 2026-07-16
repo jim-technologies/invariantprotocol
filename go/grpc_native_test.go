@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,8 +25,13 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	grpctestpb "google.golang.org/grpc/interop/grpc_testing"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 var _ grpc.ServiceRegistrar = (*Server)(nil)
@@ -142,6 +148,191 @@ func TestNativeGeneratedRegistrationAndClients(t *testing.T) {
 		messages = append(messages, message.GetMessage())
 	}
 	assert.Equal(t, []string{"Hello, stream #0", "Hello, stream #1", "Hello, stream #2"}, messages)
+}
+
+type nativeAllCardinalityService struct {
+	grpctestpb.UnimplementedTestServiceServer
+}
+
+func (*nativeAllCardinalityService) EmptyCall(context.Context, *grpctestpb.Empty) (*grpctestpb.Empty, error) {
+	return &grpctestpb.Empty{}, nil
+}
+
+func (*nativeAllCardinalityService) StreamingOutputCall(
+	req *grpctestpb.StreamingOutputCallRequest,
+	stream grpc.ServerStreamingServer[grpctestpb.StreamingOutputCallResponse],
+) error {
+	return stream.Send(&grpctestpb.StreamingOutputCallResponse{Payload: req.GetPayload()})
+}
+
+func (*nativeAllCardinalityService) StreamingInputCall(
+	stream grpc.ClientStreamingServer[grpctestpb.StreamingInputCallRequest, grpctestpb.StreamingInputCallResponse],
+) error {
+	var size int32
+	for {
+		req, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return stream.SendAndClose(&grpctestpb.StreamingInputCallResponse{AggregatedPayloadSize: size})
+		}
+		if err != nil {
+			return err
+		}
+		size += int32(len(req.GetPayload().GetBody()))
+	}
+}
+
+func (*nativeAllCardinalityService) FullDuplexCall(
+	stream grpc.BidiStreamingServer[grpctestpb.StreamingOutputCallRequest, grpctestpb.StreamingOutputCallResponse],
+) error {
+	for {
+		req, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := stream.Send(&grpctestpb.StreamingOutputCallResponse{Payload: req.GetPayload()}); err != nil {
+			return err
+		}
+	}
+}
+
+type nativeCardinalityObservingStream struct {
+	grpc.ServerStream
+	fullMethod string
+	received   *atomic.Int32
+}
+
+func (s *nativeCardinalityObservingStream) RecvMsg(message any) error {
+	switch s.fullMethod {
+	case grpctestpb.TestService_StreamingOutputCall_FullMethodName,
+		grpctestpb.TestService_FullDuplexCall_FullMethodName:
+		if _, ok := message.(*grpctestpb.StreamingOutputCallRequest); !ok {
+			return status.Errorf(codes.Internal, "%s received %T", s.fullMethod, message)
+		}
+	case grpctestpb.TestService_StreamingInputCall_FullMethodName:
+		if _, ok := message.(*grpctestpb.StreamingInputCallRequest); !ok {
+			return status.Errorf(codes.Internal, "%s received %T", s.fullMethod, message)
+		}
+	}
+	err := s.ServerStream.RecvMsg(message)
+	if err == nil {
+		s.received.Add(1)
+	}
+	return err
+}
+
+func TestNativeGeneratedServiceSupportsAllCardinalities(t *testing.T) {
+	descriptorBytes, err := proto.Marshal(descriptorSetForFile(grpctestpb.File_grpc_testing_test_proto))
+	require.NoError(t, err)
+
+	var nativeCalls, sharedCalls atomic.Int32
+	var nativeReceived, sharedReceived atomic.Int32
+	var methodsMu sync.Mutex
+	var nativeMethods, sharedMethods []string
+	server, err := ServerFromBytes(descriptorBytes, grpc.ChainStreamInterceptor(
+		func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+			nativeCalls.Add(1)
+			methodsMu.Lock()
+			nativeMethods = append(nativeMethods, info.FullMethod)
+			methodsMu.Unlock()
+			return handler(srv, &nativeCardinalityObservingStream{
+				ServerStream: stream, fullMethod: info.FullMethod, received: &nativeReceived,
+			})
+		},
+	))
+	require.NoError(t, err)
+	server.UseStream(func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		sharedCalls.Add(1)
+		methodsMu.Lock()
+		sharedMethods = append(sharedMethods, info.FullMethod)
+		methodsMu.Unlock()
+		return handler(srv, &nativeCardinalityObservingStream{
+			ServerStream: stream, fullMethod: info.FullMethod, received: &sharedReceived,
+		})
+	})
+	grpctestpb.RegisterTestServiceServer(server, &nativeAllCardinalityService{})
+
+	client := grpctestpb.NewTestServiceClient(nativeTestStartConnection(t, server))
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	_, err = client.EmptyCall(ctx, &grpctestpb.Empty{})
+	require.NoError(t, err)
+
+	output, err := client.StreamingOutputCall(ctx, &grpctestpb.StreamingOutputCallRequest{
+		Payload: &grpctestpb.Payload{Body: []byte("server-stream")},
+	})
+	require.NoError(t, err)
+	outputMessage, err := output.Recv()
+	require.NoError(t, err)
+	assert.Equal(t, []byte("server-stream"), outputMessage.GetPayload().GetBody())
+	_, err = output.Recv()
+	require.ErrorIs(t, err, io.EOF)
+
+	input, err := client.StreamingInputCall(ctx)
+	require.NoError(t, err)
+	require.NoError(t, input.Send(&grpctestpb.StreamingInputCallRequest{
+		Payload: &grpctestpb.Payload{Body: []byte("a")},
+	}))
+	require.NoError(t, input.Send(&grpctestpb.StreamingInputCallRequest{
+		Payload: &grpctestpb.Payload{Body: []byte("bc")},
+	}))
+	inputResponse, err := input.CloseAndRecv()
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), inputResponse.GetAggregatedPayloadSize())
+
+	duplex, err := client.FullDuplexCall(ctx)
+	require.NoError(t, err)
+	for _, body := range [][]byte{[]byte("first"), []byte("second")} {
+		require.NoError(t, duplex.Send(&grpctestpb.StreamingOutputCallRequest{
+			Payload: &grpctestpb.Payload{Body: body},
+		}))
+		response, err := duplex.Recv()
+		require.NoError(t, err)
+		assert.Equal(t, body, response.GetPayload().GetBody())
+	}
+	require.NoError(t, duplex.CloseSend())
+	_, err = duplex.Recv()
+	require.ErrorIs(t, err, io.EOF)
+
+	wantMethods := []string{
+		grpctestpb.TestService_StreamingOutputCall_FullMethodName,
+		grpctestpb.TestService_StreamingInputCall_FullMethodName,
+		grpctestpb.TestService_FullDuplexCall_FullMethodName,
+	}
+	assert.ElementsMatch(t, wantMethods, nativeMethods)
+	assert.ElementsMatch(t, wantMethods, sharedMethods)
+	assert.Equal(t, int32(3), nativeCalls.Load())
+	assert.Equal(t, int32(3), sharedCalls.Load())
+	assert.Equal(t, int32(5), nativeReceived.Load())
+	assert.Equal(t, int32(5), sharedReceived.Load())
+	assert.Contains(t, server.Tools(), "TestService.StreamingOutputCall")
+	assert.NotContains(t, server.Tools(), "TestService.StreamingInputCall")
+	assert.NotContains(t, server.Tools(), "TestService.FullDuplexCall")
+}
+
+func descriptorSetForFile(root protoreflect.FileDescriptor) *descriptorpb.FileDescriptorSet {
+	seen := make(map[string]struct{})
+	files := make([]*descriptorpb.FileDescriptorProto, 0)
+	var add func(protoreflect.FileDescriptor)
+	add = func(file protoreflect.FileDescriptor) {
+		if file == nil {
+			return
+		}
+		if _, ok := seen[file.Path()]; ok {
+			return
+		}
+		seen[file.Path()] = struct{}{}
+		imports := file.Imports()
+		for i := range imports.Len() {
+			add(imports.Get(i).FileDescriptor)
+		}
+		files = append(files, protodesc.ToFileDescriptorProto(file))
+	}
+	add(root)
+	return &descriptorpb.FileDescriptorSet{File: files}
 }
 
 func TestNativeFiltersOnlyOptionalProjections(t *testing.T) {

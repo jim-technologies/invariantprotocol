@@ -54,6 +54,10 @@ CONNECT_CONTROL_MAX = 1024 * 1024
 SequenceHeader = tuple[tuple[bytes, bytes], ...]
 
 
+class _HTTPDisconnectedError(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class _HTTPRoute:
     tool: Any
@@ -116,6 +120,9 @@ def build_asgi_app(server: Server):
             await _serve_mcp_http(send, receive, server, headers, scope)
             return
         if path == "/mcp":
+            if "origin" in headers:
+                await _send_status(send, 403)
+                return
             # The optional SSE receive stream is intentionally not offered.
             await _send_status(send, 405)
             return
@@ -138,14 +145,17 @@ def build_asgi_app(server: Server):
 
         projection_context: ProjectionContext | None = None
         try:
+            timeout, deadline = _http_deadline(headers)
             content_type = headers.get("content-type", "")
             json_request = _match_content_type(content_type, "application/json")
             proto_request = _is_proto(content_type)
             if not json_request and not proto_request:
-                raise InvariantError(
-                    grpc.StatusCode.INVALID_ARGUMENT,
+                await _send_unsupported_media_type(
+                    send,
                     "unary tools require Content-Type: application/json or application/proto",
+                    max_bytes=route.max_unary_response,
                 )
+                return
             content_encoding = headers.get("content-encoding", "").strip().lower()
             if content_encoding not in ("", "identity"):
                 raise InvariantError(
@@ -153,35 +163,31 @@ def build_asgi_app(server: Server):
                     f"Content-Encoding {content_encoding!r} is not supported",
                 )
 
-            body_bytes = await _read_body(receive, max_bytes=route.max_unary_request)
-            request = tool.new_request()
+            projection_context = _http_projection_context(server, scope, headers, deadline)
 
-            if proto_request:
-                try:
-                    request.ParseFromString(body_bytes)
-                except Exception as e:
-                    raise invalid_argument_from_json_error(e) from None
-            else:
-                if body_bytes.strip():
+            async def invoke():
+                body_bytes = await _read_body(receive, max_bytes=route.max_unary_request)
+                request = tool.new_request()
+
+                if proto_request:
+                    try:
+                        request.ParseFromString(body_bytes)
+                    except Exception as e:
+                        raise invalid_argument_from_json_error(e) from None
+                elif body_bytes.strip():
                     try:
                         json_format.Parse(body_bytes, request)
                     except Exception as e:
                         raise invalid_argument_from_json_error(e) from None
 
-            timeout = _connect_timeout_seconds(headers)
-            projection_context = _http_projection_context(server, scope, headers, timeout)
-            if timeout is not None:
-                try:
-                    async with asyncio.timeout(timeout):
-                        response = await server._invoke(tool, request, projection_context)
-                except TimeoutError as e:
-                    projection_context.finish(cancelled=True)
-                    raise InvariantError(
-                        grpc.StatusCode.DEADLINE_EXCEEDED,
-                        f"deadline exceeded after {timeout * 1000:.0f}ms",
-                    ) from e
-            else:
-                response = await server._invoke(tool, request, projection_context)
+                _raise_if_deadline_expired(projection_context, timeout)
+                return await _run_until_disconnect(
+                    server._invoke(tool, request, projection_context),
+                    receive,
+                    projection_context,
+                )
+
+            response = await _run_with_deadline(invoke(), projection_context, timeout)
 
             if _is_proto(headers.get("accept", "")):
                 payload = response.SerializeToString() if response is not None else b""
@@ -205,6 +211,8 @@ def build_asgi_app(server: Server):
                 extra_headers=_context_response_headers(projection_context),
                 max_bytes=route.max_unary_response,
             )
+        except _HTTPDisconnectedError:
+            return
         except Exception as e:
             await _send_error(
                 send,
@@ -222,7 +230,13 @@ def build_asgi_app(server: Server):
 def _headers_dict(raw_headers: list) -> dict[str, str]:
     out: dict[str, str] = {}
     for k, v in raw_headers:
-        out[k.decode().lower()] = v.decode()
+        try:
+            key = k.decode("ascii").lower()
+        except UnicodeDecodeError:
+            continue
+        if not key or any(not (character.isalnum() or character in "!#$%&'*+-.^_`|~") for character in key):
+            continue
+        out[key] = v.decode("latin-1")
     return out
 
 
@@ -280,7 +294,7 @@ def _reserved_inbound_metadata(key: str) -> bool:
         )
     ):
         return True
-    return key in {
+    reserved = {
         "authorization",
         "proxy-authorization",
         "cookie",
@@ -305,18 +319,18 @@ def _reserved_inbound_metadata(key: str) -> bool:
         "content-type",
         "trailer",
     }
+    return key in reserved or (key.endswith("-bin") and key[:-4] in reserved)
 
 
 def _http_projection_context(
     server: Server,
     scope: dict[str, Any],
     headers: dict[str, str],
-    timeout: float | None,
+    deadline: float | None,
 ) -> ProjectionContext:
     metadata = _inbound_http_metadata(server, headers)
     client = scope.get("client")
     peer = f"invariant:http:{client[0]}:{client[1]}" if client else "invariant:http"
-    deadline = time.monotonic() + timeout if timeout is not None else None
     return ProjectionContext(peer=peer, invocation_metadata=metadata, deadline=deadline)
 
 
@@ -403,17 +417,77 @@ def _is_proto(value: str) -> bool:
 
 
 def _connect_timeout_seconds(headers: dict[str, str]) -> float | None:
-    """Parse the Connect-Timeout-Ms header. Returns None if missing or invalid."""
-    raw = headers.get("connect-timeout-ms")
-    if not raw:
+    """Parse Connect-Timeout-Ms according to the Connect wire grammar."""
+    if "connect-timeout-ms" not in headers:
         return None
-    try:
-        ms = int(raw)
-    except ValueError:
-        return None
+    raw = headers["connect-timeout-ms"]
+    if len(raw) == 0 or len(raw) > 10 or any(character < "0" or character > "9" for character in raw):
+        raise InvariantError(
+            grpc.StatusCode.INVALID_ARGUMENT,
+            "Connect-Timeout-Ms must be a positive integer of at most 10 ASCII digits",
+        )
+    ms = int(raw)
     if ms <= 0:
-        return None
+        raise InvariantError(
+            grpc.StatusCode.INVALID_ARGUMENT,
+            "Connect-Timeout-Ms must be a positive integer of at most 10 ASCII digits",
+        )
     return ms / 1000.0
+
+
+def _http_deadline(headers: dict[str, str]) -> tuple[float | None, float | None]:
+    timeout = _connect_timeout_seconds(headers)
+    deadline = time.monotonic() + timeout if timeout is not None else None
+    return timeout, deadline
+
+
+def _deadline_error(timeout: float) -> InvariantError:
+    return InvariantError(
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+        f"deadline exceeded after {timeout * 1000:.0f}ms",
+    )
+
+
+def _raise_if_deadline_expired(context: ProjectionContext, timeout: float | None) -> None:
+    if timeout is None:
+        return
+    remaining = context.time_remaining()
+    if remaining is not None and remaining <= 0:
+        context.mark_cancelled()
+        raise _deadline_error(timeout)
+
+
+async def _run_with_deadline(awaitable, context: ProjectionContext, timeout: float | None):
+    """Run one HTTP operation against the absolute deadline in its context."""
+    if timeout is None:
+        try:
+            return await awaitable
+        except asyncio.CancelledError:
+            context.mark_cancelled()
+            raise
+
+    work = asyncio.create_task(awaitable)
+    remaining = context.time_remaining()
+    timer = asyncio.create_task(asyncio.sleep(max(0.0, remaining or 0.0)))
+    try:
+        done, _ = await asyncio.wait((work, timer), return_when=asyncio.FIRST_COMPLETED)
+        remaining = context.time_remaining()
+        if timer in done or remaining is None or remaining <= 0:
+            context.mark_cancelled()
+            if not work.done():
+                work.cancel()
+            await asyncio.gather(work, return_exceptions=True)
+            raise _deadline_error(timeout)
+        return await work
+    except asyncio.CancelledError:
+        context.mark_cancelled()
+        work.cancel()
+        raise
+    finally:
+        timer.cancel()
+        if not work.done():
+            work.cancel()
+        await asyncio.gather(work, timer, return_exceptions=True)
 
 
 async def _read_body(receive, max_bytes: int = HTTP_MAX_UNARY_REQUEST) -> bytes:
@@ -428,7 +502,7 @@ async def _read_body(receive, max_bytes: int = HTTP_MAX_UNARY_REQUEST) -> bytes:
     while more_body:
         msg = await receive()
         if msg["type"] == "http.disconnect":
-            break
+            raise _HTTPDisconnectedError
         chunk = msg.get("body", b"")
         total += len(chunk)
         if total > max_bytes:
@@ -534,6 +608,24 @@ async def _send_error(
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(data)).encode()),
                 *extra_headers,
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": data})
+
+
+async def _send_unsupported_media_type(send, message: str, *, max_bytes: int) -> None:
+    err = InvariantError(grpc.StatusCode.INVALID_ARGUMENT, message)
+    data = json.dumps(err.to_connect_payload()).encode()
+    if max_bytes > 0 and len(data) > max_bytes:
+        data = b""
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 415,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(data)).encode()),
             ],
         }
     )
@@ -661,43 +753,25 @@ async def _serve_stream(
     ct = headers.get("content-type", "")
     binary = _is_connect_stream_proto(ct)
     if not binary and not _is_connect_stream_json(ct):
-        await _send_error(
+        await _send_unsupported_media_type(
             send,
-            InvariantError(
-                grpc.StatusCode.INVALID_ARGUMENT,
-                f"streaming tools require Content-Type: {CONNECT_STREAM_JSON} or {CONNECT_STREAM_PROTO}",
-            ),
+            f"streaming tools require Content-Type: {CONNECT_STREAM_JSON} or {CONNECT_STREAM_PROTO}",
+            max_bytes=CONNECT_CONTROL_MAX,
         )
         return
 
-    try:
-        body = await _read_body(receive, max_bytes=route.max_stream_request + 5)
-    except InvariantError as e:
-        await _send_connect_stream_error(send, CONNECT_STREAM_PROTO if binary else CONNECT_STREAM_JSON, e)
-        return
-
-    request = tool.new_request()
-    try:
-        _, payload = _unpack_envelope(body, max_size=route.max_stream_request)
-        if binary:
-            if payload:
-                request.ParseFromString(payload)
-        elif payload.strip():
-            json_format.Parse(payload, request)
-    except InvariantError as e:
-        await _send_connect_stream_error(send, CONNECT_STREAM_PROTO if binary else CONNECT_STREAM_JSON, e)
-        return
-    except Exception as e:
-        await _send_connect_stream_error(
-            send,
-            CONNECT_STREAM_PROTO if binary else CONNECT_STREAM_JSON,
-            invalid_argument_from_json_error(e),
-        )
-        return
-
-    timeout = _connect_timeout_seconds(headers)
-    context = _http_projection_context(server, scope, headers, timeout)
     resp_ct = CONNECT_STREAM_PROTO if binary else CONNECT_STREAM_JSON
+    try:
+        timeout, deadline = _http_deadline(headers)
+    except Exception as error:
+        await _send_error(send, error, max_bytes=CONNECT_CONTROL_MAX)
+        return
+    try:
+        context = _http_projection_context(server, scope, headers, deadline)
+    except Exception as error:
+        await _send_connect_stream_error(send, resp_ct, error)
+        return
+
     started = False
 
     async def start_response() -> None:
@@ -718,13 +792,28 @@ async def _serve_stream(
         )
 
     context.set_initial_sender(start_response)
-    timed_out = False
     try:
         stream_error: InvariantError | None = None
         try:
-            if timeout is not None:
-                async with asyncio.timeout(timeout):
-                    await _drain_stream(
+
+            async def execute():
+                body = await _read_body(receive, max_bytes=route.max_stream_request + 5)
+                request = tool.new_request()
+                try:
+                    _, payload = _unpack_envelope(body, max_size=route.max_stream_request)
+                    if binary:
+                        if payload:
+                            request.ParseFromString(payload)
+                    elif payload.strip():
+                        json_format.Parse(payload, request)
+                except InvariantError:
+                    raise
+                except Exception as error:
+                    raise invalid_argument_from_json_error(error) from None
+
+                _raise_if_deadline_expired(context, timeout)
+                await _run_until_disconnect(
+                    _drain_stream(
                         server,
                         tool,
                         request,
@@ -733,29 +822,17 @@ async def _serve_stream(
                         context,
                         start_response,
                         route.max_stream_response,
-                    )
-            else:
-                await _drain_stream(
-                    server,
-                    tool,
-                    request,
-                    binary,
-                    send,
+                        timeout,
+                    ),
+                    receive,
                     context,
-                    start_response,
-                    route.max_stream_response,
                 )
-        except TimeoutError as error:
-            if timeout is None:
-                stream_error = as_invariant_error(error)
-            else:
-                timed_out = True
-                stream_error = InvariantError(
-                    grpc.StatusCode.DEADLINE_EXCEEDED,
-                    f"deadline exceeded after {timeout * 1000:.0f}ms",
-                )
-        except Exception as e:
-            stream_error = as_invariant_error(e)
+
+            await _run_with_deadline(execute(), context, timeout)
+        except _HTTPDisconnectedError:
+            return
+        except Exception as error:
+            stream_error = as_invariant_error(error)
 
         await start_response()
         end: dict[str, Any] = {}
@@ -772,7 +849,7 @@ async def _serve_stream(
             }
         )
     finally:
-        context.finish(cancelled=timed_out or context.cancelled())
+        context.finish(cancelled=context.cancelled())
 
 
 async def _drain_stream(
@@ -784,9 +861,11 @@ async def _drain_stream(
     context: ProjectionContext,
     start_response,
     max_response_bytes: int,
+    timeout: float | None,
 ) -> None:
     """Iterate the stream handler and pack each message into an envelope."""
     async for msg in server._invoke_stream(tool, request, context):
+        _raise_if_deadline_expired(context, timeout)
         if binary:
             payload = msg.SerializeToString()
         else:
@@ -820,7 +899,13 @@ async def _serve_mcp_http(
     responses get a 202 with an empty body.
     """
     # Local import avoids a module-load cycle with the shared dispatcher.
-    from invariant.projections.mcp import _PROTOCOL_VERSION, mcp_dispatch
+    from invariant.projections.mcp import (
+        _PROTOCOL_VERSION,
+        _invalid_request_response,
+        _is_client_response,
+        _parse_json,
+        mcp_dispatch,
+    )
 
     if "origin" in headers:
         await _send_status(send, 403)
@@ -828,105 +913,88 @@ async def _serve_mcp_http(
     if not _accepts_mcp_response_types(headers.get("accept", "")):
         await _send_status(send, 406)
         return
+    if not _match_content_type(headers.get("content-type", ""), "application/json"):
+        await _send_status(send, 415)
+        return
 
+    context: ProjectionContext | None = None
     try:
-        body = await _read_body(receive, max_bytes=server._http_max_unary_request)
-    except InvariantError as e:
-        await _send_error(send, e, max_bytes=server._http_max_unary_response)
-        return
+        timeout, deadline = _http_deadline(headers)
+        context = _http_projection_context(server, scope, headers, deadline)
 
-    try:
-        msg = json.loads(body)
-    except json.JSONDecodeError as e:
-        try:
-            await _send_json(
-                send,
-                200,
-                {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"Parse error: {e}"}},
-                max_bytes=server._http_max_unary_response,
+        async def execute():
+            body = await _read_body(receive, max_bytes=server._http_max_unary_request)
+            _raise_if_deadline_expired(context, timeout)
+            try:
+                msg = _parse_json(body)
+            except ValueError as error:
+                return (
+                    "json",
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": f"Parse error: {error}"},
+                    },
+                )
+
+            if invalid := _invalid_request_response(msg):
+                return "json", invalid
+            if not isinstance(msg, dict):
+                return "status", 202
+
+            protocol_version = headers.get("mcp-protocol-version", "")
+            method = msg.get("method")
+            if (method == "initialize" and protocol_version not in ("", _PROTOCOL_VERSION)) or (
+                method != "initialize" and protocol_version != _PROTOCOL_VERSION
+            ):
+                return "status", 400
+
+            if _is_client_response(msg) or "id" not in msg:
+                return "status", 202
+
+            _raise_if_deadline_expired(context, timeout)
+            response = await _run_until_disconnect(
+                mcp_dispatch(server, msg, context=context),
+                receive,
+                context,
             )
-        except InvariantError as limit_error:
-            await _send_error(send, limit_error, max_bytes=server._http_max_unary_response)
-        return
+            return "response", response
 
-    if not isinstance(msg, dict):
-        try:
-            await _send_json(
-                send,
-                200,
-                {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}},
-                max_bytes=server._http_max_unary_response,
-            )
-        except InvariantError as limit_error:
-            await _send_error(send, limit_error, max_bytes=server._http_max_unary_response)
+        outcome, value = await _run_with_deadline(execute(), context, timeout)
+    except _HTTPDisconnectedError:
         return
-
-    protocol_version = headers.get("mcp-protocol-version", "")
-    method = msg.get("method")
-    if (method == "initialize" and protocol_version not in ("", _PROTOCOL_VERSION)) or (
-        method != "initialize" and protocol_version != _PROTOCOL_VERSION
-    ):
-        await _send_status(send, 400)
-        return
-
-    if "method" not in msg and "id" in msg and ("result" in msg or "error" in msg):
-        await _send_status(send, 202)
-        return
-    if msg.get("id") is None:
-        await _send_status(send, 202)
-        return
-
-    timeout = _connect_timeout_seconds(headers)
-    context = _http_projection_context(server, scope, headers, timeout)
-    try:
-        if timeout is not None:
-            async with asyncio.timeout(timeout):
-                response = await mcp_dispatch(server, msg, context=context)
-        else:
-            response = await mcp_dispatch(server, msg, context=context)
-    except TimeoutError as error:
-        context.finish(cancelled=True)
-        if timeout is None:
-            err = as_invariant_error(error)
-        else:
-            err = InvariantError(
-                grpc.StatusCode.DEADLINE_EXCEEDED,
-                f"deadline exceeded after {timeout * 1000:.0f}ms",
-            )
+    except Exception as error:
         await _send_error(
             send,
-            err,
-            extra_headers=_context_response_headers(context),
-            max_bytes=server._http_max_unary_response,
-        )
-        return
-    except Exception as e:
-        await _send_error(
-            send,
-            e,
-            extra_headers=_context_response_headers(context),
+            error,
+            extra_headers=_context_response_headers(context) if context is not None else (),
             max_bytes=server._http_max_unary_response,
         )
         return
     finally:
-        context.finish(cancelled=context.cancelled())
+        if context is not None:
+            context.finish(cancelled=context.cancelled())
 
-    if response is None:
-        await _send_status(send, 202, extra_headers=_context_response_headers(context))
+    response_headers = _context_response_headers(context) if context is not None else ()
+    if outcome == "status":
+        await _send_status(send, value)
+        return
+    if outcome == "response" and value is None:
+        await _send_status(send, 202, extra_headers=response_headers)
         return
     try:
         await _send_json(
             send,
             200,
-            response,
-            extra_headers=_context_response_headers(context),
+            value,
+            extra_headers=response_headers if outcome == "response" else (),
             max_bytes=server._http_max_unary_response,
         )
     except InvariantError as error:
         await _send_error(
             send,
             error,
-            extra_headers=_context_response_headers(context),
+            extra_headers=response_headers,
             max_bytes=server._http_max_unary_response,
         )
 
@@ -949,3 +1017,33 @@ def _accepts_mcp_response_types(value: str) -> bool:
                 continue
         accepted.add(media_type)
     return {"application/json", "text/event-stream"}.issubset(accepted)
+
+
+async def _run_until_disconnect(awaitable, receive, context: ProjectionContext):
+    """Run application work while monitoring the ASGI connection lifecycle."""
+    work = asyncio.create_task(awaitable)
+    disconnect = asyncio.create_task(_wait_for_disconnect(receive))
+    try:
+        done, _ = await asyncio.wait((work, disconnect), return_when=asyncio.FIRST_COMPLETED)
+        if disconnect in done:
+            context.mark_cancelled()
+            work.cancel()
+            await asyncio.gather(work, return_exceptions=True)
+            raise _HTTPDisconnectedError
+        return await work
+    except asyncio.CancelledError:
+        context.mark_cancelled()
+        work.cancel()
+        raise
+    finally:
+        disconnect.cancel()
+        if not work.done():
+            work.cancel()
+        await asyncio.gather(work, disconnect, return_exceptions=True)
+
+
+async def _wait_for_disconnect(receive) -> None:
+    while True:
+        message = await receive()
+        if message["type"] == "http.disconnect":
+            return

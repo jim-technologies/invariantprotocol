@@ -23,6 +23,16 @@ from invariant import InvariantError, Server
 
 _MCP_ACCEPT = {"Accept": "application/json, text/event-stream"}
 _MCP_HEADERS = {**_MCP_ACCEPT, "MCP-Protocol-Version": "2025-11-25"}
+_MCP_INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {},
+        "clientInfo": {"name": "invariant-test", "version": "1.0"},
+    },
+}
 
 
 class StreamGreetServicer:
@@ -186,6 +196,27 @@ async def test_mcp_tools_call_stream_error_surfaces(stream_err_server):
 async def test_cli_streams_ndjson(stream_server):
     from invariant.projections.cli import run_cli
 
+    seen = []
+
+    class Trace(grpc.aio.ServerInterceptor):
+        async def intercept_service(self, continuation, handler_call_details):
+            handler = await continuation(handler_call_details)
+            assert handler is not None
+            terminal = handler.unary_stream
+            assert terminal is not None
+
+            async def wrapped(request, context):
+                seen.append((handler_call_details.method, type(request)))
+                async for message in terminal(request, context):
+                    yield message
+
+            return grpc.unary_stream_rpc_method_handler(
+                wrapped,
+                request_deserializer=handler.request_deserializer,
+                response_serializer=handler.response_serializer,
+            )
+
+    stream_server.use(Trace())
     out = await run_cli(stream_server, ["GreetService", "StreamGreet", "-r", '{"name":"Z","count":2}'])
     assert isinstance(out, str)
     lines = out.split("\n")
@@ -193,6 +224,7 @@ async def test_cli_streams_ndjson(stream_server):
     parsed = [json.loads(line) for line in lines]
     assert parsed[0]["message"] == "Hi Z #0"
     assert parsed[1]["message"] == "Hi Z #1"
+    assert seen == [("/greet.v1.GreetService/StreamGreet", greet_pb2.StreamGreetRequest)]
 
 
 async def test_stream_cli_flushes_per_chunk():
@@ -333,14 +365,22 @@ async def test_http_connect_stream_rejects_wrong_content_type(stream_server):
     port = await stream_server._start_http(port=0)
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
-            r = await client.post(
-                "/greet.v1.GreetService/StreamGreet",
-                json={"name": "K", "count": 1},
-            )
-        assert r.status_code == 400
-        body = r.json()
-        assert body["code"] == "invalid_argument"
-        assert "application/connect+json" in body["message"]
+            responses = [
+                await client.post(
+                    "/greet.v1.GreetService/StreamGreet",
+                    content=b'{"name":"K","count":1}',
+                ),
+                await client.post(
+                    "/greet.v1.GreetService/StreamGreet",
+                    content=b'{"name":"K","count":1}',
+                    headers={"Content-Type": "text/plain"},
+                ),
+            ]
+        for response in responses:
+            assert response.status_code == 415
+            assert response.headers["content-type"] == "application/json"
+            assert response.json()["code"] == "invalid_argument"
+            assert "application/connect+json" in response.json()["message"]
     finally:
         await stream_server._stop_http()
 
@@ -376,13 +416,24 @@ async def test_mcp_http_initialize(stream_server):
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
             r = await client.post(
                 "/mcp",
-                json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                json=_MCP_INITIALIZE,
+                headers=_MCP_ACCEPT,
+            )
+            negotiated = await client.post(
+                "/mcp",
+                json={
+                    **_MCP_INITIALIZE,
+                    "id": 2,
+                    "params": {**_MCP_INITIALIZE["params"], "protocolVersion": "2099-01-01"},
+                },
                 headers=_MCP_ACCEPT,
             )
         assert r.status_code == 200
         body = r.json()
         assert body["result"]["protocolVersion"] == "2025-11-25"
         assert body["result"]["serverInfo"]["name"] == "invariant-protocol"
+        assert negotiated.status_code == 200
+        assert negotiated.json()["result"]["protocolVersion"] == "2025-11-25"
     finally:
         await stream_server._stop_http()
 
@@ -460,10 +511,17 @@ async def test_mcp_http_notification_and_client_response_return_202(stream_serve
                 json={"jsonrpc": "2.0", "id": 7, "result": {}},
                 headers=_MCP_HEADERS,
             )
+            error_response = await client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "error": {"code": -32000, "message": "ignored"}},
+                headers=_MCP_HEADERS,
+            )
         assert r.status_code == 202
         assert r.content == b""
         assert client_response.status_code == 202
         assert client_response.content == b""
+        assert error_response.status_code == 202
+        assert error_response.content == b""
     finally:
         await stream_server._stop_http()
 
@@ -479,6 +537,82 @@ async def test_mcp_http_parse_error(stream_server):
             )
         body = r.json()
         assert body["error"]["code"] == -32700
+    finally:
+        await stream_server._stop_http()
+
+
+async def test_mcp_http_rejects_nonfinite_json_and_invalid_client_response(stream_server):
+    port = await stream_server._start_http(port=0)
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            nonfinite = await client.post(
+                "/mcp",
+                content='{"jsonrpc":"2.0","id":1,"method":"ping","params":{"value":NaN}}',
+                headers={**_MCP_HEADERS, "Content-Type": "application/json"},
+            )
+            invalid_utf8 = await client.post(
+                "/mcp",
+                content=b"\xff",
+                headers={**_MCP_HEADERS, "Content-Type": "application/json"},
+            )
+            invalid_response = await client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "id": None, "result": {}},
+                headers=_MCP_HEADERS,
+            )
+            boolean_error_code = await client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "error": {"code": True, "message": "invalid"}},
+                headers=_MCP_HEADERS,
+            )
+
+        assert nonfinite.status_code == 200
+        assert nonfinite.json()["error"]["code"] == -32700
+        assert invalid_utf8.status_code == 200
+        assert invalid_utf8.json()["error"]["code"] == -32700
+        assert invalid_response.status_code == 200
+        assert invalid_response.json()["error"]["code"] == -32600
+        assert boolean_error_code.status_code == 200
+        assert boolean_error_code.json()["error"]["code"] == -32600
+    finally:
+        await stream_server._stop_http()
+
+
+async def test_mcp_http_invalid_request_shape(stream_server):
+    port = await stream_server._start_http(port=0)
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            for request in (
+                {"jsonrpc": "1.0", "id": 1, "method": "ping"},
+                {"jsonrpc": "2.0", "id": 1.0, "method": "ping"},
+                {"jsonrpc": "2.0", "id": 9007199254740992, "method": "ping"},
+            ):
+                response = await client.post("/mcp", json=request, headers=_MCP_HEADERS)
+                assert response.status_code == 200
+                assert response.json() == {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32600, "message": "Invalid Request"},
+                }
+    finally:
+        await stream_server._stop_http()
+
+
+async def test_mcp_http_invalid_method_params(stream_server):
+    port = await stream_server._start_http(port=0)
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            response = await client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": []},
+                headers=_MCP_HEADERS,
+            )
+        assert response.status_code == 200
+        assert response.json() == {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "error": {"code": -32602, "message": "Invalid params"},
+        }
     finally:
         await stream_server._stop_http()
 
@@ -515,7 +649,7 @@ async def test_mcp_http_response_limit(stream_server):
 
 async def test_mcp_http_transport_headers_and_get(stream_server):
     port = await stream_server._start_http(port=0)
-    initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize"}
+    initialize = _MCP_INITIALIZE
     tools_list = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
@@ -529,6 +663,20 @@ async def test_mcp_http_transport_headers_and_get(stream_server):
                 headers={**_MCP_ACCEPT, "Origin": "https://example.test"},
             )
             assert origin.status_code == 403
+            for method in ("GET", "DELETE"):
+                hostile = await client.request(
+                    method,
+                    "/mcp",
+                    headers={"Origin": "https://example.test"},
+                )
+                assert hostile.status_code == 403
+
+            unsupported_content_type = await client.post(
+                "/mcp",
+                content=b"{}",
+                headers={**_MCP_HEADERS, "Content-Type": "text/plain"},
+            )
+            assert unsupported_content_type.status_code == 415
 
             for protocol_version in (None, "2099-01-01"):
                 headers = dict(_MCP_ACCEPT)

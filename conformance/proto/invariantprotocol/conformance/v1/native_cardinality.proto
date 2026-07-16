@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package invariantprotocol.conformance.v1;
+
+// Exercises every native gRPC method cardinality through generated bindings.
+service AllCardinalityService {
+  // Handles one request and returns one response.
+  rpc Unary(UnaryRequest) returns (UnaryResponse);
+  // Handles one request and returns a response stream.
+  rpc ServerStream(ServerStreamRequest) returns (stream ServerStreamResponse);
+  // Handles a request stream and returns one response.
+  rpc ClientStream(stream ClientStreamRequest) returns (ClientStreamResponse);
+  // Handles a request stream and returns a response stream.
+  rpc Bidi(stream BidiRequest) returns (stream BidiResponse);
+}
+
+// One unary request.
+message UnaryRequest {
+  // Value transformed by the test service.
+  string value = 1;
+}
+
+// One unary response.
+message UnaryResponse {
+  // Value returned by the test service.
+  string value = 1;
+}
+
+// One server-streaming request.
+message ServerStreamRequest {
+  // Value transformed by the test service.
+  string value = 1;
+}
+
+// One server-streaming response.
+message ServerStreamResponse {
+  // Value returned by the test service.
+  string value = 1;
+}
+
+// One client-streaming request.
+message ClientStreamRequest {
+  // Value transformed by the test service.
+  string value = 1;
+}
+
+// One client-streaming response.
+message ClientStreamResponse {
+  // Value returned by the test service.
+  string value = 1;
+}
+
+// One bidirectional-streaming request.
+message BidiRequest {
+  // Value transformed by the test service.
+  string value = 1;
+}
+
+// One bidirectional-streaming response.
+message BidiResponse {
+  // Value returned by the test service.
+  string value = 1;
+}

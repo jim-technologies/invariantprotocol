@@ -1,6 +1,7 @@
 import { fromJson, getOption, toJson, type DescField, type DescMessage, type JsonValue } from "@bufbuild/protobuf";
 import { ConnectError } from "@connectrpc/connect";
 
+import { monotonicDeadlineAfter, scheduleAbsoluteDeadline } from "./deadline.js";
 import { asInvariantError, codeFromHttpStatus, InvariantError, invalidArgument, type Code } from "./errors.js";
 import { type HandlerContext, type Server, type Tool, type UnaryHandler } from "./server.js";
 
@@ -524,9 +525,9 @@ function outboundRequestScope(
       ? configuredTimeoutMs
       : Math.min(configuredTimeoutMs, callerTimeoutMs),
   );
-  const timeout = setTimeout(() => {
+  const cleanupDeadline = scheduleAbsoluteDeadline(monotonicDeadlineAfter(timeoutMs), () => {
     controller.abort(new InvariantError("deadline_exceeded", `HTTP request exceeded ${timeoutMs}ms`));
-  }, timeoutMs);
+  });
   const cancel = () => controller.abort(contextAbortError(context));
   if (context.signal.aborted) {
     cancel();
@@ -536,7 +537,7 @@ function outboundRequestScope(
   return {
     signal: controller.signal,
     cleanup: () => {
-      clearTimeout(timeout);
+      cleanupDeadline();
       context.signal.removeEventListener("abort", cancel);
     },
   };

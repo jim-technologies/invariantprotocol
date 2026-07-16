@@ -5,6 +5,8 @@
 
 use futures::future::BoxFuture;
 use invariant::{BoxResponseStream, Server, Status};
+use prost::Message;
+use prost_types::FileDescriptorProto;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tonic::{Request, Response};
@@ -216,6 +218,43 @@ pub async fn reflection_has_file_for_symbol(address: std::net::SocketAddr, symbo
         .await,
         Ok(MessageResponse::FileDescriptorResponse(_))
     )
+}
+
+pub async fn reflected_method_names(
+    address: std::net::SocketAddr,
+    service_name: &str,
+) -> BTreeSet<String> {
+    use tonic_reflection::pb::v1::server_reflection_request::MessageRequest;
+    use tonic_reflection::pb::v1::server_reflection_response::MessageResponse;
+
+    let response = reflection_response(
+        address,
+        MessageRequest::FileContainingSymbol(service_name.to_string()),
+    )
+    .await
+    .expect("reflection file for service");
+    let MessageResponse::FileDescriptorResponse(response) = response else {
+        panic!("expected reflection file response");
+    };
+    for bytes in response.file_descriptor_proto {
+        let file = FileDescriptorProto::decode(bytes.as_slice()).expect("decode reflected file");
+        let package = file.package.as_deref().unwrap_or_default();
+        for service in file.service {
+            let full_name = if package.is_empty() {
+                service.name().to_string()
+            } else {
+                format!("{package}.{}", service.name())
+            };
+            if full_name == service_name {
+                return service
+                    .method
+                    .into_iter()
+                    .map(|method| method.name().to_string())
+                    .collect();
+            }
+        }
+    }
+    panic!("reflected descriptor omitted service {service_name}");
 }
 
 async fn reflection_response(

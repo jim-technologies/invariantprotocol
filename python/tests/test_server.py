@@ -346,16 +346,50 @@ def test_remote_registration_uses_descriptor_without_generated_imports():
 import asyncio
 import sys
 import grpc
+from google.protobuf import descriptor_pb2
 from invariant import Server
 
 assert "greet_pb2" not in sys.modules
 
 async def main():
-    server = Server.from_descriptor({DESCRIPTOR_PATH!r})
+    descriptor = descriptor_pb2.FileDescriptorSet.FromString(
+        open({DESCRIPTOR_PATH!r}, "rb").read()
+    )
+    greet_file = next(file for file in descriptor.file if file.name == "greet.proto")
+    hidden = greet_file.service.add(name="HiddenService")
+    hidden.method.add(
+        name="Hidden",
+        input_type=".greet.v1.GreetRequest",
+        output_type=".greet.v1.GreetResponse",
+    )
+    server = Server.from_bytes(descriptor.SerializeToString())
     channel = grpc.aio.insecure_channel("localhost:1")
-    server.connect_grpc(channel)
+    server.connect_grpc(channel, "greet.v1.GreetService")
     request = server.tools["GreetService.Greet"].new_request()
     assert request.DESCRIPTOR.full_name == "greet.v1.GreetRequest"
+    native = server.grpc_server()
+    port = native.add_insecure_port("127.0.0.1:0")
+    await native.start()
+    from grpc_reflection.v1alpha import reflection_pb2, reflection_pb2_grpc
+    async with grpc.aio.insecure_channel(f"127.0.0.1:{{port}}") as reflection_channel:
+        stub = reflection_pb2_grpc.ServerReflectionStub(reflection_channel)
+        async def requests():
+            yield reflection_pb2.ServerReflectionRequest(
+                file_containing_symbol="greet.v1.GreetService"
+            )
+            yield reflection_pb2.ServerReflectionRequest(
+                file_containing_symbol="grpc.reflection.v1alpha.ServerReflection"
+            )
+            yield reflection_pb2.ServerReflectionRequest(
+                file_containing_symbol="greet.v1.HiddenService"
+            )
+            yield reflection_pb2.ServerReflectionRequest(
+                file_containing_symbol="greet.v1.GreetService.StreamGreet"
+            )
+        responses = [response async for response in stub.ServerReflectionInfo(requests())]
+    assert len(responses) == 4
+    assert all(response.file_descriptor_response.file_descriptor_proto for response in responses[:2])
+    assert all(response.error_response.error_code == 5 for response in responses[2:])
     await server.stop()
     await channel.close()
 

@@ -90,7 +90,11 @@ func reservedInboundMetadata(key string) bool {
 		strings.HasPrefix(key, "subject-") || strings.HasPrefix(key, "identity-") {
 		return true
 	}
-	switch key {
+	// Binary gRPC metadata is only an encoding variant of the same logical
+	// key. Do not let an untrusted mapper bypass an authorization or transport
+	// reservation by appending "-bin".
+	baseKey := strings.TrimSuffix(key, "-bin")
+	switch baseKey {
 	case "authorization", "proxy-authorization", "cookie", "set-cookie",
 		"authentication", "api-key", "x-api-key", "tenant", "principal",
 		"role", "user", "subject", "identity", "te", "host", "connection",

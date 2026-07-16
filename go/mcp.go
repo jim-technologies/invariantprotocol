@@ -2,20 +2,26 @@ package invariant
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"sync"
+	"unicode/utf8"
 
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
-const mcpProtocolVersion = "2025-11-25"
+const (
+	mcpProtocolVersion = "2025-11-25"
+	mcpMaxSafeInteger  = int64(1<<53 - 1)
+)
 
 type mcpSession struct {
 	server *Server
@@ -25,11 +31,16 @@ type mcpSession struct {
 	// inflight tracks per-request cancel funcs so MCP cancellation notifications
 	// can interrupt long-running tools/call invocations.
 	inflightMu sync.Mutex
-	inflight   map[string]context.CancelFunc
+	inflight   map[string]*mcpInflightCall
+}
+
+type mcpInflightCall struct {
+	cancel   context.CancelFunc
+	canceled bool
 }
 
 func (s *Server) newMCPSession(r io.Reader, w io.Writer) *mcpSession {
-	return &mcpSession{server: s, r: r, w: w, inflight: make(map[string]context.CancelFunc)}
+	return &mcpSession{server: s, r: r, w: w, inflight: make(map[string]*mcpInflightCall)}
 }
 
 // serveMCP runs the MCP server over stdin/stdout (blocking).
@@ -85,8 +96,8 @@ func (m *mcpSession) run(ctx context.Context) error {
 		case <-ctx.Done():
 			// Parent shutdown — cancel everything in flight, then wait.
 			m.inflightMu.Lock()
-			for _, cancel := range m.inflight {
-				cancel()
+			for _, call := range m.inflight {
+				call.cancel()
 			}
 			m.inflightMu.Unlock()
 			return ctx.Err()
@@ -104,16 +115,19 @@ func (m *mcpSession) run(ctx context.Context) error {
 			continue
 		}
 
-		var req jsonRPCRequest
-		if err := json.Unmarshal(line, &req); err != nil {
-			m.writeResponse(mcpErr(nil, -32700, "Parse error: "+err.Error()))
+		req, clientResponse, protocolError := parseMCPJSONRPC(line)
+		if protocolError != nil {
+			m.writeResponse(protocolError)
+			continue
+		}
+		if clientResponse {
 			continue
 		}
 
 		// Notifications execute synchronously — cancellation must take effect
 		// before the next request is read off the wire.
 		if req.ID == nil {
-			m.handleNotification(&req)
+			m.handleNotification(req)
 			continue
 		}
 
@@ -122,7 +136,7 @@ func (m *mcpSession) run(ctx context.Context) error {
 		// it. Fast metadata methods (initialize, tools/list, ping) run inline
 		// to keep response order deterministic.
 		if req.Method != "tools/call" {
-			if resp := m.dispatch(ctx, &req); resp != nil {
+			if resp := m.dispatch(ctx, req); resp != nil {
 				m.writeResponse(resp)
 			}
 			continue
@@ -131,21 +145,28 @@ func (m *mcpSession) run(ctx context.Context) error {
 		// Register the cancel func synchronously *before* starting the goroutine
 		// so a cancellation notification on the next read always finds it.
 		callCtx, cancel := context.WithCancel(ctx) //nolint:gosec // cancel stored in inflight map and invoked via defer below
-		idKey := string(req.ID)
+		idKey, ok := mcpIDKey(req.ID)
+		if !ok {
+			cancel()
+			m.writeResponse(mcpErr(nil, -32600, "Invalid Request"))
+			continue
+		}
+		call := &mcpInflightCall{cancel: cancel}
 		m.inflightMu.Lock()
-		m.inflight[idKey] = cancel
+		m.inflight[idKey] = call
 		m.inflightMu.Unlock()
 
-		reqCopy := req
+		reqCopy := *req
 		wg.Go(func() {
 			defer func() {
 				cancel()
-				m.inflightMu.Lock()
-				delete(m.inflight, idKey)
-				m.inflightMu.Unlock()
 			}()
 			resp := m.dispatch(callCtx, &reqCopy)
-			if resp != nil {
+			m.inflightMu.Lock()
+			canceled := call.canceled
+			delete(m.inflight, idKey)
+			m.inflightMu.Unlock()
+			if !canceled && resp != nil {
 				m.writeResponse(resp)
 			}
 		})
@@ -176,11 +197,18 @@ func (m *mcpSession) handleNotification(req *jsonRPCRequest) {
 	if err := json.Unmarshal(req.Params, &p); err != nil || len(p.RequestID) == 0 {
 		return
 	}
+	idKey, ok := mcpIDKey(p.RequestID)
+	if !ok {
+		return
+	}
 	m.inflightMu.Lock()
-	cancel := m.inflight[string(p.RequestID)]
+	call := m.inflight[idKey]
+	if call != nil {
+		call.canceled = true
+	}
 	m.inflightMu.Unlock()
-	if cancel != nil {
-		cancel()
+	if call != nil {
+		call.cancel()
 	}
 }
 
@@ -207,6 +235,196 @@ type jsonRPCError struct {
 	Message string `json:"message"`
 }
 
+// parseMCPJSONRPC distinguishes malformed JSON from a syntactically valid
+// value that is not a JSON-RPC 2.0 request. It also accepts client responses,
+// which MCP transports may carry in either direction even though Invariant
+// does not currently initiate server-to-client requests.
+func parseMCPJSONRPC(data []byte) (*jsonRPCRequest, bool, *jsonRPCResponse) {
+	if !utf8.Valid(data) || !json.Valid(data) {
+		var value any
+		err := json.Unmarshal(data, &value)
+		message := "Parse error"
+		if err != nil {
+			message += ": " + err.Error()
+		}
+		return nil, false, mcpErr(nil, -32700, message)
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
+		return nil, false, mcpErr(nil, -32600, "Invalid Request")
+	}
+
+	var version string
+	rawVersion, hasVersion := fields["jsonrpc"]
+	if !hasVersion || json.Unmarshal(rawVersion, &version) != nil || version != "2.0" {
+		return nil, false, mcpErr(nil, -32600, "Invalid Request")
+	}
+
+	_, hasMethod := fields["method"]
+	_, hasResult := fields["result"]
+	_, hasError := fields["error"]
+	rawID, hasID := fields["id"]
+	if !hasMethod {
+		switch {
+		case hasResult && !hasError:
+			if !hasID || !validMCPID(rawID) || !mcpJSONObject(fields["result"]) {
+				return nil, false, mcpErr(nil, -32600, "Invalid Request")
+			}
+		case hasError && !hasResult:
+			if (hasID && !validMCPID(rawID)) || !validMCPError(fields["error"]) {
+				return nil, false, mcpErr(nil, -32600, "Invalid Request")
+			}
+		default:
+			return nil, false, mcpErr(nil, -32600, "Invalid Request")
+		}
+		return nil, true, nil
+	}
+
+	var req jsonRPCRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return nil, false, mcpErr(nil, -32600, "Invalid Request")
+	}
+	if hasID && !validMCPID(rawID) {
+		return nil, false, mcpErr(nil, -32600, "Invalid Request")
+	}
+	if normalizedID := bytes.TrimSpace(req.ID); hasID && len(normalizedID) > 0 && normalizedID[0] != '"' {
+		value, _ := mcpIntegerValue(req.ID)
+		req.ID = json.RawMessage(strconv.FormatInt(value, 10))
+	}
+	if rawParams, hasParams := fields["params"]; hasParams && !mcpJSONObject(rawParams) {
+		if !hasID {
+			return &req, false, nil
+		}
+		return nil, false, mcpErr(req.ID, -32602, "Invalid params")
+	}
+	if req.Method == "tools/call" && !validMCPToolCallParams(fields["params"]) {
+		if !hasID {
+			return &req, false, nil
+		}
+		return nil, false, mcpErr(req.ID, -32602, "Invalid params")
+	}
+	return &req, false, nil
+}
+
+func validMCPID(raw json.RawMessage) bool {
+	text := string(bytes.TrimSpace(raw))
+	if len(text) == 0 || text == "null" || text == "true" || text == "false" {
+		return false
+	}
+	if text[0] == '"' {
+		var value string
+		return json.Unmarshal(raw, &value) == nil
+	}
+	return validMCPInteger(raw)
+}
+
+func validMCPInteger(raw json.RawMessage) bool {
+	_, ok := mcpIntegerValue(raw)
+	return ok
+}
+
+func mcpIntegerValue(raw json.RawMessage) (int64, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if !json.Valid(trimmed) {
+		return 0, false
+	}
+	text := string(trimmed)
+	if len(text) == 0 || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || value < -mcpMaxSafeInteger || value > mcpMaxSafeInteger {
+		return 0, false
+	}
+	return value, true
+}
+
+func mcpIDKey(raw json.RawMessage) (string, bool) {
+	text := bytes.TrimSpace(raw)
+	if !validMCPID(text) {
+		return "", false
+	}
+	if text[0] == '"' {
+		var value string
+		if err := json.Unmarshal(text, &value); err != nil {
+			return "", false
+		}
+		return "string:" + value, true
+	}
+	value, ok := mcpIntegerValue(text)
+	if !ok {
+		return "", false
+	}
+	return "integer:" + strconv.FormatInt(value, 10), true
+}
+
+func mcpJSONObject(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	return len(raw) > 0 && raw[0] == '{'
+}
+
+func validMCPError(raw json.RawMessage) bool {
+	if !mcpJSONObject(raw) {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+	code, hasCode := fields["code"]
+	message, hasMessage := fields["message"]
+	if !hasCode || !validMCPInteger(code) || !hasMessage {
+		return false
+	}
+	var text string
+	return json.Unmarshal(message, &text) == nil
+}
+
+func validMCPToolCallParams(raw json.RawMessage) bool {
+	if !mcpJSONObject(raw) {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+	name, hasName := fields["name"]
+	if !hasName {
+		return false
+	}
+	var toolName string
+	if json.Unmarshal(name, &toolName) != nil {
+		return false
+	}
+	arguments, hasArguments := fields["arguments"]
+	return !hasArguments || mcpJSONObject(arguments)
+}
+
+func validMCPInitializeParams(raw json.RawMessage) bool {
+	if !mcpJSONObject(raw) {
+		return false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return false
+	}
+	var protocolVersion string
+	if json.Unmarshal(fields["protocolVersion"], &protocolVersion) != nil {
+		return false
+	}
+	if !mcpJSONObject(fields["capabilities"]) || !mcpJSONObject(fields["clientInfo"]) {
+		return false
+	}
+	var clientInfo map[string]json.RawMessage
+	if json.Unmarshal(fields["clientInfo"], &clientInfo) != nil {
+		return false
+	}
+	var name, version string
+	return json.Unmarshal(clientInfo["name"], &name) == nil &&
+		json.Unmarshal(clientInfo["version"], &version) == nil
+}
+
 // --- Dispatch ---
 
 func (m *mcpSession) dispatch(ctx context.Context, req *jsonRPCRequest) *jsonRPCResponse {
@@ -222,6 +440,9 @@ func (s *Server) mcpDispatch(ctx context.Context, req *jsonRPCRequest) *jsonRPCR
 	}
 	switch req.Method {
 	case "initialize":
+		if !validMCPInitializeParams(req.Params) {
+			return mcpErr(req.ID, -32602, "Invalid params")
+		}
 		return mcpOK(req.ID, map[string]any{
 			"protocolVersion": mcpProtocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
@@ -245,6 +466,9 @@ func (s *Server) toolsCall(ctx context.Context, id, rawParams json.RawMessage) *
 	}
 	if err := json.Unmarshal(rawParams, &p); err != nil {
 		return mcpErr(id, -32602, "Invalid params: "+err.Error())
+	}
+	if len(p.Arguments) == 0 {
+		p.Arguments = json.RawMessage("{}")
 	}
 
 	tool, ok := s.tools[p.Name]

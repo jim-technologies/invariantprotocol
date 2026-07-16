@@ -43,11 +43,13 @@ func TestDDLPreservesProtobufPresenceAndAddsOneofConstraint(t *testing.T) {
 	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED, diagnostic(t, diagnostics, "elapsed").GetCompatibility())
 	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS, diagnostic(t, diagnostics, "state").GetCompatibility())
 	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS, diagnostic(t, diagnostics, "choice_count").GetCompatibility())
-	for _, path := range []string{"string_value", "nested", "nested.label", "labels", "labels[]", "counters", "counters.key", "attributes"} {
+	for _, path := range []string{"string_value", "nested", "nested.label", "labels", "labels[]", "counters", "counters.key", "attributes", "opaque"} {
 		nulDiagnostic := diagnostic(t, diagnostics, path)
 		require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED, nulDiagnostic.GetCompatibility(), path)
 		require.Contains(t, nulDiagnostic.GetMessage(), "U+0000", path)
 	}
+	require.Contains(t, diagnostic(t, diagnostics, "attributes").GetMessage(), "numbers to be finite")
+	require.Contains(t, diagnostic(t, diagnostics, "opaque").GetMessage(), "type URL to resolve")
 
 	datasetField(t, dataset, "state").GetType().GetEnum().Closed = true
 	_, closedDiagnostics, err := DDL(dataset)

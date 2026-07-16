@@ -248,7 +248,7 @@ fn adapter_method(runtime: &str, service_name: &str, method: &Method) -> String 
         request: ::tonic::Request<::tonic::Streaming<{input}>>,
     ) -> ::core::result::Result<::tonic::Response<Self::{associated}>, ::tonic::Status> {{
         let implementation = self.implementation.clone();
-        self.server.invoke_typed_stream_call(request, {info}, move |request| {{
+        self.server.invoke_typed_stream(request, {info}, move |request| {{
             let implementation = implementation.clone();
             async move {{
                 let response = implementation.{name}(request).await?;

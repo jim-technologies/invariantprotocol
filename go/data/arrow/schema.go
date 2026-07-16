@@ -221,10 +221,26 @@ func mapType(dataType *datav1.DataType, path string) (arrowlib.DataType, []*data
 			return nil, nil, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", fmt.Errorf("arrow: field %q: %w", path, err)
 		}
 		return jsonType, nil,
-			datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
-			fmt.Sprintf("protobuf %s is encoded as RFC 8259 text in Arrow's canonical JSON extension type", kind.Json.GetKind()), nil
+			datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED,
+			fmt.Sprintf(
+				"protobuf %s is encoded as RFC 8259 text in Arrow's canonical JSON extension type; %s",
+				kind.Json.GetKind(), jsonRangeReduction(kind.Json.GetKind()),
+			), nil
 	default:
 		return nil, nil, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", fmt.Errorf("arrow: field %q has an unspecified logical type", path)
+	}
+}
+
+func jsonRangeReduction(kind datav1.JsonKind) string {
+	switch kind {
+	case datav1.JsonKind_JSON_KIND_ANY:
+		return "standard protobuf JSON requires each populated Any type URL to resolve to a known message descriptor; embedded Struct, Value, and ListValue numbers must also be finite"
+	case datav1.JsonKind_JSON_KIND_STRUCT,
+		datav1.JsonKind_JSON_KIND_VALUE,
+		datav1.JsonKind_JSON_KIND_LIST_VALUE:
+		return "standard protobuf JSON requires Struct, Value, and ListValue numbers to be finite; NaN and infinities are not representable"
+	default:
+		return "standard protobuf JSON requires an explicitly supported dynamic JSON kind"
 	}
 }
 

@@ -95,6 +95,10 @@ func (s *Server) HTTPHandler() http.Handler {
 			// MCP Streamable HTTP transport — one JSON-RPC message per POST.
 			s.handleMCPHTTP(w, r)
 		case r.URL.Path == "/mcp":
+			if httpHeaderPresent(r.Header, "Origin") {
+				http.Error(w, "Origin is not accepted", http.StatusForbidden)
+				return
+			}
 			// This projection intentionally does not offer the optional SSE
 			// receive stream used by GET in the full Streamable HTTP transport.
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -155,8 +159,12 @@ func (s *Server) serveHTTP(ctx context.Context, port int) error {
 }
 
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, entry *httpToolEntry) {
-	ctx, cancel := applyConnectTimeout(r)
+	ctx, cancel, err := applyConnectTimeout(r)
 	defer cancel()
+	if err != nil {
+		httpErrorWithLimit(w, err, entry.maxUnaryResponse)
+		return
+	}
 	trustedMetadata, _ := metadata.FromIncomingContext(ctx)
 	ctx = metadata.NewIncomingContext(ctx, metadata.Join(trustedMetadata, s.incomingHTTPMetadata(r)))
 	r = r.WithContext(ctx)
@@ -352,9 +360,18 @@ func (s *Server) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Accept must include application/json and text/event-stream", http.StatusNotAcceptable)
 		return
 	}
+	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || !strings.EqualFold(contentType, jsonContentType) {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
 
-	ctx, cancel := applyConnectTimeout(r)
+	ctx, cancel, err := applyConnectTimeout(r)
 	defer cancel()
+	if err != nil {
+		httpErrorWithLimit(w, err, s.httpMaxUnaryResponse)
+		return
+	}
 	trustedMetadata, _ := metadata.FromIncomingContext(ctx)
 	ctx = metadata.NewIncomingContext(ctx, metadata.Join(trustedMetadata, s.incomingHTTPMetadata(r)))
 	requestBody := r.Body
@@ -376,29 +393,32 @@ func (s *Server) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req jsonRPCRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeMCPJSON(w, mcpErr(nil, -32700, "Parse error: "+err.Error()), s.httpMaxUnaryResponse)
+	req, clientResponse, protocolError := parseMCPJSONRPC(body)
+	if protocolError != nil {
+		writeMCPJSON(w, protocolError, s.httpMaxUnaryResponse)
 		return
 	}
+	method := ""
+	if req != nil {
+		method = req.Method
+	}
 	protocolVersion := r.Header.Get("MCP-Protocol-Version")
-	if (req.Method == "initialize" && protocolVersion != "" && protocolVersion != mcpProtocolVersion) ||
-		(req.Method != "initialize" && protocolVersion != mcpProtocolVersion) {
+	if (method == "initialize" && protocolVersion != "" && protocolVersion != mcpProtocolVersion) ||
+		(method != "initialize" && protocolVersion != mcpProtocolVersion) {
 		http.Error(w, "unsupported or missing MCP-Protocol-Version", http.StatusBadRequest)
 		return
 	}
 
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err == nil && req.Method == "" && req.ID != nil {
-		_, hasResult := fields["result"]
-		_, hasError := fields["error"]
-		if hasResult || hasError {
-			w.WriteHeader(http.StatusAccepted)
-			return
-		}
+	if clientResponse {
+		w.WriteHeader(http.StatusAccepted)
+		return
 	}
 
-	resp := s.mcpDispatch(ctx, &req)
+	resp := s.mcpDispatch(ctx, req)
+	if contextErr := ctx.Err(); contextErr != nil {
+		httpErrorWithLimit(w, status.FromContextError(contextErr).Err(), s.httpMaxUnaryResponse)
+		return
+	}
 	if resp == nil {
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -541,28 +561,34 @@ func connectEnvelopeSize(size uint64) (uint32, error) {
 	return uint32(size), nil
 }
 
-// applyConnectTimeout honors the Connect-Timeout-Ms request header. Returns
-// the request's existing context unchanged if the header is missing or invalid.
-// Caller must always defer the returned cancel.
-func applyConnectTimeout(r *http.Request) (context.Context, context.CancelFunc) {
-	raw := r.Header.Get("Connect-Timeout-Ms")
-	if raw == "" {
-		return r.Context(), func() {}
+// applyConnectTimeout honors the Connect-Timeout-Ms request header. The
+// Connect grammar requires one to ten ASCII digits representing a positive
+// integer. Caller must always defer the returned cancel.
+func applyConnectTimeout(r *http.Request) (context.Context, context.CancelFunc, error) {
+	if !httpHeaderPresent(r.Header, "Connect-Timeout-Ms") {
+		return r.Context(), func() {}, nil
 	}
-	if len(raw) > 10 {
-		return r.Context(), func() {}
+	raw := r.Header.Get("Connect-Timeout-Ms")
+	if len(raw) == 0 || len(raw) > 10 {
+		return r.Context(), func() {}, invalidArgumentError(
+			"Connect-Timeout-Ms must be a positive integer of at most 10 ASCII digits",
+		)
 	}
 	for _, digit := range raw {
 		if digit < '0' || digit > '9' {
-			return r.Context(), func() {}
+			return r.Context(), func() {}, invalidArgumentError(
+				"Connect-Timeout-Ms must be a positive integer of at most 10 ASCII digits",
+			)
 		}
 	}
 	ms, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || ms <= 0 {
-		return r.Context(), func() {}
+		return r.Context(), func() {}, invalidArgumentError(
+			"Connect-Timeout-Ms must be a positive integer of at most 10 ASCII digits",
+		)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(ms)*time.Millisecond) //nolint:gosec // cancel returned for caller defer
-	return ctx, cancel
+	return ctx, cancel, nil
 }
 
 // handleHTTPProto handles requests with Content-Type: application/proto.

@@ -254,6 +254,86 @@ func TestCompileDescriptorBytesRejectsDatasetStorageNameCollisions(t *testing.T)
 	)
 }
 
+func TestCompileMessageRejectsEmptyStorageNames(t *testing.T) {
+	t.Run("dataset", func(t *testing.T) {
+		md := messageFromFile(t, &descriptorpb.FileDescriptorProto{
+			Name:    new("empty_dataset.proto"),
+			Syntax:  new("proto3"),
+			Package: new(""),
+			MessageType: []*descriptorpb.DescriptorProto{{
+				Name: new("_"),
+				Field: []*descriptorpb.FieldDescriptorProto{{
+					Name:   new("id"),
+					Number: proto.Int32(1),
+					Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+				}},
+			}},
+		}, "_")
+
+		_, err := CompileMessage(md, nil)
+		require.EqualError(t, err,
+			`compile message "_": protobuf message name normalizes to an empty storage name`,
+		)
+	})
+
+	t.Run("top-level field", func(t *testing.T) {
+		md := messageFromFile(t, &descriptorpb.FileDescriptorProto{
+			Name:    new("empty_top_level_field.proto"),
+			Package: new("empty.v1"),
+			Syntax:  new("proto3"),
+			MessageType: []*descriptorpb.DescriptorProto{{
+				Name: new("Row"),
+				Field: []*descriptorpb.FieldDescriptorProto{{
+					Name:   new("_"),
+					Number: proto.Int32(1),
+					Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+				}},
+			}},
+		}, "Row")
+
+		_, err := CompileMessage(md, nil)
+		require.EqualError(t, err,
+			`compile message "empty.v1.Row": protobuf field "empty.v1.Row._" normalizes to an empty storage name within protobuf message "empty.v1.Row"`,
+		)
+	})
+
+	t.Run("nested field", func(t *testing.T) {
+		md := messageFromFile(t, &descriptorpb.FileDescriptorProto{
+			Name:    new("empty_nested_field.proto"),
+			Package: new("empty.v1"),
+			Syntax:  new("proto3"),
+			MessageType: []*descriptorpb.DescriptorProto{
+				{
+					Name: new("Nested"),
+					Field: []*descriptorpb.FieldDescriptorProto{{
+						Name:   new("_"),
+						Number: proto.Int32(1),
+						Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+					}},
+				},
+				{
+					Name: new("Row"),
+					Field: []*descriptorpb.FieldDescriptorProto{{
+						Name:     new("nested"),
+						Number:   proto.Int32(1),
+						Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+						TypeName: new(".empty.v1.Nested"),
+					}},
+				},
+			},
+		}, "Row")
+
+		_, err := CompileMessage(md, nil)
+		require.EqualError(t, err,
+			`compile message "empty.v1.Row": field "empty.v1.Row.nested": protobuf field "empty.v1.Nested._" normalizes to an empty storage name within protobuf message "empty.v1.Nested"`,
+		)
+	})
+}
+
 func TestCompileMessageRejectsRecursion(t *testing.T) {
 	_, files := fixtureDescriptors(t)
 	_, err := CompileMessage(findMessage(t, files, "data.v1.RecursiveRecord"), nil)
@@ -339,6 +419,33 @@ func TestCompileMessageRetainsAndRetiresStableIDs(t *testing.T) {
 	_, err = CompileMessage(v3, second)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "reuses retired stable_id 2")
+}
+
+func TestCompileMessageTombstonesNestedAndCollectionIdentities(t *testing.T) {
+	first, err := CompileMessage(collectionRetirementMessage(t, true), nil)
+	require.NoError(t, err)
+
+	child := schemaField(t, first, 1)
+	labels := schemaField(t, first, 2)
+	counters := schemaField(t, first, 3)
+	expected := map[string]int32{
+		"field:1/field:2":      child.GetType().GetStruct().GetFields()[1].GetStableId(),
+		"field:2":              labels.GetStableId(),
+		"field:2/list:element": labels.GetType().GetList().GetElement().GetStableId(),
+		"field:3":              counters.GetStableId(),
+		"field:3/map:key":      counters.GetType().GetMap().GetKey().GetStableId(),
+		"field:3/map:value":    counters.GetType().GetMap().GetValue().GetStableId(),
+	}
+
+	second, err := CompileMessage(collectionRetirementMessage(t, false), first)
+	require.NoError(t, err)
+	require.Equal(t, first.GetLastFieldId(), second.GetLastFieldId())
+	require.Len(t, second.GetRetiredFields(), len(expected))
+	for _, retired := range second.GetRetiredFields() {
+		require.Equal(t, expected[retired.GetIdentity()], retired.GetStableId(), retired.GetIdentity())
+		delete(expected, retired.GetIdentity())
+	}
+	require.Empty(t, expected)
 }
 
 func TestCompileMessageRejectsStorageShapeAndPresenceChanges(t *testing.T) {
@@ -486,6 +593,80 @@ func evolutionMessage(t *testing.T, version evolutionVersion) protoreflect.Messa
 		Package:     new("evolution.v1"),
 		Syntax:      new("proto3"),
 		MessageType: []*descriptorpb.DescriptorProto{nested, row},
+	}, "Row")
+}
+
+func collectionRetirementMessage(t *testing.T, includeRemoved bool) protoreflect.MessageDescriptor {
+	t.Helper()
+	child := &descriptorpb.DescriptorProto{
+		Name: new("Child"),
+		Field: []*descriptorpb.FieldDescriptorProto{{
+			Name:   new("keep"),
+			Number: proto.Int32(1),
+			Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+		}},
+	}
+	if includeRemoved {
+		child.Field = append(child.Field, &descriptorpb.FieldDescriptorProto{
+			Name:   new("removed"),
+			Number: proto.Int32(2),
+			Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+		})
+	}
+
+	row := &descriptorpb.DescriptorProto{
+		Name: new("Row"),
+		Field: []*descriptorpb.FieldDescriptorProto{{
+			Name:     new("child"),
+			Number:   proto.Int32(1),
+			Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+			TypeName: new(".retirement.v1.Child"),
+		}},
+	}
+	if includeRemoved {
+		row.NestedType = []*descriptorpb.DescriptorProto{{
+			Name:    new("CountersEntry"),
+			Options: &descriptorpb.MessageOptions{MapEntry: new(true)},
+			Field: []*descriptorpb.FieldDescriptorProto{
+				{
+					Name:   new("key"),
+					Number: proto.Int32(1),
+					Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+				},
+				{
+					Name:   new("value"),
+					Number: proto.Int32(2),
+					Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					Type:   descriptorpb.FieldDescriptorProto_TYPE_INT64.Enum(),
+				},
+			},
+		}}
+		row.Field = append(row.Field,
+			&descriptorpb.FieldDescriptorProto{
+				Name:   new("labels"),
+				Number: proto.Int32(2),
+				Label:  descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(),
+				Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+			},
+			&descriptorpb.FieldDescriptorProto{
+				Name:     new("counters"),
+				Number:   proto.Int32(3),
+				Label:    descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(),
+				Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+				TypeName: new(".retirement.v1.Row.CountersEntry"),
+			},
+		)
+	}
+
+	return messageFromFile(t, &descriptorpb.FileDescriptorProto{
+		Name:        new("collection_retirement.proto"),
+		Package:     new("retirement.v1"),
+		Syntax:      new("proto3"),
+		MessageType: []*descriptorpb.DescriptorProto{child, row},
 	}, "Row")
 }
 

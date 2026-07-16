@@ -375,6 +375,11 @@ func TestHTTPProjectionInboundMetadataIsFiltered(t *testing.T) {
 				"x-empty":                      {""},
 				"trace-bin":                    {"AP8", "YWJjZA=="},
 				"authorization":                r.Header.Values("Authorization"),
+				"authorization-bin":            {"Y2FsbGVyLWNvbnRyb2xsZWQ"},
+				"proxy-authorization-bin":      {"Y2FsbGVyLWNvbnRyb2xsZWQ"},
+				"authentication-bin":           {"Y2FsbGVyLWNvbnRyb2xsZWQ"},
+				"api-key-bin":                  {"Y2FsbGVyLWNvbnRyb2xsZWQ"},
+				"x-api-key-bin":                {"Y2FsbGVyLWNvbnRyb2xsZWQ"},
 				"x-tenant":                     r.Header.Values("X-Tenant"),
 				"x-principal":                  r.Header.Values("X-Principal"),
 				"x-role":                       r.Header.Values("X-Role"),
@@ -407,7 +412,16 @@ func TestHTTPProjectionInboundMetadataIsFiltered(t *testing.T) {
 	assert.Equal(t, []string{string([]byte{0, 0xff}), "abcd"}, md.Get("trace-bin"))
 	assert.Equal(t, []string{"trusted-tenant"}, md.Get("x-tenant"))
 	assert.Equal(t, []string{"trusted-principal"}, md.Get("invariant-internal-principal"))
-	for _, key := range []string{"authorization", "x-principal", "x-role"} {
+	for _, key := range []string{
+		"authorization",
+		"authorization-bin",
+		"proxy-authorization-bin",
+		"authentication-bin",
+		"api-key-bin",
+		"x-api-key-bin",
+		"x-principal",
+		"x-role",
+	} {
 		assert.Empty(t, md.Get(key), "%s must not be caller-assertable", key)
 	}
 }

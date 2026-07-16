@@ -16,7 +16,7 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Request, State},
-    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
+    http::{Extensions, HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{any, get, post},
 };
@@ -38,6 +38,8 @@ pub const CONNECT_STREAM_JSON: &str = "application/connect+json";
 pub const CONNECT_STREAM_PROTO: &str = "application/connect+proto";
 pub const CONNECT_END_STREAM_FLAG: u8 = 0x02;
 pub const CONNECT_TIMEOUT_HEADER: &str = "connect-timeout-ms";
+const CONNECT_CONTROL_MAX: usize = 1024 * 1024;
+const RESOURCE_EXHAUSTED_END_STREAM: &[u8] = br#"{"error":{"code":"resource_exhausted"}}"#;
 
 /// Build the axum `Router` mounting all Connect tool endpoints + catalog +
 /// health + MCP HTTP transport. Mount under any prefix via `Router::nest`.
@@ -115,13 +117,18 @@ async fn mcp_http_handler(State(server): State<Arc<Server>>, req: Request) -> Re
     ) {
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "").into_response();
     }
+    let max_response_bytes = server.max_unary_response_bytes();
     let headers = req.headers().clone();
     let protocol_version = headers
         .get("mcp-protocol-version")
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .map(str::to_string);
-    let projection = ProjectionContext::new(parse_connect_timeout(&headers));
+    let timeout = match parse_connect_timeout(&headers) {
+        Ok(timeout) => timeout,
+        Err(status) => return error_response_with_limit(&status, max_response_bytes),
+    };
+    let projection = ProjectionContext::new(timeout);
     let _guard = ProjectionGuard::new(projection.clone());
     let body = match until_projection_deadline(
         &projection,
@@ -130,7 +137,7 @@ async fn mcp_http_handler(State(server): State<Arc<Server>>, req: Request) -> Re
     .await
     {
         Ok(b) => b,
-        Err(s) => return error_response(&s),
+        Err(s) => return error_response_with_limit(&s, max_response_bytes),
     };
     let msg: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
@@ -140,9 +147,19 @@ async fn mcp_http_handler(State(server): State<Arc<Server>>, req: Request) -> Re
                 "id": null,
                 "error": {"code": -32700, "message": format!("Parse error: {e}")},
             });
-            return mcp_json_response(StatusCode::OK, &resp);
+            if let Some(status) = projection_deadline_error(&projection) {
+                return error_response_with_limit(&status, max_response_bytes);
+            }
+            return mcp_json_response(StatusCode::OK, &resp, max_response_bytes);
         }
     };
+    if let Some(response) = crate::projections::mcp::invalid_request_response(&msg) {
+        if let Some(status) = projection_deadline_error(&projection) {
+            return error_response_with_limit(&status, max_response_bytes);
+        }
+        return mcp_json_response(StatusCode::OK, &response, max_response_bytes);
+    }
+    let response_message = crate::projections::mcp::is_client_response(&msg);
     let initialize = msg.get("method").and_then(|value| value.as_str()) == Some("initialize");
     let version_valid = matches!(
         (initialize, protocol_version.as_deref()),
@@ -152,7 +169,16 @@ async fn mcp_http_handler(State(server): State<Arc<Server>>, req: Request) -> Re
         ) | (false, Some(crate::projections::mcp::MCP_PROTOCOL_VERSION))
     );
     if !version_valid {
+        if let Some(status) = projection_deadline_error(&projection) {
+            return error_response_with_limit(&status, max_response_bytes);
+        }
         return (StatusCode::BAD_REQUEST, "").into_response();
+    }
+    if response_message {
+        if let Some(status) = projection_deadline_error(&projection) {
+            return error_response_with_limit(&status, max_response_bytes);
+        }
+        return mcp_empty_response(StatusCode::ACCEPTED);
     }
     let metadata = server.incoming_http_metadata(&headers);
     let dispatch = crate::projections::mcp::mcp_dispatch_with_context(
@@ -162,40 +188,52 @@ async fn mcp_http_handler(State(server): State<Arc<Server>>, req: Request) -> Re
         Some(projection.clone()),
     );
     match until_projection_deadline(&projection, async { Ok(dispatch.await) }).await {
-        Ok(Some(resp)) => mcp_json_response(StatusCode::OK, &resp),
+        Ok(Some(resp)) => mcp_json_response(StatusCode::OK, &resp, max_response_bytes),
         Ok(None) => mcp_empty_response(StatusCode::ACCEPTED),
-        Err(status) => {
-            let response = json!({
-                "jsonrpc": "2.0",
-                "id": msg.get("id").cloned().unwrap_or(serde_json::Value::Null),
-                "result": {
-                    "content": [{"type": "text", "text": status.message()}],
-                    "isError": true,
-                    "error": error_payload(&status),
-                }
-            });
-            mcp_json_response(StatusCode::OK, &response)
-        }
+        Err(status) => error_response_with_limit(&status, max_response_bytes),
     }
 }
 
 fn accepts_media_type(headers: &HeaderMap, expected: &str) -> bool {
     headers.get_all(header::ACCEPT).iter().any(|value| {
         value.to_str().is_ok_and(|value| {
-            value.split(',').any(|media_type| {
-                media_type
-                    .split(';')
+            value.split(',').any(|candidate| {
+                let mut parts = candidate.split(';');
+                if !parts
                     .next()
                     .unwrap_or_default()
                     .trim()
                     .eq_ignore_ascii_case(expected)
+                {
+                    return false;
+                }
+                parts.all(|parameter| {
+                    let Some((name, value)) = parameter.trim().split_once('=') else {
+                        return true;
+                    };
+                    !name.trim().eq_ignore_ascii_case("q")
+                        || value
+                            .trim()
+                            .parse::<f32>()
+                            .is_ok_and(|quality| quality > 0.0)
+                })
             })
         })
     })
 }
 
-fn mcp_json_response(status: StatusCode, value: &serde_json::Value) -> Response {
+fn mcp_json_response(
+    status: StatusCode,
+    value: &serde_json::Value,
+    max_response_bytes: usize,
+) -> Response {
     let body = serde_json::to_vec(value).unwrap_or_default();
+    if max_response_bytes > 0 && body.len() > max_response_bytes {
+        return error_response_with_limit(
+            &Status::resource_exhausted("encoded MCP response exceeds configured byte limit"),
+            max_response_bytes,
+        );
+    }
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, CONTENT_TYPE_JSON)
@@ -225,7 +263,12 @@ async fn tool_handler(State(server): State<Arc<Server>>, req: Request) -> Respon
     let path = req.uri().path().to_string();
     let tool = match find_tool_by_path(&server, &path) {
         Some(t) => t,
-        None => return error_response(&Status::not_found(format!("unknown tool path {path:?}"))),
+        None => {
+            return error_response_with_limit(
+                &Status::not_found(format!("unknown tool path {path:?}")),
+                server.max_unary_response_bytes(),
+            );
+        }
     };
 
     if tool.server_streaming {
@@ -233,34 +276,62 @@ async fn tool_handler(State(server): State<Arc<Server>>, req: Request) -> Respon
     }
 
     let headers = req.headers().clone();
-    let timeout = parse_connect_timeout(&headers);
+    let limits = server.http_limits(&tool);
+    let content_type = content_type(&headers);
+    let json_request = matches_ct(content_type.as_deref(), CONTENT_TYPE_JSON);
+    let proto_request = is_proto(content_type.as_deref());
+    if !json_request && !proto_request {
+        return unsupported_media_type_response(
+            &format!(
+                "unary tools require Content-Type: {CONTENT_TYPE_JSON} or {CONTENT_TYPE_PROTO}"
+            ),
+            limits.unary_response,
+        );
+    }
+    let content_encoding = headers
+        .get(header::CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !content_encoding.is_empty() && content_encoding != "identity" {
+        return error_response_with_limit(
+            &Status::unimplemented(format!(
+                "Content-Encoding {content_encoding:?} is not supported"
+            )),
+            limits.unary_response,
+        );
+    }
+    let timeout = match parse_connect_timeout(&headers) {
+        Ok(timeout) => timeout,
+        Err(status) => return error_response_with_limit(&status, limits.unary_response),
+    };
     let projection = ProjectionContext::new(timeout);
     let _guard = ProjectionGuard::new(projection.clone());
-    let limits = server.http_limits(&tool);
+    let mut req = req;
+    let extensions = std::mem::take(req.extensions_mut());
 
     let body =
         match until_projection_deadline(&projection, read_limited_body(req, limits.unary_request))
             .await
         {
             Ok(b) => b,
-            Err(s) => return error_response(&s),
+            Err(s) => return error_response_with_limit(&s, limits.unary_response),
         };
 
-    let content_type = content_type(&headers);
-    let want_proto = is_proto(content_type.as_deref());
     let wants_proto_response = is_proto(headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()));
 
-    let dyn_req = match decode_request(&tool, want_proto, &body) {
+    let dyn_req = match decode_request(&tool, proto_request, &body) {
         Ok(d) => d,
-        Err(s) => return error_response(&s),
+        Err(s) => return error_response_with_limit(&s, limits.unary_response),
     };
 
-    let request = projection_request(&server, &headers, projection.clone(), dyn_req);
+    let request = projection_request(&server, &headers, extensions, projection.clone(), dyn_req);
     let resp = until_projection_deadline(&projection, server.invoke(&tool.name, request)).await;
 
     match resp {
         Ok(response) => encode_response(response, wants_proto_response, limits.unary_response),
-        Err(s) => error_response(&s),
+        Err(s) => error_response_with_limit(&s, limits.unary_response),
     }
 }
 
@@ -277,19 +348,34 @@ async fn stream_tool_handler(
     req: Request,
 ) -> Response {
     let headers = req.headers().clone();
-    let timeout = parse_connect_timeout(&headers);
-    let projection = ProjectionContext::new(timeout);
-    let guard = ProjectionGuard::new(projection.clone());
     let limits = server.http_limits(&tool);
     let ct = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok());
     let binary = matches_ct(ct, CONNECT_STREAM_PROTO);
     if !binary && !matches_ct(ct, CONNECT_STREAM_JSON) {
-        return error_response(&Status::invalid_argument(format!(
-            "streaming tools require Content-Type: {CONNECT_STREAM_JSON} or {CONNECT_STREAM_PROTO}"
-        )));
+        return unsupported_media_type_response(
+            &format!(
+                "streaming tools require Content-Type: {CONNECT_STREAM_JSON} or {CONNECT_STREAM_PROTO}"
+            ),
+            limits.stream_response,
+        );
     }
+    let resp_ct = if binary {
+        CONNECT_STREAM_PROTO
+    } else {
+        CONNECT_STREAM_JSON
+    };
+    let timeout = match parse_connect_timeout(&headers) {
+        Ok(timeout) => timeout,
+        Err(status) => {
+            return connect_stream_error_response(resp_ct, &status);
+        }
+    };
+    let projection = ProjectionContext::new(timeout);
+    let guard = ProjectionGuard::new(projection.clone());
+    let mut req = req;
+    let extensions = std::mem::take(req.extensions_mut());
 
     let body = match until_projection_deadline(
         &projection,
@@ -298,32 +384,35 @@ async fn stream_tool_handler(
     .await
     {
         Ok(b) => b,
-        Err(s) => return error_response(&s),
+        Err(s) => {
+            return connect_stream_error_response(resp_ct, &s);
+        }
     };
 
     // Single envelope on the request side.
     let req_bytes = match unpack_envelope(&body, limits.stream_request) {
         Ok((_flags, data)) => data,
-        Err(s) => return error_response(&s),
+        Err(s) => {
+            return connect_stream_error_response(resp_ct, &s);
+        }
     };
 
     let dyn_req = match decode_request(&tool, binary, req_bytes) {
         Ok(d) => d,
-        Err(s) => return error_response(&s),
+        Err(s) => {
+            return connect_stream_error_response(resp_ct, &s);
+        }
     };
 
-    let resp_ct = if binary {
-        CONNECT_STREAM_PROTO
-    } else {
-        CONNECT_STREAM_JSON
-    };
-    let request = projection_request(&server, &headers, projection.clone(), dyn_req);
+    let request = projection_request(&server, &headers, extensions, projection.clone(), dyn_req);
     let response =
         match until_projection_deadline(&projection, server.invoke_stream(&tool.name, request))
             .await
         {
             Ok(response) => response,
-            Err(status) => return error_response(&status),
+            Err(status) => {
+                return connect_stream_error_response(resp_ct, &status);
+            }
         };
     let (metadata, stream, _) = response.into_parts();
     let body_stream =
@@ -350,18 +439,17 @@ fn build_connect_stream(
         let mut end_payload = Bytes::from_static(b"{}");
 
         loop {
-            let item = if let Some(deadline) = projection.deadline() {
-                match tokio::time::timeout_at(deadline, messages.next()).await {
-                    Ok(it) => it,
-                    Err(_) => {
-                        projection.cancel();
-                        let err = Status::deadline_exceeded("projection deadline exceeded");
-                        end_payload = end_envelope_for_error(&err);
-                        break;
-                    }
+            let item = match until_projection_deadline(
+                &projection,
+                async { Ok(messages.next().await) },
+            )
+            .await
+            {
+                Ok(item) => item,
+                Err(err) => {
+                    end_payload = end_envelope_for_error(&err);
+                    break;
                 }
-            } else {
-                messages.next().await
             };
             match item {
                 None => break,
@@ -406,7 +494,21 @@ fn end_envelope_for_error(err: &Status) -> Bytes {
     } else {
         serde_json::json!({"error": error_payload(err), "metadata": metadata})
     };
-    Bytes::from(serde_json::to_vec(&payload).unwrap_or_default())
+    let encoded = serde_json::to_vec(&payload).unwrap_or_default();
+    if encoded.len() <= CONNECT_CONTROL_MAX {
+        return Bytes::from(encoded);
+    }
+    Bytes::from_static(RESOURCE_EXHAUSTED_END_STREAM)
+}
+
+fn connect_stream_error_response(content_type: &'static str, status: &Status) -> Response {
+    let payload = end_envelope_for_error(status);
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, HeaderValue::from_static(content_type))],
+        pack_envelope(CONNECT_END_STREAM_FLAG, &payload),
+    )
+        .into_response()
 }
 
 fn pack_envelope(flags: u8, payload: &[u8]) -> Vec<u8> {
@@ -424,6 +526,22 @@ fn unpack_envelope(data: &[u8], max_message_bytes: usize) -> Result<(u8, &[u8]),
         ));
     }
     let flags = data[0];
+    if flags & !0x03 != 0 {
+        return Err(Status::invalid_argument(format!(
+            "request envelope has unsupported reserved flags 0x{:02x}",
+            flags & !0x03
+        )));
+    }
+    if flags & 0x01 != 0 {
+        return Err(Status::unimplemented(
+            "compressed request envelopes are not supported",
+        ));
+    }
+    if flags & CONNECT_END_STREAM_FLAG != 0 {
+        return Err(Status::invalid_argument(
+            "request envelope must not use the end-stream flag",
+        ));
+    }
     let size = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
     if size > max_message_bytes {
         return Err(Status::resource_exhausted(format!(
@@ -433,22 +551,33 @@ fn unpack_envelope(data: &[u8], max_message_bytes: usize) -> Result<(u8, &[u8]),
     if data.len() < 5 + size {
         return Err(Status::invalid_argument("stream request body truncated"));
     }
+    if data.len() != 5 + size {
+        return Err(Status::invalid_argument(
+            "stream request body must contain exactly one envelope",
+        ));
+    }
     Ok((flags, &data[5..5 + size]))
 }
 
 fn matches_ct(value: Option<&str>, want: &str) -> bool {
     let Some(v) = value else { return false };
-    v.split(';').next().unwrap_or("").trim() == want
+    v.split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .eq_ignore_ascii_case(want)
 }
 
 fn projection_request(
     server: &Server,
     headers: &HeaderMap,
+    extensions: Extensions,
     projection: ProjectionContext,
     message: DynamicMessage,
 ) -> GrpcRequest<DynamicMessage> {
     let mut request = GrpcRequest::new(message);
     *request.metadata_mut() = server.incoming_http_metadata(headers);
+    *request.extensions_mut() = extensions;
     if let Some(remaining) = projection.remaining() {
         request.set_timeout(remaining);
     }
@@ -463,13 +592,26 @@ async fn until_projection_deadline<T>(
     let Some(deadline) = projection.deadline() else {
         return future.await;
     };
+    if let Some(status) = projection_deadline_error(projection) {
+        return Err(status);
+    }
     match tokio::time::timeout_at(deadline, future).await {
-        Ok(result) => result,
+        Ok(result) => projection_deadline_error(projection).map_or(result, Err),
         Err(_) => {
             projection.cancel();
             Err(Status::deadline_exceeded("projection deadline exceeded"))
         }
     }
+}
+
+fn projection_deadline_error(projection: &ProjectionContext) -> Option<Status> {
+    projection
+        .deadline()
+        .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+        .then(|| {
+            projection.cancel();
+            Status::deadline_exceeded("projection deadline exceeded")
+        })
 }
 
 // ---------- request / response helpers ----------
@@ -484,17 +626,28 @@ fn find_tool_by_path(server: &Server, path: &str) -> Option<Arc<Tool>> {
         .find(|t| t.service_full_name == service && t.method_name == method)
 }
 
-fn parse_connect_timeout(headers: &HeaderMap) -> Option<Duration> {
-    let raw = headers
-        .get(CONNECT_TIMEOUT_HEADER)
-        .or_else(|| headers.get("Connect-Timeout-Ms"))?
-        .to_str()
-        .ok()?;
-    let ms: u64 = raw.trim().parse().ok()?;
-    if ms == 0 {
-        return None;
+fn parse_connect_timeout(headers: &HeaderMap) -> Result<Option<Duration>, Status> {
+    let Some(value) = headers.get(CONNECT_TIMEOUT_HEADER) else {
+        return Ok(None);
+    };
+    let raw = value.to_str().map_err(|_| {
+        Status::invalid_argument("Connect-Timeout-Ms must be a positive ASCII integer")
+    })?;
+    if raw.is_empty() || raw.len() > 10 || raw.as_bytes().iter().any(|byte| !byte.is_ascii_digit())
+    {
+        return Err(Status::invalid_argument(
+            "Connect-Timeout-Ms must contain 1 to 10 ASCII digits",
+        ));
     }
-    Some(Duration::from_millis(ms))
+    let ms: u64 = raw
+        .parse()
+        .map_err(|_| Status::invalid_argument("Connect-Timeout-Ms is out of range"))?;
+    if ms == 0 {
+        return Err(Status::invalid_argument(
+            "Connect-Timeout-Ms must be greater than zero",
+        ));
+    }
+    Ok(Some(Duration::from_millis(ms)))
 }
 
 fn content_type(headers: &HeaderMap) -> Option<String> {
@@ -546,9 +699,12 @@ fn encode_response(
     if want_proto {
         let bytes = msg.encode_to_vec();
         if bytes.len() > max_response_bytes {
-            return error_response(&Status::resource_exhausted(format!(
-                "unary response exceeds {max_response_bytes} byte limit"
-            )));
+            return error_response_with_limit(
+                &Status::resource_exhausted(format!(
+                    "unary response exceeds {max_response_bytes} byte limit"
+                )),
+                max_response_bytes,
+            );
         }
         let mut response = (
             StatusCode::OK,
@@ -566,12 +722,18 @@ fn encode_response(
     let mut buf = Vec::with_capacity(128);
     let mut ser = serde_json::Serializer::new(&mut buf);
     if let Err(e) = msg.serialize_with_options(&mut ser, &opts) {
-        return error_response(&Status::internal(format!("marshal response: {e}")));
+        return error_response_with_limit(
+            &Status::internal(format!("marshal response: {e}")),
+            max_response_bytes,
+        );
     }
     if buf.len() > max_response_bytes {
-        return error_response(&Status::resource_exhausted(format!(
-            "unary response exceeds {max_response_bytes} byte limit"
-        )));
+        return error_response_with_limit(
+            &Status::resource_exhausted(format!(
+                "unary response exceeds {max_response_bytes} byte limit"
+            )),
+            max_response_bytes,
+        );
     }
     let mut response = (
         StatusCode::OK,
@@ -614,6 +776,52 @@ fn error_response(status: &Status) -> Response {
         .into_response();
     append_response_metadata(response.headers_mut(), status.metadata(), true);
     response
+}
+
+fn error_response_with_limit(status: &Status, max_response_bytes: usize) -> Response {
+    let mut code = status.code();
+    let mut body = serde_json::to_vec(&error_payload(status)).unwrap_or_default();
+    let mut preserve_metadata = true;
+    if max_response_bytes > 0 && body.len() > max_response_bytes {
+        code = Code::ResourceExhausted;
+        body = serde_json::to_vec(&json!({"code": "resource_exhausted"})).unwrap_or_default();
+        preserve_metadata = false;
+        if body.len() > max_response_bytes {
+            body.clear();
+        }
+    }
+    let http_status =
+        StatusCode::from_u16(http_status(code)).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let mut response = (
+        http_status,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(CONTENT_TYPE_JSON),
+        )],
+        body,
+    )
+        .into_response();
+    if preserve_metadata {
+        append_response_metadata(response.headers_mut(), status.metadata(), true);
+    }
+    response
+}
+
+fn unsupported_media_type_response(message: &str, max_response_bytes: usize) -> Response {
+    let status = Status::invalid_argument(message);
+    let mut body = serde_json::to_vec(&error_payload(&status)).unwrap_or_default();
+    if max_response_bytes > 0 && body.len() > max_response_bytes {
+        body.clear();
+    }
+    (
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(CONTENT_TYPE_JSON),
+        )],
+        body,
+    )
+        .into_response()
 }
 
 fn append_response_metadata(headers: &mut HeaderMap, metadata: &MetadataMap, trailers: bool) {
@@ -684,11 +892,27 @@ fn connect_end_stream_metadata(metadata: &MetadataMap) -> BTreeMap<String, Vec<S
 }
 
 fn reserved_response_metadata(key: &str) -> bool {
-    crate::server::reserved_incoming_metadata(key)
-        || key.starts_with("trailer-")
+    let key = key.to_ascii_lowercase();
+    let logical_key = key.strip_suffix("-bin").unwrap_or(&key);
+    logical_key.starts_with("grpc-")
+        || logical_key.starts_with("connect-")
+        || logical_key.starts_with("invariant-internal-")
+        || logical_key.starts_with("x-invariant-internal-")
+        || logical_key.starts_with("trailer-")
         || matches!(
-            key,
-            "content-encoding" | "accept-encoding" | "content-range"
+            logical_key,
+            "te" | "host"
+                | "connection"
+                | "keep-alive"
+                | "proxy-connection"
+                | "transfer-encoding"
+                | "upgrade"
+                | "content-length"
+                | "content-type"
+                | "content-encoding"
+                | "accept-encoding"
+                | "content-range"
+                | "trailer"
         )
 }
 
@@ -718,4 +942,76 @@ fn invalid_argument_from_json_error(msg: &str) -> Status {
         );
     }
     Status::invalid_argument(format!("proto: {msg}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[tokio::test]
+    async fn projection_deadline_is_checked_before_poll_and_after_completion() {
+        let projection = ProjectionContext::new(Some(Duration::from_millis(1)));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let polled = Cell::new(false);
+        let result = until_projection_deadline(&projection, async {
+            polled.set(true);
+            Ok(())
+        })
+        .await;
+        assert_eq!(result.unwrap_err().code(), Code::DeadlineExceeded);
+        assert!(!polled.get());
+
+        let projection = ProjectionContext::new(Some(Duration::from_millis(1)));
+        let result = until_projection_deadline(&projection, async {
+            let finished_at = std::time::Instant::now() + Duration::from_millis(10);
+            while std::time::Instant::now() < finished_at {
+                std::hint::spin_loop();
+            }
+            Ok(())
+        })
+        .await;
+        assert_eq!(result.unwrap_err().code(), Code::DeadlineExceeded);
+        assert!(projection.is_cancelled());
+    }
+
+    #[test]
+    fn connect_timeout_requires_a_positive_unpadded_ascii_integer() {
+        for invalid in [
+            b"0".as_slice(),
+            b"-1",
+            b"+1",
+            b" 1",
+            b"1 ",
+            b"1.0",
+            b"abc",
+            b"12345678901",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                CONNECT_TIMEOUT_HEADER,
+                HeaderValue::from_bytes(invalid).unwrap(),
+            );
+            assert_eq!(
+                parse_connect_timeout(&headers).unwrap_err().code(),
+                Code::InvalidArgument,
+                "{invalid:?}"
+            );
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.insert(CONNECT_TIMEOUT_HEADER, HeaderValue::from_static("1"));
+        assert_eq!(
+            parse_connect_timeout(&headers).unwrap(),
+            Some(Duration::from_millis(1))
+        );
+        headers.insert(
+            CONNECT_TIMEOUT_HEADER,
+            HeaderValue::from_static("9999999999"),
+        );
+        assert_eq!(
+            parse_connect_timeout(&headers).unwrap(),
+            Some(Duration::from_millis(9_999_999_999))
+        );
+    }
 }

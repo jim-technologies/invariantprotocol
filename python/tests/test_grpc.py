@@ -3,6 +3,7 @@
 import asyncio
 import base64
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import greet_pb2
 import greet_pb2_grpc
@@ -12,10 +13,12 @@ import pytest
 from conftest import DESCRIPTOR_PATH, register_greet
 from google.protobuf import any_pb2, descriptor_pool, message_factory
 from google.rpc import error_details_pb2, status_pb2
+from invariantprotocol.conformance.v1 import native_cardinality_pb2 as cardinality_pb2
+from invariantprotocol.conformance.v1 import native_cardinality_pb2_grpc as cardinality_pb2_grpc
 
 from invariant import Server
-from invariant.projection_context import ProjectionContext
-from invariant.projections.grpc import _projected_handlers
+
+CARDINALITY_DESCRIPTOR_PATH = Path(__file__).parents[2] / "conformance" / "proto" / "descriptor.binpb"
 
 
 def _stub(channel: grpc.aio.Channel, method: str, resp_type: str):
@@ -122,6 +125,36 @@ async def test_grpc_reflection(server):
         await server._stop_grpc()
 
 
+async def test_grpc_reflection_is_available_without_application_services():
+    from grpc_reflection.v1alpha import reflection, reflection_pb2, reflection_pb2_grpc
+
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    # Exercise the replacement path too: a descriptor image may already carry
+    # reflection.proto, but Invariant must expose grpcio's canonical service
+    # descriptor rather than the application-filtered copy.
+    assert server._fds is not None
+    reflection_pb2.DESCRIPTOR.CopyToProto(server._fds.file.add())
+    native = server.grpc_server()
+    port = native.add_insecure_port("127.0.0.1:0")
+    await native.start()
+    try:
+        async with grpc.aio.insecure_channel(f"127.0.0.1:{port}") as channel:
+            stub = reflection_pb2_grpc.ServerReflectionStub(channel)
+
+            async def requests():
+                yield reflection_pb2.ServerReflectionRequest(list_services="")
+                yield reflection_pb2.ServerReflectionRequest(file_containing_symbol=reflection.SERVICE_NAME)
+                yield reflection_pb2.ServerReflectionRequest(file_containing_symbol="greet.v1.GreetService")
+
+            responses = [response async for response in stub.ServerReflectionInfo(requests())]
+
+        assert [service.name for service in responses[0].list_services_response.service] == [reflection.SERVICE_NAME]
+        assert responses[1].file_descriptor_response.file_descriptor_proto
+        assert responses[2].error_response.error_code == grpc.StatusCode.NOT_FOUND.value[0]
+    finally:
+        await server.stop(grace=0)
+
+
 async def test_public_grpc_server_accepts_native_controls_and_builds_once():
     native_methods: list[str] = []
     shared_calls: list[tuple[type, str]] = []
@@ -208,72 +241,158 @@ async def test_public_grpc_server_accepts_native_controls_and_builds_once():
         migration_pool.shutdown(wait=True)
 
 
-async def test_shared_interceptor_wraps_native_client_streaming_and_bidi_once():
-    calls: list[tuple[str, tuple[tuple[str, str], ...]]] = []
-    terminal_requests: list[type] = []
+async def test_generated_native_service_supports_every_cardinality_with_shared_interceptor_once():
+    calls: list[str] = []
+    request_types: list[tuple[str, type]] = []
 
     class SharedInterceptor(grpc.aio.ServerInterceptor):
         async def intercept_service(self, continuation, handler_call_details):
-            calls.append((handler_call_details.method, tuple(handler_call_details.invocation_metadata)))
-            return await continuation(handler_call_details)
+            method = handler_call_details.method
+            calls.append(method)
+            handler = await continuation(handler_call_details)
+            assert handler is not None
 
-    async def upload(request_iterator, context):
-        del context
-        names = []
-        async for request in request_iterator:
-            terminal_requests.append(type(request))
-            names.append(request.name)
-        return greet_pb2.GreetResponse(message=",".join(names))
+            if not handler.request_streaming and not handler.response_streaming:
+                terminal = handler.unary_unary
+                assert terminal is not None
 
-    async def chat(request_iterator, context):
-        del context
-        async for request in request_iterator:
-            terminal_requests.append(type(request))
-            yield greet_pb2.GreetResponse(message=request.name)
+                async def unary_unary(request, context):
+                    request_types.append((method, type(request)))
+                    return await terminal(request, context)
 
-    server = Server.from_descriptor(DESCRIPTOR_PATH)
-    register_greet(server, object())
+                return grpc.unary_unary_rpc_method_handler(
+                    unary_unary,
+                    request_deserializer=handler.request_deserializer,
+                    response_serializer=handler.response_serializer,
+                )
+
+            if not handler.request_streaming and handler.response_streaming:
+                terminal = handler.unary_stream
+                assert terminal is not None
+
+                async def unary_stream(request, context):
+                    request_types.append((method, type(request)))
+                    async for response in terminal(request, context):
+                        yield response
+
+                return grpc.unary_stream_rpc_method_handler(
+                    unary_stream,
+                    request_deserializer=handler.request_deserializer,
+                    response_serializer=handler.response_serializer,
+                )
+
+            if handler.request_streaming and not handler.response_streaming:
+                terminal = handler.stream_unary
+                assert terminal is not None
+
+                async def stream_unary(request_iterator, context):
+                    async def typed_requests():
+                        async for request in request_iterator:
+                            request_types.append((method, type(request)))
+                            yield request
+
+                    return await terminal(typed_requests(), context)
+
+                return grpc.stream_unary_rpc_method_handler(
+                    stream_unary,
+                    request_deserializer=handler.request_deserializer,
+                    response_serializer=handler.response_serializer,
+                )
+
+            terminal = handler.stream_stream
+            assert terminal is not None
+
+            async def stream_stream(request_iterator, context):
+                async def typed_requests():
+                    async for request in request_iterator:
+                        request_types.append((method, type(request)))
+                        yield request
+
+                async for response in terminal(typed_requests(), context):
+                    yield response
+
+            return grpc.stream_stream_rpc_method_handler(
+                stream_stream,
+                request_deserializer=handler.request_deserializer,
+                response_serializer=handler.response_serializer,
+            )
+
+    class AllCardinalityServicer(cardinality_pb2_grpc.AllCardinalityServiceServicer):
+        async def Unary(self, request, context):
+            del context
+            return cardinality_pb2.UnaryResponse(value=f"unary:{request.value}")
+
+        async def ServerStream(self, request, context):
+            del context
+            for index in range(2):
+                yield cardinality_pb2.ServerStreamResponse(value=f"server:{request.value}:{index}")
+
+        async def ClientStream(self, request_iterator, context):
+            del context
+            values = [request.value async for request in request_iterator]
+            return cardinality_pb2.ClientStreamResponse(value=f"client:{','.join(values)}")
+
+        async def Bidi(self, request_iterator, context):
+            del context
+            async for request in request_iterator:
+                yield cardinality_pb2.BidiResponse(value=f"bidi:{request.value}")
+
+    server = Server.from_descriptor(str(CARDINALITY_DESCRIPTOR_PATH))
     server.use(SharedInterceptor())
-    registered = server._registered_services["greet.v1.GreetService"]
-    registered["Upload"] = grpc.stream_unary_rpc_method_handler(
-        upload,
-        request_deserializer=greet_pb2.GreetRequest.FromString,
-        response_serializer=greet_pb2.GreetResponse.SerializeToString,
-    )
-    registered["Chat"] = grpc.stream_stream_rpc_method_handler(
-        chat,
-        request_deserializer=greet_pb2.GreetRequest.FromString,
-        response_serializer=greet_pb2.GreetResponse.SerializeToString,
-    )
+    cardinality_pb2_grpc.add_AllCardinalityServiceServicer_to_server(AllCardinalityServicer(), server)
+    native = server.grpc_server()
+    port = native.add_insecure_port("127.0.0.1:0")
+    await native.start()
+    try:
+        async with grpc.aio.insecure_channel(f"127.0.0.1:{port}") as channel:
+            stub = cardinality_pb2_grpc.AllCardinalityServiceStub(channel)
+            unary = await stub.Unary(cardinality_pb2.UnaryRequest(value="u"))
+            server_stream = [
+                response.value async for response in stub.ServerStream(cardinality_pb2.ServerStreamRequest(value="s"))
+            ]
 
-    handlers = _projected_handlers(server)["greet.v1.GreetService"]
-    context = ProjectionContext(
-        peer="test:client-streaming",
-        invocation_metadata=(("x-request-id", "stream-123"),),
-    )
+            async def client_requests():
+                for value in ("a", "b"):
+                    yield cardinality_pb2.ClientStreamRequest(value=value)
 
-    async def upload_requests():
-        yield greet_pb2.GreetRequest(name="one")
-        yield greet_pb2.GreetRequest(name="two")
+            client_stream = await stub.ClientStream(client_requests())
 
-    upload_terminal = handlers["Upload"].stream_unary
-    assert upload_terminal is not None
-    response = await upload_terminal(upload_requests(), context)
-    assert response.message == "one,two"
+            async def bidi_requests():
+                for value in ("x", "y"):
+                    yield cardinality_pb2.BidiRequest(value=value)
 
-    async def chat_requests():
-        yield greet_pb2.GreetRequest(name="three")
-        yield greet_pb2.GreetRequest(name="four")
+            bidi = [response.value async for response in stub.Bidi(bidi_requests())]
 
-    chat_terminal = handlers["Chat"].stream_stream
-    assert chat_terminal is not None
-    streamed = [response.message async for response in chat_terminal(chat_requests(), context)]
-    assert streamed == ["three", "four"]
+        assert unary.value == "unary:u"
+        assert server_stream == ["server:s:0", "server:s:1"]
+        assert client_stream.value == "client:a,b"
+        assert bidi == ["bidi:x", "bidi:y"]
+    finally:
+        await server.stop(grace=0)
+
     assert calls == [
-        ("/greet.v1.GreetService/Upload", (("x-request-id", "stream-123"),)),
-        ("/greet.v1.GreetService/Chat", (("x-request-id", "stream-123"),)),
+        "/invariantprotocol.conformance.v1.AllCardinalityService/Unary",
+        "/invariantprotocol.conformance.v1.AllCardinalityService/ServerStream",
+        "/invariantprotocol.conformance.v1.AllCardinalityService/ClientStream",
+        "/invariantprotocol.conformance.v1.AllCardinalityService/Bidi",
     ]
-    assert terminal_requests == [greet_pb2.GreetRequest] * 4
+    assert request_types == [
+        ("/invariantprotocol.conformance.v1.AllCardinalityService/Unary", cardinality_pb2.UnaryRequest),
+        (
+            "/invariantprotocol.conformance.v1.AllCardinalityService/ServerStream",
+            cardinality_pb2.ServerStreamRequest,
+        ),
+        (
+            "/invariantprotocol.conformance.v1.AllCardinalityService/ClientStream",
+            cardinality_pb2.ClientStreamRequest,
+        ),
+        (
+            "/invariantprotocol.conformance.v1.AllCardinalityService/ClientStream",
+            cardinality_pb2.ClientStreamRequest,
+        ),
+        ("/invariantprotocol.conformance.v1.AllCardinalityService/Bidi", cardinality_pb2.BidiRequest),
+        ("/invariantprotocol.conformance.v1.AllCardinalityService/Bidi", cardinality_pb2.BidiRequest),
+    ]
 
 
 async def test_stop_grace_drains_inflight_native_rpc():

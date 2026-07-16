@@ -35,6 +35,7 @@ fmt-check: ## Verify formatting without modifying files.
 	cd python && ruff format --check src/ tests/ ../scripts/
 	cd rust && cargo fmt --all --check
 	cd proto && buf format --diff --exit-code
+	cd conformance/proto && buf format --diff --exit-code
 
 lint: ## Run Go, Python, Rust, and proto linters.
 	actionlint
@@ -42,6 +43,7 @@ lint: ## Run Go, Python, Rust, and proto linters.
 	cd python && ruff check src/ tests/ ../scripts/
 	cd rust && cargo clippy --workspace --all-targets --locked -- -D warnings
 	cd proto && buf lint
+	cd conformance/proto && buf lint
 
 typecheck: node_modules/.package-lock.json ## Run Python and TypeScript static type checks.
 	cd python && uv run ty check
@@ -67,6 +69,7 @@ fmt: ## Format code and apply safe linter fixes.
 	cd python && ruff format src/ tests/ ../scripts/ && ruff check --fix src/ tests/ ../scripts/
 	cd rust && cargo fmt --all
 	cd proto && buf format -w
+	cd conformance/proto && buf format -w
 
 test: test-go test-python test-rust test-typescript ## Run all language test suites.
 
@@ -99,6 +102,10 @@ generate: node_modules/.package-lock.json ## Regenerate protobuf stubs.
 	cd python/tests/proto && buf build -o descriptor.binpb
 	cd python/tests/proto && buf generate descriptor.binpb
 	cd python/tests/proto && buf generate --template buf.validate.gen.yaml
+	cd python/tests/proto && uv run --locked --project ../.. python -m grpc_tools.protoc --descriptor_set_in=descriptor.binpb --grpc_python_out=gen greet.proto
+	cd conformance/proto && buf build -o descriptor.binpb
+	cd conformance/proto && buf generate descriptor.binpb
+	cd conformance/proto && uv run --locked --project ../../python python -m grpc_tools.protoc --descriptor_set_in=descriptor.binpb --grpc_python_out=../../python/tests/proto/gen invariantprotocol/conformance/v1/native_cardinality.proto
 	go run ./go/cmd/invariant-schema compile --descriptor python/tests/proto/descriptor.binpb --message data.v1.CanonicalRecord --message data.v1.Proto2Record --output testdata/data.schema.binpb
 
 deps: ## Tidy/update language dependency lockfiles.
@@ -114,8 +121,8 @@ breaking: ## Check proto breaking changes against BASE_REF.
 
 verify-generate: ## Verify generated protobuf stubs are committed.
 	$(MAKE) generate
-	@if [ -n "$$(git status --porcelain --untracked-files=all -- proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb typescript/src/gen typescript/tests/gen)" ]; then \
+	@if [ -n "$$(git status --porcelain --untracked-files=all -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb typescript/src/gen typescript/tests/gen)" ]; then \
 		echo "Generated files are out of date. Run 'make generate' and commit the results."; \
-		git status --short -- proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb typescript/src/gen typescript/tests/gen; \
+		git status --short -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb typescript/src/gen typescript/tests/gen; \
 		exit 1; \
 	fi

@@ -123,9 +123,9 @@
       "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
       "tests": {
         "go": ["go/cli_test.go", "go/streaming_test.go"],
-        "python": ["python/tests/test_cli.py"],
-        "rust": ["rust/tests/streaming.rs"],
-        "typescript": ["typescript/tests/runtime.test.ts"]
+        "python": ["python/tests/test_cli.py", "python/tests/test_streaming.py"],
+        "rust": ["rust/tests/cli.rs", "rust/tests/streaming.rs"],
+        "typescript": ["typescript/tests/cli.test.ts", "typescript/tests/runtime.test.ts"]
       }
     },
     {

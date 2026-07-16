@@ -11,7 +11,6 @@ import {
   toJson,
 } from "@bufbuild/protobuf";
 import {
-  createHandlerContext,
   createServiceImplSpec,
   type HandlerContext as ConnectHandlerContext,
   type Interceptor,
@@ -29,6 +28,7 @@ import {
 } from "@bufbuild/protobuf/wkt";
 import type * as grpc from "@grpc/grpc-js";
 
+import { createDeadlineHandlerContext } from "./deadline.js";
 import { ParsedDescriptor, type ServiceInfo } from "./descriptor.js";
 import { failedPrecondition, InvariantError, normalizeHandlerError, notFound } from "./errors.js";
 import {
@@ -64,6 +64,10 @@ export type StreamHandler = (
   request: MessageShape<DescMessage>,
   context: HandlerContext,
 ) => AsyncIterable<unknown>;
+export type RemoteServiceSpec = {
+  service: DescService;
+  handlers: ReadonlyMap<string, UnaryHandler>;
+};
 
 export type Tool = {
   name: string;
@@ -95,7 +99,7 @@ export type ToolCatalogEntry = {
 };
 
 export const SERVER_NAME = "invariant-protocol";
-export const SERVER_VERSION = "0.7.0";
+export const SERVER_VERSION = "0.7.1";
 const DEFAULT_HTTP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_HTTP_METADATA_KEYS = ["traceparent", "tracestate", "baggage", "x-request-id"] as const;
 
@@ -122,6 +126,7 @@ export class Server {
 
   private readonly interceptors: Interceptor[] = [];
   private readonly services = new Map<string, ServiceImplSpec>();
+  private readonly remoteServices = new Map<string, RemoteServiceSpec>();
   private readonly methodConfigs = new Map<string, MethodConfig>();
   private includes: string[] = [];
   private excludes: string[] = [];
@@ -135,6 +140,7 @@ export class Server {
   readonly [serverInternal] = {
     freeze: () => this.freezeConfiguration(),
     registeredServiceSpecs: (): readonly ServiceImplSpec[] => [...this.services.values()],
+    registeredRemoteServiceSpecs: (): readonly RemoteServiceSpec[] => [...this.remoteServices.values()],
     invokeUnaryMethod: (
       method: DescMethod,
       handler: UnaryHandler,
@@ -251,7 +257,7 @@ export class Server {
   register<T extends DescService>(service: T, implementation: Partial<ServiceImpl<T>>): void {
     this.assertMutable("service registration");
     const descriptorService = this.validateGeneratedService(service);
-    if (this.services.has(service.typeName)) {
+    if (this.services.has(service.typeName) || this.remoteServices.has(service.typeName)) {
       throw new Error(`Service ${service.typeName} is already registered.`);
     }
 
@@ -297,17 +303,17 @@ export class Server {
   ): void {
     this.assertMutable("gRPC proxy registration");
     const descriptorService = this.validateGeneratedService(service);
+    if (this.services.has(service.typeName) || this.remoteServices.has(service.typeName)) {
+      throw new Error(`Service ${service.typeName} is already registered.`);
+    }
     const proxyTools: Tool[] = [];
+    const handlers = new Map<string, UnaryHandler>();
     for (const method of service.methods) {
       const methodInfo = descriptorService.methods.get(method.name);
       if (!methodInfo) {
         throw new InvariantError("internal", `missing method descriptor for ${service.typeName}.${method.name}`);
       }
-      if (
-        methodInfo.clientStreaming ||
-        methodInfo.serverStreaming ||
-        !this.shouldInclude(service.typeName, method.name)
-      ) {
+      if (methodInfo.clientStreaming || methodInfo.serverStreaming) {
         continue;
       }
       if (typeof (client as unknown as Record<string, unknown>)[method.localName] !== "function") {
@@ -329,11 +335,15 @@ export class Server {
         outputDesc: method.output,
         methodDesc: method,
       };
-      tool.handler = grpcProxyHandler(client, method.localName, tool, defaultCallOptions);
-      if (this.tools.has(tool.name) || proxyTools.some((candidate) => candidate.name === tool.name)) {
-        throw new Error(`Tool ${tool.name} is already registered.`);
+      tool.handler = grpcProxyHandler(client, method.localName, defaultCallOptions);
+      handlers.set(method.localName, tool.handler as UnaryHandler);
+      if (this.shouldInclude(service.typeName, method.name)) {
+        proxyTools.push(tool);
       }
-      proxyTools.push(tool);
+    }
+    this.assertToolsAvailable(proxyTools);
+    if (handlers.size > 0) {
+      this.remoteServices.set(service.typeName, { service, handlers });
     }
     for (const tool of proxyTools) {
       this.addTool(tool);
@@ -346,10 +356,12 @@ export class Server {
     const rules = httpRulesByMethodPath(this);
     const connection = new HTTPConnection(baseUrl, options);
     const stagedTools: Tool[] = [];
+    const stagedServices: RemoteServiceSpec[] = [];
 
     for (const [svcFullName, svc] of services) {
+      const handlers = new Map<string, UnaryHandler>();
       for (const [methodName, method] of svc.methods) {
-        if (method.clientStreaming || method.serverStreaming || !this.shouldInclude(svcFullName, methodName)) {
+        if (method.clientStreaming || method.serverStreaming) {
           continue;
         }
         const inputDesc = this.parsed.getMessage(method.inputType);
@@ -377,10 +389,24 @@ export class Server {
           methodDesc: method.desc,
         };
         tool.handler = httpProxyHandler(this, connection, binding, tool, methodPath);
-        stagedTools.push(tool);
+        handlers.set(method.desc.localName, tool.handler as UnaryHandler);
+        if (this.shouldInclude(svcFullName, methodName)) {
+          stagedTools.push(tool);
+        }
+      }
+      if (handlers.size > 0) {
+        stagedServices.push({ service: svc.desc, handlers });
+      }
+    }
+    for (const spec of stagedServices) {
+      if (this.services.has(spec.service.typeName) || this.remoteServices.has(spec.service.typeName)) {
+        throw new Error(`Service ${spec.service.typeName} is already registered.`);
       }
     }
     this.assertToolsAvailable(stagedTools);
+    for (const spec of stagedServices) {
+      this.remoteServices.set(spec.service.typeName, spec);
+    }
     for (const tool of stagedTools) {
       this.addTool(tool);
     }
@@ -630,7 +656,7 @@ export class Server {
 
   private assertProjectionFiltersMutable(): void {
     this.assertMutable("projection filters");
-    if (this.services.size > 0 || this.toolStore.size > 0) {
+    if (this.services.size > 0 || this.remoteServices.size > 0 || this.toolStore.size > 0) {
       throw new Error("Invariant projection filters must be configured before service registration.");
     }
   }
@@ -649,7 +675,7 @@ export class Server {
   }
 
   private createContext(method: DescMethod, options: ProjectionContextOptions): ManagedHandlerContext {
-    return createHandlerContext({
+    return createDeadlineHandlerContext({
       service: method.parent,
       method,
       protocolName: options.protocolName,
@@ -852,25 +878,26 @@ function isMessageFor(desc: DescMessage, value: unknown): boolean {
 }
 
 function reservedInboundMetadata(key: string): boolean {
+  const logicalKey = key.endsWith("-bin") ? key.slice(0, -4) : key;
   if (
-    key.startsWith("grpc-") ||
-    key.startsWith("connect-") ||
-    key.startsWith("invariant-internal-") ||
-    key.startsWith("x-invariant-internal-") ||
-    key.startsWith("x-tenant") ||
-    key.startsWith("x-principal") ||
-    key.startsWith("x-role") ||
-    key.startsWith("x-user") ||
-    key.startsWith("x-auth") ||
-    key.startsWith("x-internal-") ||
-    key.startsWith("internal-") ||
-    key.startsWith("tenant-") ||
-    key.startsWith("principal-") ||
-    key.startsWith("role-") ||
-    key.startsWith("user-") ||
-    key.startsWith("auth-") ||
-    key.startsWith("subject-") ||
-    key.startsWith("identity-")
+    logicalKey.startsWith("grpc-") ||
+    logicalKey.startsWith("connect-") ||
+    logicalKey.startsWith("invariant-internal-") ||
+    logicalKey.startsWith("x-invariant-internal-") ||
+    logicalKey.startsWith("x-tenant") ||
+    logicalKey.startsWith("x-principal") ||
+    logicalKey.startsWith("x-role") ||
+    logicalKey.startsWith("x-user") ||
+    logicalKey.startsWith("x-auth") ||
+    logicalKey.startsWith("x-internal-") ||
+    logicalKey.startsWith("internal-") ||
+    logicalKey.startsWith("tenant-") ||
+    logicalKey.startsWith("principal-") ||
+    logicalKey.startsWith("role-") ||
+    logicalKey.startsWith("user-") ||
+    logicalKey.startsWith("auth-") ||
+    logicalKey.startsWith("subject-") ||
+    logicalKey.startsWith("identity-")
   ) {
     return true;
   }
@@ -898,7 +925,7 @@ function reservedInboundMetadata(key: string): boolean {
     "content-length",
     "content-type",
     "trailer",
-  ]).has(key);
+  ]).has(logicalKey);
 }
 
 function validMetadataKey(key: string): boolean {

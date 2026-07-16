@@ -145,8 +145,11 @@ func fieldDiagnostics(field *datav1.Field, path string) []*datav1.MappingDiagnos
 		compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED
 		message = "Parquet has no duration logical type; exact nanoseconds use INT64, whose range is narrower than protobuf Duration"
 	case *datav1.DataType_Json:
-		compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED
-		message = "dynamic protobuf JSON is encoded as RFC 8259 text with Parquet's JSON logical annotation"
+		compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED
+		message = fmt.Sprintf(
+			"protobuf %s is encoded as RFC 8259 text with Parquet's JSON logical annotation; %s",
+			kind.Json.GetKind(), jsonRangeReduction(kind.Json.GetKind()),
+		)
 	case *datav1.DataType_Enum:
 		if kind.Enum.GetClosed() {
 			compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED
@@ -167,6 +170,19 @@ func fieldDiagnostics(field *datav1.Field, path string) []*datav1.MappingDiagnos
 		Compatibility: compatibility,
 		Message:       message,
 	}}, children...)
+}
+
+func jsonRangeReduction(kind datav1.JsonKind) string {
+	switch kind {
+	case datav1.JsonKind_JSON_KIND_ANY:
+		return "standard protobuf JSON requires each populated Any type URL to resolve to a known message descriptor; embedded Struct, Value, and ListValue numbers must also be finite"
+	case datav1.JsonKind_JSON_KIND_STRUCT,
+		datav1.JsonKind_JSON_KIND_VALUE,
+		datav1.JsonKind_JSON_KIND_LIST_VALUE:
+		return "standard protobuf JSON requires Struct, Value, and ListValue numbers to be finite; NaN and infinities are not representable"
+	default:
+		return "standard protobuf JSON requires an explicitly supported dynamic JSON kind"
+	}
 }
 
 func joinPath(parent, child string) string {

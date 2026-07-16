@@ -176,23 +176,29 @@ func loadIntoProto(msg proto.Message, value string) error {
 // loadFileIntoProto reads a file and deserializes it into a proto.Message.
 // Supported extensions: .json, .binpb, .pb.
 func loadFileIntoProto(msg proto.Message, path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read file %s: %w", path, err)
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != ".json" && ext != ".binpb" && ext != ".pb" {
+		return invalidArgumentError(fmt.Sprintf("unsupported request file extension %q (use .json, .binpb, or .pb)", ext))
 	}
 
-	ext := strings.ToLower(filepath.Ext(path))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return invalidArgumentError(fmt.Sprintf("read request file %s: %v", path, err))
+	}
+
 	switch ext {
 	case ".binpb", ".pb":
-		return proto.Unmarshal(data, msg)
+		if err := proto.Unmarshal(data, msg); err != nil {
+			return invalidArgumentError(fmt.Sprintf("decode binary proto: %v", err))
+		}
+		return nil
 	case ".json":
 		if err := protojson.Unmarshal(data, msg); err != nil {
 			return invalidArgumentFromJSONError(err)
 		}
 		return nil
-	default:
-		return invalidArgumentError(fmt.Sprintf("unsupported request file extension %q (use .json, .binpb, or .pb)", ext))
 	}
+	return nil
 }
 
 // serveCLI reads args from os.Args and writes the result(s) to stdout.
@@ -237,6 +243,10 @@ func splitCLIArgs(args []string) (serviceName, methodName, requestValue string, 
 			return "", "", "", errors.New("missing value after -r")
 		}
 		requestValue = args[i]
+		i++
+	}
+	if i < len(args) {
+		return "", "", "", fmt.Errorf("unexpected argument: %s", args[i])
 	}
 
 	return serviceName, methodName, requestValue, nil

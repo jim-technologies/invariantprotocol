@@ -23,25 +23,32 @@ pub(crate) fn build_reflection(
     >,
     tonic_reflection::server::Error,
 > {
-    let reflected_services = server.reflected_service_names();
+    let reflected_services = server.reflected_service_methods();
     let mut descriptors = FileDescriptorSet::decode(server.parsed().raw_fds.as_slice())
         .expect("descriptor image was validated when the server was constructed");
     for file in &mut descriptors.file {
         let package = file.package.as_deref().unwrap_or_default();
-        file.service.retain(|service| {
+        file.service.retain_mut(|service| {
             let name = if package.is_empty() {
                 service.name().to_string()
             } else {
                 format!("{package}.{}", service.name())
             };
-            reflected_services.contains(&name)
+            let Some(methods) = reflected_services.get(&name) else {
+                return false;
+            };
+            service
+                .method
+                .retain(|method| methods.contains(method.name()));
+            true
         });
+        file.source_code_info = None;
     }
 
     let mut builder = tonic_reflection::server::Builder::configure()
         .register_file_descriptor_set(descriptors)
         .with_service_name("grpc.reflection.v1.ServerReflection");
-    for service in reflected_services {
+    for service in reflected_services.keys() {
         builder = builder.with_service_name(service);
     }
     builder.build_v1()

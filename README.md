@@ -193,6 +193,9 @@ message limits, and graceful shutdown. The generated
 `register_<service>_server_with` form accepts a caller-supplied Tonic/Tower
 wrapper for native compression, limits, and layers.
 
+Native reflection is always enabled and publishes only the services and methods
+actually served by Invariant, including registered unary remote proxies.
+
 ## Optional projections
 
 Every optional projection calls the same registered implementation directly.
@@ -240,12 +243,15 @@ Client-streaming and bidi methods are native-gRPC only.
 ### MCP Streamable HTTP
 
 Invariant implements the non-SSE tool-server subset of MCP `2025-11-25`.
-Clients send one JSON-RPC message per `POST /mcp` and advertise both
-`application/json` and `text/event-stream` in `Accept`; this implementation
-returns JSON, not SSE. Initialization may omit `MCP-Protocol-Version`; later
-requests must send `2025-11-25`. Notifications and client responses return
-`202 Accepted` with an empty body, `GET /mcp` returns `405`, and requests with
-an `Origin` header are rejected by default.
+Clients send one JSON-RPC message per `POST /mcp` with
+`Content-Type: application/json` and advertise both `application/json` and
+`text/event-stream` in `Accept`; this implementation returns JSON, not SSE.
+The initialize request must include `protocolVersion`, `capabilities`, and
+`clientInfo`; if its requested version is unsupported, Invariant negotiates to
+its sole supported version, `2025-11-25`. The initialize HTTP request may omit
+`MCP-Protocol-Version`; later requests must send `2025-11-25`. Notifications
+and client responses return `202 Accepted` with an empty body, `GET /mcp`
+returns `405`, and requests with an `Origin` header are rejected by default.
 
 Supported MCP behavior includes initialization, ping, tool discovery/calls,
 and notifications. Stdio sessions implement `notifications/cancelled` for
@@ -322,6 +328,8 @@ configuration API. Exceeding a projection limit returns `resource_exhausted`.
 
 Native gRPC limits remain ordinary grpc-go, grpcio, Tonic, or grpc-js controls.
 They measure protobuf gRPC messages and do not govern encoded HTTP JSON bytes.
+`Connect-Timeout-Ms` is one absolute request deadline covering body reads,
+decoding, and application dispatch; it is not restarted after decoding.
 
 ## Remote projections
 
@@ -400,12 +408,12 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.7.0`; there are no language-prefixed tags.
+tag `v0.7.1`; new releases do not create language-prefixed tags.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.7.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.7.1
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -415,26 +423,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.7.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.7.1#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.7.0#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.7.1#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.7.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.7.1" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.7.0" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.7.1" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.7.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.7.1"
 ```
 
 For reproducible production builds, replace the tag with a full commit

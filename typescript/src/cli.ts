@@ -7,6 +7,7 @@ import { invalidArgument } from "./errors.js";
 import { serverInternal, type Server, type Tool } from "./server.js";
 
 export async function runCli(server: Server, args: string[]): Promise<string> {
+  server[serverInternal].freeze();
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
     return cliHelp(server);
   }
@@ -94,6 +95,9 @@ function splitArgs(args: string[]): [string, string, string | undefined] {
       throw new Error("Missing value after -r.");
     }
     request = args[3];
+    if (args.length > 4) {
+      throw new Error(`Unexpected argument: ${args[4]}`);
+    }
   }
   return [service, method, request];
 }
@@ -115,17 +119,38 @@ function loadRequest(tool: Tool, value: string | undefined, server: Server) {
 
   if (existsSync(value)) {
     const ext = extname(value).toLowerCase();
-    const data = readFileSync(value);
+    if (ext !== ".json" && ext !== ".binpb" && ext !== ".pb") {
+      throw invalidArgument(`unsupported request file extension: ${ext} (use .json, .binpb, or .pb)`);
+    }
+    let data: Buffer;
+    try {
+      data = readFileSync(value);
+    } catch (error) {
+      throw invalidArgument(`read request file: ${errorMessage(error)}`);
+    }
     if (ext === ".binpb" || ext === ".pb") {
-      return fromBinary(tool.inputDesc, data);
+      try {
+        return fromBinary(tool.inputDesc, data);
+      } catch (error) {
+        throw invalidArgument(`decode binary proto: ${errorMessage(error)}`);
+      }
     }
-    if (ext === ".json") {
-      return fromJsonString(tool.inputDesc, data.toString("utf8"), { registry: server.parsed.registry });
-    }
-    throw invalidArgument(`unsupported request file extension: ${ext} (use .json, .binpb, or .pb)`);
+    return parseJsonRequest(tool, data.toString("utf8"), server);
   }
 
-  return fromJsonString(tool.inputDesc, value, { registry: server.parsed.registry });
+  return parseJsonRequest(tool, value, server);
+}
+
+function parseJsonRequest(tool: Tool, value: string, server: Server) {
+  try {
+    return fromJsonString(tool.inputDesc, value, { registry: server.parsed.registry });
+  } catch (error) {
+    throw invalidArgument(`decode protobuf JSON: ${errorMessage(error)}`);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function typeLabel(schema: Record<string, unknown>): string {

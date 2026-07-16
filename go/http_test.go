@@ -8,12 +8,15 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -286,6 +289,90 @@ func TestHTTPConnectTimeoutMsHonored(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&payload))
 	assert.Equal(t, "deadline_exceeded", payload["code"])
+}
+
+func TestConnectTimeoutMsGrammar(t *testing.T) {
+	t.Run("missing header has no deadline", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodPost, "/", nil)
+		ctx, cancel, err := applyConnectTimeout(request)
+		defer cancel()
+		require.NoError(t, err)
+		_, hasDeadline := ctx.Deadline()
+		assert.False(t, hasDeadline)
+	})
+
+	t.Run("positive integer creates deadline", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodPost, "/", nil)
+		request.Header.Set("Connect-Timeout-Ms", "1")
+		ctx, cancel, err := applyConnectTimeout(request)
+		defer cancel()
+		require.NoError(t, err)
+		_, hasDeadline := ctx.Deadline()
+		assert.True(t, hasDeadline)
+	})
+
+	for _, value := range []string{"", "0", "10000000000", "1.5", "1e3", "+1", "-1", " 1", "1 "} {
+		t.Run("invalid "+value, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/", nil)
+			request.Header.Set("Connect-Timeout-Ms", value)
+			ctx, cancel, err := applyConnectTimeout(request)
+			defer cancel()
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+			_, hasDeadline := ctx.Deadline()
+			assert.False(t, hasDeadline)
+		})
+	}
+}
+
+func TestHTTPRejectsMalformedConnectTimeoutAcrossProjections(t *testing.T) {
+	server := streamServer(t, &streamServicer{})
+	httpServer := httptest.NewServer(server.HTTPHandler())
+	defer httpServer.Close()
+
+	for _, test := range []struct {
+		name        string
+		path        string
+		contentType string
+		body        string
+		mcp         bool
+	}{
+		{
+			name: "unary", path: "/greet.v1.GreetService/Greet",
+			contentType: "application/json", body: `{"name":"x"}`,
+		},
+		{
+			name: "stream", path: "/greet.v1.GreetService/StreamGreet",
+			contentType: connectStreamJSONType, body: "",
+		},
+		{
+			name: "mcp", path: "/mcp", contentType: "application/json",
+			body: `{"jsonrpc":"2.0","id":1,"method":"ping"}`, mcp: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := http.NewRequestWithContext(
+				t.Context(),
+				http.MethodPost,
+				httpServer.URL+test.path,
+				bytes.NewBufferString(test.body),
+			)
+			require.NoError(t, err)
+			request.Header.Set("Content-Type", test.contentType)
+			request.Header.Set("Connect-Timeout-Ms", "0")
+			if test.mcp {
+				request.Header.Set("Accept", "application/json, text/event-stream")
+				request.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
+			}
+			response, err := http.DefaultClient.Do(request)
+			require.NoError(t, err)
+			defer func() { _ = response.Body.Close() }()
+			assert.Equal(t, http.StatusBadRequest, response.StatusCode)
+			var payload map[string]any
+			require.NoError(t, json.NewDecoder(response.Body).Decode(&payload))
+			assert.Equal(t, "invalid_argument", payload["code"])
+		})
+	}
 }
 
 func TestHTTPToolCatalog(t *testing.T) {

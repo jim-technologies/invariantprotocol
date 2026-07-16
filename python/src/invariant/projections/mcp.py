@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from invariant.server import Server
 
 _PROTOCOL_VERSION = "2025-11-25"
+_MAX_SAFE_INTEGER_ID = (1 << 53) - 1
 
 
 async def serve_mcp(server: Server) -> None:
@@ -39,6 +40,7 @@ class _StdioMCP:
         # before the task starts, so a notification arriving on the next read
         # always finds the entry.
         self._inflight: dict[str, asyncio.Task] = {}
+        self._protocol_cancelled: set[str] = set()
 
     async def run(self) -> None:
         reader = await _stdin_reader()
@@ -54,14 +56,21 @@ class _StdioMCP:
                     continue
 
                 try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError as e:
+                    msg = _parse_json(line)
+                except ValueError as e:
                     _write_response(_err(None, -32700, f"Parse error: {e}"))
+                    continue
+                if invalid := _invalid_request_response(msg):
+                    _write_response(invalid)
+                    continue
+                if _is_client_response(msg):
+                    continue
+                if not isinstance(msg, dict):
                     continue
 
                 # Notifications run synchronously — cancellation must take effect
                 # before the next request is read.
-                if msg.get("id") is None:
+                if "id" not in msg:
                     self._handle_notification(msg)
                     continue
 
@@ -77,11 +86,16 @@ class _StdioMCP:
 
                 msg_id = msg.get("id")
                 key = _id_key(msg_id)
-                task = asyncio.create_task(self._handle_request(msg))
+                task = asyncio.create_task(self._handle_request(msg, key))
                 # Register synchronously *before* yielding to the event loop so
                 # an immediately-following notifications/cancelled finds it.
                 self._inflight[key] = task
-                task.add_done_callback(lambda _t, k=key: self._inflight.pop(k, None))
+
+                def finished(_task, *, request_key=key):
+                    self._inflight.pop(request_key, None)
+                    self._protocol_cancelled.discard(request_key)
+
+                task.add_done_callback(finished)
                 background.append(task)
         except BaseException:
             # Cancelling the stdio projection must also cancel application work;
@@ -98,20 +112,24 @@ class _StdioMCP:
             if background:
                 await asyncio.gather(*background, return_exceptions=True)
 
-    async def _handle_request(self, msg: dict) -> None:
+    async def _handle_request(self, msg: dict, key: str) -> None:
         resp = await self._dispatch(msg)
-        if resp is not None:
+        if key not in self._protocol_cancelled and resp is not None:
             _write_response(resp)
 
     def _handle_notification(self, msg: dict) -> None:
         if msg.get("method") != "notifications/cancelled":
             return
-        params = msg.get("params") or {}
-        request_id = params.get("requestId")
-        if request_id is None:
+        params = msg.get("params")
+        if not isinstance(params, dict):
             return
-        task = self._inflight.get(_id_key(request_id))
+        request_id = params.get("requestId")
+        if not _valid_jsonrpc_id(request_id):
+            return
+        key = _id_key(request_id)
+        task = self._inflight.get(key)
         if task is not None:
+            self._protocol_cancelled.add(key)
             task.cancel()
 
     async def _dispatch(self, msg: dict) -> dict | None:
@@ -138,15 +156,31 @@ async def mcp_dispatch(server: Server, msg: dict, context: ProjectionContext | N
     notifications (no id field); otherwise returns the JSON-RPC response dict.
     """
     server._freeze()
+    if invalid := _invalid_request_response(msg):
+        return invalid
+    if _is_client_response(msg):
+        return None
+
     method = msg.get("method", "")
     msg_id = msg.get("id")
     params = msg.get("params", {})
 
-    if msg_id is None:
+    if "id" not in msg:
         # Notification — caller decides what to do (stdio: nothing; HTTP: 202).
         return None
+    if not isinstance(params, dict):
+        return _err(msg_id, -32602, "Invalid params")
 
     if method == "initialize":
+        client_info = params.get("clientInfo")
+        if (
+            not isinstance(params.get("protocolVersion"), str)
+            or not isinstance(params.get("capabilities"), dict)
+            or not isinstance(client_info, dict)
+            or not isinstance(client_info.get("name"), str)
+            or not isinstance(client_info.get("version"), str)
+        ):
+            return _err(msg_id, -32602, "Invalid params")
         return _ok(
             msg_id,
             {
@@ -160,12 +194,63 @@ async def mcp_dispatch(server: Server, msg: dict, context: ProjectionContext | N
         return _ok(msg_id, {"tools": server.tool_catalog()})
 
     if method == "tools/call":
+        if not isinstance(params.get("name"), str) or not isinstance(params.get("arguments", {}), dict):
+            return _err(msg_id, -32602, "Invalid params")
         return await mcp_call_tool(server, msg_id, params, context=context)
 
     if method == "ping":
         return _ok(msg_id, {})
 
     return _err(msg_id, -32601, f"Method not found: {method}")
+
+
+def _invalid_request_response(msg: object) -> dict | None:
+    if not isinstance(msg, dict):
+        return _err(None, -32600, "Invalid Request")
+    if _is_client_response(msg):
+        return None
+    request_id = msg.get("id")
+    if (
+        msg.get("jsonrpc") != "2.0"
+        or not isinstance(msg.get("method"), str)
+        or ("id" in msg and not _valid_jsonrpc_id(request_id))
+    ):
+        return _err(None, -32600, "Invalid Request")
+    return None
+
+
+def _is_client_response(msg: object) -> bool:
+    if not isinstance(msg, dict):
+        return False
+    if msg.get("jsonrpc") != "2.0" or "method" in msg:
+        return False
+    if ("result" in msg) == ("error" in msg):
+        return False
+    if "result" in msg:
+        return "id" in msg and _valid_jsonrpc_id(msg.get("id")) and isinstance(msg.get("result"), dict)
+
+    if "id" in msg and not _valid_jsonrpc_id(msg.get("id")):
+        return False
+    error = msg.get("error")
+    if not isinstance(error, dict):
+        return False
+    code = error.get("code")
+    return isinstance(code, int) and not isinstance(code, bool) and isinstance(error.get("message"), str)
+
+
+def _valid_jsonrpc_id(value: object) -> bool:
+    return isinstance(value, str) or (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and -_MAX_SAFE_INTEGER_ID <= value <= _MAX_SAFE_INTEGER_ID
+    )
+
+
+def _parse_json(value: str | bytes) -> object:
+    def reject_constant(constant: str):
+        raise ValueError(f"non-finite number {constant!r} is not valid JSON")
+
+    return json.loads(value, parse_constant=reject_constant)
 
 
 async def mcp_call_tool(

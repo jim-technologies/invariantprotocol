@@ -9,6 +9,7 @@ use prost::Message;
 use prost_reflect::DynamicMessage;
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::AsyncReadExt;
 
 fn stream_with_error() -> TestGreetService {
@@ -147,11 +148,42 @@ async fn connect_stream_request_limit_is_per_message_and_preallocation_safe() {
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), 429);
+    assert_eq!(response.status(), 200);
+    let envelopes = unpack_all(&response.bytes().await.unwrap());
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0].0, 0x02);
     assert_eq!(
-        response.json::<serde_json::Value>().await.unwrap()["code"],
+        serde_json::from_slice::<serde_json::Value>(&envelopes[0].1).unwrap()["error"]["code"],
         "resource_exhausted"
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn connect_stream_rejects_unsupported_request_flags_in_the_end_envelope() {
+    let (url, task) = start_http(registered_server(TestGreetService::default())).await;
+    let client = reqwest::Client::new();
+    for (flags, expected_code) in [
+        (0x01, "unimplemented"),
+        (0x02, "invalid_argument"),
+        (0x04, "invalid_argument"),
+    ] {
+        let response = client
+            .post(format!("{url}/greet.v1.GreetService/StreamGreet"))
+            .header("content-type", "application/connect+json")
+            .body(envelope(flags, &[]))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let envelopes = unpack_all(&response.bytes().await.unwrap());
+        assert_eq!(envelopes.len(), 1);
+        assert_eq!(envelopes[0].0, 0x02);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&envelopes[0].1).unwrap()["error"]["code"],
+            expected_code
+        );
+    }
     task.abort();
 }
 
@@ -242,6 +274,135 @@ async fn connect_stream_deadline_is_reported_in_the_end_envelope() {
     let envelopes = unpack_all(&response.bytes().await.unwrap());
     let end: serde_json::Value = serde_json::from_slice(&envelopes.last().unwrap().1).unwrap();
     assert_eq!(end["error"]["code"], "deadline_exceeded");
+    task.abort();
+}
+
+#[tokio::test]
+async fn connect_stream_deadline_rejects_a_ready_message_completed_after_expiry() {
+    let service = TestGreetService::default().with_stream(|_| async {
+        let stream = async_stream::stream! {
+            let finished_at = std::time::Instant::now() + Duration::from_millis(20);
+            while std::time::Instant::now() < finished_at {
+                std::hint::spin_loop();
+            }
+            yield Ok(greet::GreetResponse {
+                message: "too late".into(),
+                ..Default::default()
+            });
+        };
+        Ok(Response::new(Box::pin(stream) as BoxResponseStream<_>))
+    });
+    let (url, task) = start_http(registered_server(service)).await;
+    let request = serde_json::to_vec(&json!({"name": "cpu"})).unwrap();
+    let response = reqwest::Client::new()
+        .post(format!("{url}/greet.v1.GreetService/StreamGreet"))
+        .header("content-type", "application/connect+json")
+        .header("connect-timeout-ms", "1")
+        .body(envelope(0, &request))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let envelopes = unpack_all(&response.bytes().await.unwrap());
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0].0, 0x02);
+    let end: serde_json::Value = serde_json::from_slice(&envelopes[0].1).unwrap();
+    assert_eq!(end["error"]["code"], "deadline_exceeded");
+    task.abort();
+}
+
+#[tokio::test]
+async fn connect_stream_control_envelopes_are_independently_bounded() {
+    let service = TestGreetService::default().with_stream(|_| async {
+        let stream = futures::stream::iter([Err(Status::invalid_argument("x".repeat(4096)))]);
+        Ok(Response::new(Box::pin(stream) as BoxResponseStream<_>))
+    });
+    let server = registered_server(service);
+    server.set_max_stream_response_bytes(64).unwrap();
+    let (url, task) = start_http(server).await;
+    let request = serde_json::to_vec(&json!({"name": "error"})).unwrap();
+    let response = reqwest::Client::new()
+        .post(format!("{url}/greet.v1.GreetService/StreamGreet"))
+        .header("content-type", "application/connect+json")
+        .body(envelope(0, &request))
+        .send()
+        .await
+        .unwrap();
+    let envelopes = unpack_all(&response.bytes().await.unwrap());
+    assert_eq!(envelopes.len(), 1);
+    assert!(envelopes[0].1.len() > 64);
+    let end: serde_json::Value = serde_json::from_slice(&envelopes[0].1).unwrap();
+    assert_eq!(end["error"]["code"], "invalid_argument");
+    assert_eq!(end["error"]["message"].as_str().unwrap().len(), 4096);
+    task.abort();
+
+    let empty_service = TestGreetService::default().with_stream(|_| async {
+        Ok(Response::new(
+            Box::pin(futures::stream::empty()) as BoxResponseStream<_>
+        ))
+    });
+    let tiny = registered_server(empty_service);
+    tiny.set_max_stream_response_bytes(1).unwrap();
+    let (url, task) = start_http(tiny).await;
+    let response = reqwest::Client::new()
+        .post(format!("{url}/greet.v1.GreetService/StreamGreet"))
+        .header("content-type", "application/connect+json")
+        .body(envelope(0, &request))
+        .send()
+        .await
+        .unwrap();
+    let envelopes = unpack_all(&response.bytes().await.unwrap());
+    assert_eq!(envelopes, vec![(0x02, b"{}".to_vec())]);
+    task.abort();
+
+    let huge_error_service = TestGreetService::default().with_stream(|_| async {
+        let stream =
+            futures::stream::iter([Err(Status::invalid_argument("x".repeat(2 * 1024 * 1024)))]);
+        Ok(Response::new(Box::pin(stream) as BoxResponseStream<_>))
+    });
+    let bounded = registered_server(huge_error_service);
+    bounded.set_max_stream_response_bytes(1).unwrap();
+    let (url, task) = start_http(bounded).await;
+    let response = reqwest::Client::new()
+        .post(format!("{url}/greet.v1.GreetService/StreamGreet"))
+        .header("content-type", "application/connect+json")
+        .body(envelope(0, &request))
+        .send()
+        .await
+        .unwrap();
+    let envelopes = unpack_all(&response.bytes().await.unwrap());
+    assert_eq!(envelopes.len(), 1);
+    assert!(envelopes[0].1.len() <= 1024 * 1024);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&envelopes[0].1).unwrap(),
+        json!({"error": {"code": "resource_exhausted"}})
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn connect_stream_rejects_malformed_connect_timeouts() {
+    let (url, task) = start_http(registered_server(TestGreetService::default())).await;
+    let request = serde_json::to_vec(&json!({"name": "fast"})).unwrap();
+    let client = reqwest::Client::new();
+    for invalid_timeout in ["0", "-1", "+1", "1.0", "abc", "12345678901"] {
+        let response = client
+            .post(format!("{url}/greet.v1.GreetService/StreamGreet"))
+            .header("content-type", "application/connect+json")
+            .header("connect-timeout-ms", invalid_timeout)
+            .body(envelope(0, &request))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "{invalid_timeout:?}");
+        let envelopes = unpack_all(&response.bytes().await.unwrap());
+        assert_eq!(envelopes.len(), 1, "{invalid_timeout:?}");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&envelopes[0].1).unwrap()["error"]["code"],
+            "invalid_argument",
+            "{invalid_timeout:?}"
+        );
+    }
     task.abort();
 }
 

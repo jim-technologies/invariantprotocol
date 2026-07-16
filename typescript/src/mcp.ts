@@ -7,7 +7,7 @@ export const MCP_PROTOCOL_VERSION = "2025-11-25";
 
 export type JsonRpcRequest = {
   jsonrpc?: string;
-  id?: string | number | null;
+  id?: string | number;
   method?: string;
   params?: Record<string, unknown>;
 };
@@ -23,19 +23,39 @@ export type McpStdioOutput = {
 
 export async function mcpDispatch(
   server: Server,
-  msg: JsonRpcRequest,
+  msg: unknown,
   contextOptions: McpContextOptions = {},
 ): Promise<Record<string, unknown> | undefined> {
   server[serverInternal].freeze();
-  const method = msg.method ?? "";
-  const id = msg.id;
-  const params = msg.params ?? {};
-
-  if (id === undefined || id === null) {
+  const invalid = invalidRequestResponse(msg);
+  if (invalid) {
+    return invalid;
+  }
+  if (isClientResponse(msg)) {
     return undefined;
+  }
+  const request = msg as JsonRpcRequest;
+  const method = request.method ?? "";
+  const id = canonicalJsonRpcId(request.id);
+
+  if (id === undefined) {
+    return undefined;
+  }
+  const params = request.params ?? {};
+  if (!isJsonRpcObject(params)) {
+    return err(id, -32602, "Invalid params");
   }
 
   if (method === "initialize") {
+    if (
+      typeof params.protocolVersion !== "string" ||
+      !isJsonRpcObject(params.capabilities) ||
+      !isJsonRpcObject(params.clientInfo) ||
+      typeof params.clientInfo.name !== "string" ||
+      typeof params.clientInfo.version !== "string"
+    ) {
+      return err(id, -32602, "Invalid params");
+    }
     return ok(id, {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: { tools: {} },
@@ -48,6 +68,12 @@ export async function mcpDispatch(
   }
 
   if (method === "tools/call") {
+    if (
+      typeof params.name !== "string" ||
+      ("arguments" in params && !isJsonRpcObject(params.arguments))
+    ) {
+      return err(id, -32602, "Invalid params");
+    }
     return mcpCallTool(server, id, params, contextOptions);
   }
 
@@ -147,9 +173,17 @@ export async function serveMcpStdio(
   signal?.addEventListener("abort", cancelAll, { once: true });
 
   try {
-    for await (const line of lines(input)) {
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    for await (const bytes of lines(input)) {
       if (signal?.aborted) {
         break;
+      }
+      let line: string;
+      try {
+        line = decoder.decode(bytes);
+      } catch (error) {
+        writeMcpResponse(output, err(null, -32700, `Parse error: ${error instanceof Error ? error.message : String(error)}`));
+        continue;
       }
       if (line.trim().length === 0) {
         continue;
@@ -162,16 +196,20 @@ export async function serveMcpStdio(
         writeMcpResponse(output, err(null, -32700, `Parse error: ${error instanceof Error ? error.message : String(error)}`));
         continue;
       }
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        writeMcpResponse(output, err(null, -32600, "Invalid Request"));
+      const invalid = invalidRequestResponse(parsed);
+      if (invalid) {
+        writeMcpResponse(output, invalid);
+        continue;
+      }
+      if (isClientResponse(parsed)) {
         continue;
       }
       const msg = parsed as JsonRpcRequest;
 
-      if (msg.id === undefined || msg.id === null) {
+      if (msg.id === undefined) {
         if (msg.method === "notifications/cancelled") {
           const requestId = msg.params?.requestId;
-          if (requestId !== undefined && requestId !== null) {
+          if (validJsonRpcId(requestId)) {
             inflight.get(idKey(requestId))?.abort();
           }
         }
@@ -235,22 +273,79 @@ function err(id: string | number | null, code: number, message: string): Record<
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
 
-async function* lines(input: McpStdioInput): AsyncIterable<string> {
-  let pending = "";
+export function invalidRequestResponse(msg: unknown): Record<string, unknown> | undefined {
+  if (!isJsonRpcObject(msg)) {
+    return err(null, -32600, "Invalid Request");
+  }
+  if (isClientResponse(msg)) {
+    return undefined;
+  }
+  if (
+    msg.jsonrpc !== "2.0" ||
+    typeof msg.method !== "string" ||
+    ("id" in msg && !validJsonRpcId(msg.id))
+  ) {
+    return err(null, -32600, "Invalid Request");
+  }
+  return undefined;
+}
+
+export function isClientResponse(msg: unknown): boolean {
+  if (!isJsonRpcObject(msg) || msg.jsonrpc !== "2.0" || "method" in msg) {
+    return false;
+  }
+  if ("result" in msg && !("error" in msg)) {
+    return "id" in msg && validJsonRpcId(msg.id) && isJsonRpcObject(msg.result);
+  }
+  if ("error" in msg && !("result" in msg)) {
+    return (
+      (!("id" in msg) || validJsonRpcId(msg.id)) &&
+      isJsonRpcObject(msg.error) &&
+      typeof msg.error.code === "number" &&
+      Number.isInteger(msg.error.code) &&
+      typeof msg.error.message === "string"
+    );
+  }
+  return false;
+}
+
+function isJsonRpcObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function validJsonRpcId(value: unknown): value is string | number {
+  return typeof value === "string" || (typeof value === "number" && Number.isSafeInteger(value));
+}
+
+function canonicalJsonRpcId(value: string | number | undefined): string | number | undefined {
+  return typeof value === "number" && value === 0 ? 0 : value;
+}
+
+async function* lines(input: McpStdioInput): AsyncIterable<Uint8Array> {
+  let pending = Buffer.alloc(0);
   for await (const chunk of input) {
-    pending += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    pending = Buffer.concat([
+      pending,
+      typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk),
+    ]);
     for (;;) {
-      const newline = pending.indexOf("\n");
+      const newline = pending.indexOf(0x0a);
       if (newline < 0) {
         break;
       }
-      const line = pending.slice(0, newline).replace(/\r$/, "");
+      let line = pending.subarray(0, newline);
       pending = pending.slice(newline + 1);
+      if (line.at(-1) === 0x0d) {
+        line = line.subarray(0, line.length - 1);
+      }
       yield line;
     }
   }
   if (pending.length > 0) {
-    yield pending.replace(/\r$/, "");
+    if (pending.at(-1) === 0x0d) {
+      pending = pending.subarray(0, pending.length - 1);
+    }
+    yield pending;
   }
 }
 

@@ -71,9 +71,10 @@ previous root fails compilation instead of silently discarding that dataset's
 identity and tombstone history.
 
 Dataset and field storage names are deterministic snake_case projections of
-protobuf names. Compilation rejects collisions after that lossy normalization,
-both across selected datasets and in every reachable nested struct, rather than
-leaving target renderers to disagree about which field wins.
+protobuf names. Compilation rejects an empty projected name or a collision
+after that lossy normalization, both across selected datasets and in every
+reachable nested struct, rather than emitting a bundle that target renderers
+cannot interpret consistently.
 
 Custom protobuf dataset/column options are intentionally not published yet.
 Public custom options are extensions, and Protobuf's guidance is to obtain a
@@ -115,6 +116,14 @@ limit applies when protobuf Duration becomes an `int64` nanosecond count.
 PostgreSQL timestamps cover the protobuf range but cannot retain nanoseconds.
 Iceberg schemas require format version 3 when they use nanosecond timestamps or
 Invariant's non-null protobuf defaults.
+
+The dynamic JSON family uses standard protobuf JSON rather than inventing a
+second encoding. That is a deliberate range reduction from the protobuf wire
+domain: each populated `Any` type URL must resolve to a known message
+descriptor, and numbers stored in `Struct`, `Value`, or `ListValue` must be
+finite because ProtoJSON cannot encode `NaN` or infinities in those positions.
+Target diagnostics report that reduction, and Python value-conversion errors
+identify the canonical field path and protobuf source field.
 
 Diagnostics also cover constraints that a target type does not enforce. A
 closed enum projected onto an unconstrained integer, or a oneof projected to

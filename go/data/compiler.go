@@ -149,6 +149,13 @@ func CompileMessage(
 	if md.IsMapEntry() {
 		return nil, fmt.Errorf("compile message %q: synthetic map entries are not datasets", md.FullName())
 	}
+	datasetName := storageName(string(md.FullName()))
+	if datasetName == "" {
+		return nil, fmt.Errorf(
+			"compile message %q: protobuf message name normalizes to an empty storage name",
+			md.FullName(),
+		)
+	}
 	if err := rejectExtensionRanges(md); err != nil {
 		return nil, fmt.Errorf("compile message %q: %w", md.FullName(), err)
 	}
@@ -213,7 +220,7 @@ func CompileMessage(
 
 	return &datav1.DatasetSchema{
 		SourceMessage: string(md.FullName()),
-		Name:          storageName(string(md.FullName())),
+		Name:          datasetName,
 		Description:   descriptorComment(md),
 		Fields:        compiled,
 		LastFieldId:   c.lastID,
@@ -926,6 +933,12 @@ func validateStorageNameCollisions(scope string, fields []*datav1.Field) error {
 	owners := make(map[string]string, len(fields))
 	for _, field := range fields {
 		name := field.GetName()
+		if name == "" {
+			return fmt.Errorf(
+				"protobuf field %q normalizes to an empty storage name within protobuf message %q",
+				field.GetProtoFullName(), scope,
+			)
+		}
 		if owner, duplicate := owners[name]; duplicate {
 			return fmt.Errorf(
 				"storage name %q collides within protobuf message %q for fields %q and %q",

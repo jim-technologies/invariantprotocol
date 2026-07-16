@@ -10,6 +10,67 @@ but never silent behaviour regressions.
 
 ## Unreleased
 
+## v0.7.1 — 2026-07-16
+
+### Fixed
+
+- **Native reflection now matches the served surface.** Every runtime keeps
+  reflection available even before application registration, advertises only
+  actually registered services and methods, includes served unary remote
+  proxies, and avoids stale descriptor source locations after filtering.
+- **MCP transport handling is strict and consistent across runtimes.**
+  JSON-RPC request IDs, parameters, client responses, malformed UTF-8, content
+  types, cancellation notifications, deadlines, and bounded HTTP responses now
+  follow one shared observable contract. Initialize requests validate the
+  required client fields and negotiate unsupported requested versions to the
+  sole supported version. Protocol-cancelled stdio calls never emit a late
+  response, even if application code catches cancellation.
+- **HTTP projection boundaries now preserve their full contract.** Absolute
+  `Connect-Timeout-Ms` deadlines cover request bodies and application work,
+  long Node.js deadlines avoid timer overflow, disconnects cancel in-flight
+  handlers, sensitive `-bin` metadata aliases are rejected, unsupported media
+  types are deterministic, and oversized success or rich-error responses
+  cannot bypass configured limits. Connect control envelopes have a separate
+  bounded allowance, so tiny application-message limits still produce valid
+  success or `resource_exhausted` end-stream frames.
+- **Remote and typed error behavior is preserved.** Python HTTP client timeouts
+  map to `deadline_exceeded`, TypeScript retains serialized protobuf rich-error
+  details, and remote native proxy registration no longer disappears behind
+  projection filters.
+- **TypeScript native gRPC now preserves metadata and flow control.** Repeated
+  ASCII and binary request metadata, response headers, and trailers survive
+  local and remote-proxy calls; malformed binary metadata fails
+  deterministically instead of being silently discarded. Server-streaming and
+  bidi handlers now honor grpc-js writable backpressure and cancellation.
+- **Rust response streams now recover panics for their full lifetime.** A
+  panic after a server-streaming or bidi response has started becomes an
+  `internal` status carrying the canonical method path, matching setup-time
+  panic handling without changing ordinary mid-stream statuses.
+- **Data compilation rejects empty normalized storage identifiers.** Valid
+  protobuf source names made only from underscores can no longer produce
+  unnamed datasets or fields that some storage targets accept and PostgreSQL
+  rejects.
+- **Dynamic protobuf JSON mappings expose their real domain.** Arrow, Parquet,
+  Iceberg, PostgreSQL, and Python now report the range reduction for unresolved
+  `Any` values and non-finite `Struct`/`Value` numbers; Python conversion errors
+  include the canonical path and protobuf source field.
+- **CLI request behavior now matches across all runtimes.** JSON, `.binpb`, and
+  `.pb` files use strict protobuf decoding, malformed files preserve
+  `invalid_argument`, unexpected arguments are rejected, and streamed results
+  remain newline-delimited and flushed as they are produced.
+
+### Changed
+
+- **The reproducible Rust toolchain is now 1.96.1.** This is the newest
+  coherent Rust/Cargo/Clippy/rustfmt set currently available in the Flox
+  catalog and includes the Cargo and bundled libssh2 security fixes shipped in
+  Rust 1.96 and 1.96.1.
+- **Reviewed dependency locks were refreshed.** Rust now resolves Tokio
+  1.52.4, while Python resolves filelock 3.30.0 and ty 0.0.60.
+- **gRPC test bindings now use locked local generators.** Buf still resolves
+  pinned module inputs, while grpcio-tools and protoc-gen-go-grpc run locally
+  so generation is not coupled to hosted plugin rate limits.
+
 ## v0.7.0 — 2026-07-15
 
 ### Added
@@ -211,9 +272,9 @@ Rust `0.3.0`, and TypeScript/npm `0.4.1`.
 ### Changed
 
 - **Current language and build ecosystems.** The reproducible Flox environment
-  now uses Python 3.14, Go 1.26, Node 26, Rust 1.95 with edition 2024, GCC 16,
-  Buf 1.71, and the latest compatible linting and generation tools available
-  in the catalog.
+  now uses Python 3.14, Go 1.26, Node 24 LTS, Rust 1.95 with edition 2024,
+  GCC 16, Buf 1.71, and the latest compatible linting and generation tools
+  available in the catalog.
 - **Runtime dependencies were refreshed throughout.** Notable upgrades include
   gRPC Go 1.82, protobuf Python 7.35, grpcio 1.82, TypeScript 7, tonic/prost
   0.14, axum 0.8, and reqwest 0.13, with regenerated language stubs and lock

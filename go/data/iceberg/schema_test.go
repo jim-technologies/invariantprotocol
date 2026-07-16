@@ -35,6 +35,17 @@ func TestSchemaJSONAndGloballyUniqueIDs(t *testing.T) {
 	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED, diagnostic(t, diagnostics, "elapsed").GetCompatibility())
 	_, ok = icebergField(t, schema, "attributes").Type.(iceberglib.StringType)
 	require.True(t, ok)
+	for _, test := range []struct {
+		name       string
+		limitation string
+	}{
+		{name: "attributes", limitation: "numbers to be finite"},
+		{name: "opaque", limitation: "type URL to resolve"},
+	} {
+		jsonDiagnostic := diagnostic(t, diagnostics, test.name)
+		require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED, jsonDiagnostic.GetCompatibility())
+		require.Contains(t, jsonDiagnostic.GetMessage(), test.limitation)
+	}
 
 	for _, name := range []string{
 		"double_value", "float_value", "int64_value", "int32_value",

@@ -286,7 +286,10 @@ func TestConnectMultipleRequests(t *testing.T) {
 	srv := connectServer(t, addr)
 
 	resps := sendMultiMCP(t, srv,
-		map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+		map[string]any{
+			"jsonrpc": "2.0", "id": 1, "method": "initialize",
+			"params": mcpInitializeParamsForTest(mcpProtocolVersion),
+		},
 		map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"},
 		map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
 		map[string]any{

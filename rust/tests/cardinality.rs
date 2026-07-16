@@ -61,8 +61,13 @@ impl cardinality::all_cardinality_service_server::AllCardinalityService for AllC
         request: Request<tonic::Streaming<cardinality::Input>>,
     ) -> Result<Response<Self::BidiStream>, Status> {
         let stream = request.into_inner().map(|item| {
-            item.map(|input| cardinality::Output {
-                value: format!("echo:{}", input.value),
+            item.map(|input| {
+                if input.value == "panic" {
+                    panic!("bidi-midstream-kaboom");
+                }
+                cardinality::Output {
+                    value: format!("echo:{}", input.value),
+                }
             })
         });
         Ok(Response::new(Box::pin(stream)))
@@ -144,5 +149,19 @@ async fn full_generated_service_remains_native_while_projections_stay_bounded() 
     let mut bidi = client.bidi(bidi).await.unwrap().into_inner();
     assert_eq!(bidi.message().await.unwrap().unwrap().value, "echo:x");
     assert_eq!(bidi.message().await.unwrap().unwrap().value, "echo:y");
+
+    let bidi = futures::stream::iter(["first", "panic"].map(|value| cardinality::Input {
+        value: value.into(),
+    }));
+    let mut bidi = client.bidi(bidi).await.unwrap().into_inner();
+    assert_eq!(bidi.message().await.unwrap().unwrap().value, "echo:first");
+    let status = bidi.message().await.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::Internal);
+    assert!(status.message().contains("bidi-midstream-kaboom"));
+    assert!(
+        status
+            .message()
+            .contains("/cardinality.v1.AllCardinalityService/Bidi")
+    );
     task.abort();
 }

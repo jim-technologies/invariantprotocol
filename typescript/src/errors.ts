@@ -1,4 +1,5 @@
 import { Code as ConnectCode, ConnectError } from "@connectrpc/connect";
+import { create, toBinary } from "@bufbuild/protobuf";
 
 export type Code =
   | "canceled"
@@ -235,7 +236,12 @@ export function codeFromGrpcStatus(status: number | undefined): Code {
 function connectDetailsForPayload(error: ConnectError): unknown[] {
   return error.details.map((detail) => {
     if ("desc" in detail) {
-      return { type: detail.desc.typeName };
+      return {
+        type: detail.desc.typeName,
+        value: Buffer.from(
+          toBinary(detail.desc, create(detail.desc, detail.value)),
+        ).toString("base64"),
+      };
     }
     return { type: detail.type, value: Buffer.from(detail.value).toString("base64") };
   });

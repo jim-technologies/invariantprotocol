@@ -152,9 +152,25 @@ func mapType(dataType *datav1.DataType) (string, datav1.MappingCompatibility, st
 			"protobuf map is stored as one JSONB object column", nil
 	case *datav1.DataType_Json:
 		return "JSONB", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED,
-			fmt.Sprintf("protobuf %s is encoded with protobuf JSON semantics in PostgreSQL JSONB, which cannot represent the protobuf string value U+0000", kind.Json.GetKind()), nil
+			fmt.Sprintf(
+				"protobuf %s is encoded with protobuf JSON semantics in PostgreSQL JSONB, which cannot represent the protobuf string value U+0000; %s",
+				kind.Json.GetKind(), jsonRangeReduction(kind.Json.GetKind()),
+			), nil
 	default:
 		return "", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", errors.New("unspecified logical type")
+	}
+}
+
+func jsonRangeReduction(kind datav1.JsonKind) string {
+	switch kind {
+	case datav1.JsonKind_JSON_KIND_ANY:
+		return "standard protobuf JSON requires each populated Any type URL to resolve to a known message descriptor; embedded Struct, Value, and ListValue numbers must also be finite"
+	case datav1.JsonKind_JSON_KIND_STRUCT,
+		datav1.JsonKind_JSON_KIND_VALUE,
+		datav1.JsonKind_JSON_KIND_LIST_VALUE:
+		return "standard protobuf JSON requires Struct, Value, and ListValue numbers to be finite; NaN and infinities are not representable"
+	default:
+		return "standard protobuf JSON requires an explicitly supported dynamic JSON kind"
 	}
 }
 

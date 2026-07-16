@@ -1,6 +1,6 @@
 [project]
 name = "invariant-protocol"
-version = "0.7.0"
+version = "0.7.1"
 description = "Project protobuf/gRPC services into MCP, CLI, HTTP, and logical data schemas"
 requires-python = ">=3.14"
 classifiers = ["Private :: Do Not Upload"]
@@ -22,6 +22,7 @@ invariant-check-proto-comments = "invariant.proto_comments:main"
 
 [dependency-groups]
 dev = [
+    "grpcio-tools>=1.82.1",
     "pyarrow>=25.0.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -86,6 +87,7 @@ include = [
     "src/invariant/errors.py",
     "src/invariant/http_client.py",
     "src/invariant/proto_comments.py",
+    "src/invariant/projections/grpc.py",
     "src/invariant/schema.py",
     "src/invariant/server.py",
 ]

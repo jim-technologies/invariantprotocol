@@ -15,13 +15,14 @@ use prost_reflect::{DynamicMessage, SerializeOptions};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+const JSONRPC_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
 /// Run the stdio MCP transport. Blocks until stdin closes.
 ///
@@ -30,18 +31,36 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 /// methods (`initialize`, `tools/list`, `ping`) run inline to keep response
 /// order deterministic. Mirrors Go's `mcpSession.run` and Python's `_StdioMCP`.
 pub async fn serve_mcp_stdio(server: Arc<Server>) -> std::io::Result<()> {
+    serve_mcp_session(server, tokio::io::stdin(), tokio::io::stdout()).await
+}
+
+async fn serve_mcp_session<R, W>(server: Arc<Server>, input: R, output: W) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     server.freeze();
-    let stdin = tokio::io::stdin();
-    let mut reader = BufReader::new(stdin).lines();
-    let stdout = Arc::new(AsyncMutex::new(tokio::io::stdout()));
+    let mut reader = BufReader::new(input);
+    let stdout = Arc::new(AsyncMutex::new(output));
     let inflight: Arc<Mutex<HashMap<String, JoinHandle<()>>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
-    while let Some(line) = reader.next_line().await? {
-        if line.trim().is_empty() {
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).await? == 0 {
+            break;
+        }
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        let msg: Value = match serde_json::from_str(&line) {
+        let msg: Value = match serde_json::from_slice(&line) {
             Ok(v) => v,
             Err(e) => {
                 write_response(
@@ -56,10 +75,17 @@ pub async fn serve_mcp_stdio(server: Arc<Server>) -> std::io::Result<()> {
                 continue;
             }
         };
+        if let Some(response) = invalid_request_response(&msg) {
+            write_response(&stdout, &response).await?;
+            continue;
+        }
+        if is_client_response(&msg) {
+            continue;
+        }
 
         // Notifications run inline so cancellation takes effect before the
         // next message is read.
-        if msg.get("id").is_none_or(|v| v.is_null()) {
+        if msg.get("id").is_none() {
             handle_notification(&msg, &inflight);
             continue;
         }
@@ -97,8 +123,8 @@ pub async fn serve_mcp_stdio(server: Arc<Server>) -> std::io::Result<()> {
     Ok(())
 }
 
-async fn write_response(
-    stdout: &Arc<AsyncMutex<tokio::io::Stdout>>,
+async fn write_response<W: AsyncWrite + Unpin>(
+    stdout: &Arc<AsyncMutex<W>>,
     resp: &Value,
 ) -> std::io::Result<()> {
     let mut body = serde_json::to_vec(resp).unwrap_or_default();
@@ -123,6 +149,7 @@ fn handle_notification(msg: &Value, inflight: &Arc<Mutex<HashMap<String, JoinHan
 
 fn id_key(id: Value) -> String {
     // JSON-RPC ids may be string or number; normalize for map keys.
+    let id = canonical_jsonrpc_id(id);
     format!("{}:{id}", id_type(&id))
 }
 
@@ -148,30 +175,52 @@ pub(crate) async fn mcp_dispatch_with_context(
     projection: Option<ProjectionContext>,
 ) -> Option<Value> {
     server.freeze();
-    let method = msg.get("method")?.as_str()?;
-    let id = msg.get("id").cloned();
-    if id.is_none() || id.as_ref() == Some(&Value::Null) {
+    if let Some(response) = invalid_request_response(msg) {
+        return Some(response);
+    }
+    if is_client_response(msg) {
         return None;
     }
-    let id = id.unwrap();
-    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+    let method = msg
+        .get("method")
+        .and_then(Value::as_str)
+        .expect("validated JSON-RPC method");
+    let id = canonical_jsonrpc_id(msg.get("id").cloned()?);
+    let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
+    if !params.is_object() {
+        return Some(invalid_params(id));
+    }
 
     match method {
-        "initialize" => Some(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "invariant-protocol", "version": env!("CARGO_PKG_VERSION")},
+        "initialize" => {
+            if !valid_initialize_params(&params) {
+                return Some(invalid_params(id));
             }
-        })),
+            Some(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "invariant-protocol", "version": env!("CARGO_PKG_VERSION")},
+                }
+            }))
+        }
         "tools/list" => Some(json!({
             "jsonrpc": "2.0",
             "id": id,
             "result": {"tools": server.tool_catalog()},
         })),
-        "tools/call" => Some(tools_call(server, id, &params, metadata, projection).await),
+        "tools/call" => {
+            if !params.get("name").is_some_and(Value::is_string)
+                || params
+                    .get("arguments")
+                    .is_some_and(|arguments| !arguments.is_object())
+            {
+                return Some(invalid_params(id));
+            }
+            Some(tools_call(server, id, &params, metadata, projection).await)
+        }
         "ping" => Some(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
         _ => Some(json!({
             "jsonrpc": "2.0",
@@ -179,6 +228,113 @@ pub(crate) async fn mcp_dispatch_with_context(
             "error": {"code": -32601, "message": format!("Method not found: {method}")},
         })),
     }
+}
+
+fn valid_initialize_params(params: &Value) -> bool {
+    let Some(params) = params.as_object() else {
+        return false;
+    };
+    let Some(client_info) = params.get("clientInfo").and_then(Value::as_object) else {
+        return false;
+    };
+    params.get("protocolVersion").is_some_and(Value::is_string)
+        && params.get("capabilities").is_some_and(Value::is_object)
+        && client_info.get("name").is_some_and(Value::is_string)
+        && client_info.get("version").is_some_and(Value::is_string)
+}
+
+pub(crate) fn invalid_request_response(msg: &Value) -> Option<Value> {
+    let Some(object) = msg.as_object() else {
+        return Some(invalid_request(Value::Null));
+    };
+    if is_client_response(msg) {
+        return None;
+    }
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || !object.get("method").is_some_and(Value::is_string)
+        || object.get("id").is_some_and(|id| !valid_jsonrpc_id(id))
+    {
+        return Some(invalid_request(Value::Null));
+    }
+    None
+}
+
+pub(crate) fn is_client_response(msg: &Value) -> bool {
+    let Some(object) = msg.as_object() else {
+        return false;
+    };
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || object.contains_key("method")
+    {
+        return false;
+    }
+    match (object.get("result"), object.get("error")) {
+        (Some(result), None) => {
+            result.is_object() && object.get("id").is_some_and(valid_jsonrpc_id)
+        }
+        (None, Some(error)) => {
+            object.get("id").is_none_or(valid_jsonrpc_id)
+                && error.as_object().is_some_and(|error| {
+                    error.get("code").is_some_and(valid_jsonrpc_integer)
+                        && error.get("message").is_some_and(Value::is_string)
+                })
+        }
+        _ => false,
+    }
+}
+
+fn valid_jsonrpc_id(id: &Value) -> bool {
+    match id {
+        Value::String(_) => true,
+        Value::Number(_) => jsonrpc_safe_integer(id).is_some(),
+        _ => false,
+    }
+}
+
+fn canonical_jsonrpc_id(id: Value) -> Value {
+    match jsonrpc_safe_integer(&id) {
+        Some(integer) => Value::Number(integer.into()),
+        None => id,
+    }
+}
+
+fn jsonrpc_safe_integer(value: &Value) -> Option<i64> {
+    let number = value.as_number()?;
+    if let Some(integer) = number.as_i64() {
+        return (-JSONRPC_MAX_SAFE_INTEGER..=JSONRPC_MAX_SAFE_INTEGER)
+            .contains(&integer)
+            .then_some(integer);
+    }
+    if let Some(integer) = number.as_u64() {
+        return (integer <= JSONRPC_MAX_SAFE_INTEGER as u64).then_some(integer as i64);
+    }
+    let float = number.as_f64()?;
+    (float.is_finite()
+        && float.fract() == 0.0
+        && float >= -(JSONRPC_MAX_SAFE_INTEGER as f64)
+        && float <= JSONRPC_MAX_SAFE_INTEGER as f64)
+        .then_some(if float == 0.0 { 0 } else { float as i64 })
+}
+
+fn valid_jsonrpc_integer(value: &Value) -> bool {
+    value
+        .as_number()
+        .is_some_and(|number| number.is_i64() || number.is_u64())
+}
+
+fn invalid_request(id: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {"code": -32600, "message": "Invalid Request"},
+    })
+}
+
+fn invalid_params(id: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {"code": -32602, "message": "Invalid params"},
+    })
 }
 
 async fn tools_call(
@@ -309,4 +465,121 @@ fn error_result(id: Value, err: &Status) -> Value {
             "error": error_payload(err),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn test_server() -> Arc<Server> {
+        let descriptor = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../python/tests/proto/descriptor.binpb");
+        Arc::new(Server::from_descriptor(descriptor.to_str().unwrap()).unwrap())
+    }
+
+    #[tokio::test]
+    async fn numeric_ids_use_the_portable_safe_integer_range_and_canonical_zero() {
+        let server = test_server();
+        for raw_id in ["-0", "0", "1.0", "9007199254740991", "-9007199254740991"] {
+            let message: Value = serde_json::from_str(&format!(
+                r#"{{"jsonrpc":"2.0","id":{raw_id},"method":"ping"}}"#
+            ))
+            .unwrap();
+            let response = mcp_dispatch(&server, &message).await.unwrap();
+            let expected: Value = serde_json::from_str(raw_id).unwrap();
+            let expected = canonical_jsonrpc_id(expected);
+            assert_eq!(response["id"], expected, "{raw_id}");
+        }
+
+        for raw_id in ["9007199254740992", "-9007199254740992"] {
+            let message: Value = serde_json::from_str(&format!(
+                r#"{{"jsonrpc":"2.0","id":{raw_id},"method":"ping"}}"#
+            ))
+            .unwrap();
+            let response = mcp_dispatch(&server, &message).await.unwrap();
+            assert!(response["id"].is_null(), "{raw_id}");
+            assert_eq!(response["error"]["code"], -32600, "{raw_id}");
+        }
+
+        assert_eq!(id_key(serde_json::from_str("-0").unwrap()), "num:0");
+        assert_eq!(id_key(json!(0)), "num:0");
+    }
+
+    #[tokio::test]
+    async fn stdio_rejects_valid_json_with_invalid_request_shapes() {
+        let server = test_server();
+        let (mut input, session_input) = tokio::io::duplex(4096);
+        let (session_output, mut output) = tokio::io::duplex(4096);
+        let session = tokio::spawn(serve_mcp_session(server, session_input, session_output));
+
+        input.write_all(&[0xff, b'\n']).await.unwrap();
+        for message in [
+            json!(42),
+            json!([]),
+            json!({"id": 1, "method": "ping"}),
+            json!({"jsonrpc": "1.0", "id": 2, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": 3}),
+            json!({"jsonrpc": "2.0", "id": 4, "method": 7}),
+            json!({"jsonrpc": "2.0", "id": null, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": true, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": 1.5, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": 9_007_199_254_740_992_i64, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": -9_007_199_254_740_992_i64, "method": "ping"}),
+            json!({"jsonrpc": "2.0", "id": 8, "result": "not-an-object"}),
+            json!({"jsonrpc": "2.0", "id": 8, "result": {}, "error": {}}),
+            json!({"jsonrpc": "2.0", "result": {}}),
+            json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32601, "message": "missing"}}),
+            json!({"jsonrpc": "2.0", "error": {"code": 1.5, "message": "bad code"}}),
+        ] {
+            input
+                .write_all(format!("{message}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        for message in [
+            json!({"jsonrpc": "2.0", "id": 9, "result": {}}),
+            json!({"jsonrpc": "2.0", "id": "response-10", "error": {"code": -32601, "message": "missing"}}),
+            json!({"jsonrpc": "2.0", "error": {"code": -32601, "message": "unknown request"}}),
+        ] {
+            input
+                .write_all(format!("{message}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        input
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({"jsonrpc": "2.0", "id": 11, "method": "ping", "params": []})
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        input.shutdown().await.unwrap();
+        session.await.unwrap().unwrap();
+
+        let mut bytes = Vec::new();
+        output.read_to_end(&mut bytes).await.unwrap();
+        let responses = String::from_utf8(bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(responses.len(), 18);
+        assert_eq!(responses[0]["error"]["code"], -32700);
+        assert!(
+            responses[1..17]
+                .iter()
+                .all(|response| response["error"]["code"] == -32600)
+        );
+        assert!(
+            responses[1..17]
+                .iter()
+                .all(|response| response["id"].is_null())
+        );
+        assert_eq!(responses[17]["id"], 11);
+        assert_eq!(responses[17]["error"]["code"], -32602);
+    }
 }
