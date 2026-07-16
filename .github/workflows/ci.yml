@@ -7,74 +7,90 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+permissions:
+  contents: read
+
 jobs:
-  check:
-    name: Check (fmt + lint + typecheck + test)
+  quality:
+    name: Quality (format, lint, types, policy)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/cache@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
+      - uses: flox/activate-action@7065dcbe5583b7b015f07a8ebd49d7266e3053e8 # v1
         with:
-          path: /nix/store
-          key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
-          restore-keys: nix-${{ runner.os }}-
+          command: make quality
 
-      - uses: flox/install-flox-action@v2
-      - uses: flox/activate-action@v1
+  test:
+    name: Test (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: Go
+            command: make test-go
+          - language: Python
+            command: make test-python
+          - language: Rust
+            command: make test-rust
+          - language: TypeScript
+            command: make test-typescript
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
+      - uses: flox/activate-action@7065dcbe5583b7b015f07a8ebd49d7266e3053e8 # v1
         with:
-          command: make check
+          command: ${{ matrix.command }}
+
+  security:
+    name: Security (secrets, integrity, vulnerabilities)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+      - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
+      - uses: flox/activate-action@7065dcbe5583b7b015f07a8ebd49d7266e3053e8 # v1
+        with:
+          command: make security
 
   generated:
-    name: Verify Generated
+    name: Generated artifacts
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/cache@v6
-        with:
-          path: /nix/store
-          key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
-          restore-keys: nix-${{ runner.os }}-
-
-      - uses: flox/install-flox-action@v2
-      - uses: flox/activate-action@v1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
+      - uses: flox/activate-action@7065dcbe5583b7b015f07a8ebd49d7266e3053e8 # v1
         with:
           command: make verify-generate
 
-  git-install:
-    name: Git SHA Install
+  integration:
+    name: Integration (Git installs)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
+      - uses: flox/activate-action@7065dcbe5583b7b015f07a8ebd49d7266e3053e8 # v1
         with:
-          fetch-depth: 0
-
-      - uses: actions/cache@v6
-        with:
-          path: /nix/store
-          key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
-          restore-keys: nix-${{ runner.os }}-
-
-      - uses: flox/install-flox-action@v2
-      - uses: flox/activate-action@v1
-        with:
-          command: make git-install-check
+          command: make integration
 
   breaking:
-    name: Proto Breaking
+    name: Protobuf breaking changes
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - uses: actions/cache@v6
-        with:
-          path: /nix/store
-          key: nix-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
-          restore-keys: nix-${{ runner.os }}-
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Ensure base commit is available
         run: |
@@ -83,7 +99,7 @@ jobs:
             git fetch --no-tags origin "${BASE_SHA}"
           fi
 
-      - uses: flox/install-flox-action@v2
-      - uses: flox/activate-action@v1
+      - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
+      - uses: flox/activate-action@7065dcbe5583b7b015f07a8ebd49d7266e3053e8 # v1
         with:
           command: make breaking BASE_REF=${{ github.event.pull_request.base.sha }}

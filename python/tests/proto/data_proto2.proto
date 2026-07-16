@@ -1,0 +1,14 @@
+syntax = "proto2";
+
+package data.v1;
+
+option go_package = "github.com/jim-technologies/invariantprotocol/go/tests/gen;greetpb";
+
+// Proto2Record exercises explicit optional, required, and declared defaults.
+message Proto2Record {
+  // A required identifier.
+  required int64 id = 1;
+
+  // An optional label with a declared protobuf default.
+  optional string label = 2 [default = "unknown"];
+}

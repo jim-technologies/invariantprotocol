@@ -58,15 +58,18 @@ echo "==> Python"
 python_venv="$tmp/python-venv"
 uv venv --quiet --python 3.14 "$python_venv"
 uv pip install --quiet --python "$python_venv/bin/python" \
-  "invariant-protocol @ git+file://${source_repo}@${sha}#subdirectory=python"
+  "invariant-protocol[data] @ git+file://${source_repo}@${sha}#subdirectory=python"
 EXPECTED_VERSION="$version" "$python_venv/bin/python" - <<'PY'
 import importlib.metadata
 import os
 
 import invariant
+import pyarrow
 
 assert importlib.metadata.version("invariant-protocol") == os.environ["EXPECTED_VERSION"]
 assert invariant.Server is not None
+assert invariant.arrow_table is not None
+assert pyarrow.__version__
 PY
 
 echo "==> Rust"
@@ -75,6 +78,9 @@ cargo new --quiet --lib --name invariant_git_install "$rust_consumer"
 (
   cd "$rust_consumer"
   cargo add --quiet invariant-protocol \
+    --git "file://${source_repo}" \
+    --rev "$sha"
+  cargo add --quiet --build invariant-protocol-codegen \
     --git "file://${source_repo}" \
     --rev "$sha"
   cargo check --quiet --locked

@@ -1,93 +1,74 @@
-//! Generate prost types for the shared `greet.proto` used by integration tests
-//! and benchmarks. The proto + its pre-built descriptor.binpb live under
-//! `python/tests/proto/` so all three implementations test against the same
-//! source of truth.
-//!
-//! We use the `compile_with_config` path so the generated Rust file lands in
-//! `$OUT_DIR/greet.v1.rs` and is `include!`d from `tests/common.rs`.
+//! Generate Rust bindings from the exact descriptor images used at runtime.
+
+use prost::Message;
+use prost_types::{
+    DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet,
+    MethodDescriptorProto, ServiceDescriptorProto, field_descriptor_proto,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let proto_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("python")
-        .join("tests")
-        .join("proto");
-    println!("cargo:rerun-if-changed={}/greet.proto", proto_dir.display());
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let service_image = root.join("python/tests/proto/descriptor.binpb");
+    let data_image = root.join("proto/descriptor.binpb");
+    println!("cargo:rerun-if-changed={}", service_image.display());
+    println!("cargo:rerun-if-changed={}", data_image.display());
 
-    prost_build::Config::new()
-        .compile_protos(
-            &[proto_dir.join("greet.proto").to_string_lossy().to_string()],
-            &[
-                proto_dir.to_string_lossy().to_string(),
-                // Pull in the `buf.build/googleapis/googleapis` cache so
-                // `google/api/annotations.proto` resolves the same way buf
-                // does. Skipping ergonomics: tests only need the message
-                // types, not the HTTP annotations.
-                proto_dir.join("gen").to_string_lossy().to_string(),
-            ],
-        )
-        .ok(); // Soft-fail: greet.proto imports google/api + buf/validate which
-    // require the buf module cache. We work around it by using a
-    // stripped-down test proto below if the full compile fails.
-    // Drop the stripped proto in OUT_DIR — keeps it scoped to this crate's
-    // build artefacts and out of any sibling language directory.
-    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
-    let stripped_path = out_dir.join("greet.proto");
-    std::fs::write(&stripped_path, STRIPPED_GREET_PROTO)?;
-    prost_build::Config::new().compile_protos(
-        &[stripped_path.to_string_lossy().to_string()],
-        &[out_dir.to_string_lossy().to_string()],
+    let service_fds = FileDescriptorSet::decode(std::fs::read(service_image)?.as_slice())?;
+    invariant_protocol_codegen::configure().compile_fds(service_fds)?;
+
+    let data_fds = FileDescriptorSet::decode(std::fs::read(data_image)?.as_slice())?;
+    invariant_protocol_codegen::configure()
+        .runtime_path("::invariant")
+        .compile_fds(data_fds)?;
+
+    let cardinality_fds = cardinality_test_descriptor();
+    std::fs::write(
+        std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"))
+            .join("cardinality.binpb"),
+        cardinality_fds.encode_to_vec(),
     )?;
+    invariant_protocol_codegen::configure().compile_fds(cardinality_fds)?;
     Ok(())
 }
 
-// A minimal greet.proto without google.api / buf.validate imports — those
-// dependencies require the buf module cache (which we don't carry in-tree).
-// The wire format and message names match the real greet.proto so the
-// pre-built descriptor.binpb is byte-compatible for the fields we use.
-const STRIPPED_GREET_PROTO: &str = r#"syntax = "proto3";
-package greet.v1;
-
-enum Mood {
-  MOOD_UNSPECIFIED = 0;
-  MOOD_HAPPY = 1;
-  MOOD_SAD = 2;
+fn cardinality_test_descriptor() -> FileDescriptorSet {
+    let message = |name: &str| DescriptorProto {
+        name: Some(name.to_string()),
+        field: vec![FieldDescriptorProto {
+            name: Some("value".into()),
+            number: Some(1),
+            label: Some(field_descriptor_proto::Label::Optional as i32),
+            r#type: Some(field_descriptor_proto::Type::String as i32),
+            json_name: Some("value".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let method = |name: &str, client_streaming, server_streaming| MethodDescriptorProto {
+        name: Some(name.to_string()),
+        input_type: Some(".cardinality.v1.Input".into()),
+        output_type: Some(".cardinality.v1.Output".into()),
+        client_streaming: Some(client_streaming),
+        server_streaming: Some(server_streaming),
+        ..Default::default()
+    };
+    FileDescriptorSet {
+        file: vec![FileDescriptorProto {
+            name: Some("cardinality/v1/cardinality.proto".into()),
+            package: Some("cardinality.v1".into()),
+            syntax: Some("proto3".into()),
+            message_type: vec![message("Input"), message("Output")],
+            service: vec![ServiceDescriptorProto {
+                name: Some("AllCardinalityService".into()),
+                method: vec![
+                    method("Unary", false, false),
+                    method("ServerStream", false, true),
+                    method("ClientStream", true, false),
+                    method("Bidi", true, true),
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    }
 }
-
-service GreetService {
-  rpc Greet(GreetRequest) returns (GreetResponse);
-  rpc GreetGroup(GreetGroupRequest) returns (GreetGroupResponse);
-  rpc StreamGreet(StreamGreetRequest) returns (stream GreetResponse);
-}
-
-message GreetRequest {
-  string name = 1;
-  optional Mood mood = 2;
-  map<string, string> tags = 3;
-}
-
-message GreetResponse {
-  string message = 1;
-  Mood mood = 2;
-  map<string, string> tags = 3;
-}
-
-message Person {
-  string name = 1;
-  Mood mood = 2;
-}
-
-message GreetGroupRequest {
-  repeated Person people = 1;
-}
-
-message GreetGroupResponse {
-  repeated string messages = 1;
-  int32 count = 2;
-}
-
-message StreamGreetRequest {
-  string name = 1;
-  int32 count = 2;
-}
-"#;

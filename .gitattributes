@@ -1,0 +1,9 @@
+*.binpb binary
+
+go/gen/** linguist-generated=true whitespace=-blank-at-eof
+go/tests/gen/** linguist-generated=true whitespace=-blank-at-eof
+python/src/buf/** linguist-generated=true whitespace=-blank-at-eof
+python/src/invariant/gen/** linguist-generated=true whitespace=-blank-at-eof
+python/tests/proto/gen/** linguist-generated=true whitespace=-blank-at-eof
+typescript/src/gen/** linguist-generated=true whitespace=-blank-at-eof
+typescript/tests/gen/** linguist-generated=true whitespace=-blank-at-eof

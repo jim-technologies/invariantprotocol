@@ -20,7 +20,7 @@ import (
 )
 
 func TestHTTPProjectionUnaryCodecMatchesRequest(t *testing.T) {
-	handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{}, nil)
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{}, nil)
 
 	t.Run("JSON request ignores proto Accept", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, greetpb.GreetService_Greet_FullMethodName,
@@ -77,7 +77,7 @@ func TestHTTPProjectionUnaryCodecMatchesRequest(t *testing.T) {
 }
 
 func TestHTTPProjectionStreamingRequestProtocolErrors(t *testing.T) {
-	handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{}, nil)
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{}, nil)
 
 	validJSON := connectRequestEnvelope(t, 0, []byte(`{"name":"valid"}`))
 	twoEnvelopes := append(append([]byte(nil), validJSON...), validJSON...)
@@ -127,7 +127,7 @@ func TestHTTPProjectionStreamingRequestProtocolErrors(t *testing.T) {
 func TestHTTPProjectionContextErrorOverridesNominalSuccess(t *testing.T) {
 	t.Run("unary cancellation", func(t *testing.T) {
 		started := make(chan struct{})
-		handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+		handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 			greet: func(ctx context.Context, _ *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 				close(started)
 				<-ctx.Done()
@@ -156,7 +156,7 @@ func TestHTTPProjectionContextErrorOverridesNominalSuccess(t *testing.T) {
 	})
 
 	t.Run("stream deadline", func(t *testing.T) {
-		handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+		handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 			stream: func(_ *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 				<-stream.Context().Done()
 				return nil
@@ -193,10 +193,36 @@ func TestConnectEnvelopePayloadLengthGuard(t *testing.T) {
 }
 
 func TestHTTPClientErrorRejectsOKAndPreservesEmptyDetails(t *testing.T) {
+	t.Run("malformed body uses Connect HTTP mapping", func(t *testing.T) {
+		tests := map[int]codes.Code{
+			http.StatusBadRequest:          codes.Internal,
+			http.StatusUnauthorized:        codes.Unauthenticated,
+			http.StatusForbidden:           codes.PermissionDenied,
+			http.StatusNotFound:            codes.Unimplemented,
+			http.StatusTooManyRequests:     codes.Unavailable,
+			http.StatusBadGateway:          codes.Unavailable,
+			http.StatusServiceUnavailable:  codes.Unavailable,
+			http.StatusGatewayTimeout:      codes.Unavailable,
+			http.StatusInternalServerError: codes.Unknown,
+		}
+		for httpStatus, want := range tests {
+			err := httpClientError(httpStatus, []byte("not JSON"))
+			assert.Equal(t, want, status.Code(err), "HTTP %d", httpStatus)
+		}
+	})
+
 	t.Run("OK code on HTTP error", func(t *testing.T) {
 		err := httpClientError(http.StatusInternalServerError, []byte(`{"code":"ok","message":"not actually OK"}`))
 		require.Error(t, err)
+		assert.Equal(t, codes.Unknown, status.Code(err))
+		assert.Equal(t, "HTTP 500", status.Convert(err).Message())
+	})
+
+	t.Run("noncanonical envelope uses HTTP fallback", func(t *testing.T) {
+		err := httpClientError(http.StatusBadRequest, []byte(`{"error":{"code":"INVALID_ARGUMENT","message":"old shape"}}`))
+		require.Error(t, err)
 		assert.Equal(t, codes.Internal, status.Code(err))
+		assert.Equal(t, "HTTP 400", status.Convert(err).Message())
 	})
 
 	t.Run("zero-byte rich detail", func(t *testing.T) {

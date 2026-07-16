@@ -35,7 +35,7 @@ func Validation() (grpc.UnaryServerInterceptor, error) {
 		return nil, fmt.Errorf("create protovalidate validator: %w", err)
 	}
 
-	return func(ctx context.Context, req any, _ *ServerCallInfo, handler UnaryHandler) (any, error) {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		msg, ok := req.(proto.Message)
 		if !ok {
 			return handler(ctx, req)

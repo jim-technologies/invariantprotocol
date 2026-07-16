@@ -1,4 +1,4 @@
-"""Test remote gRPC proxy mode (Server.connect)."""
+"""Test remote gRPC proxy mode (Server.connect_grpc)."""
 
 import asyncio
 import json
@@ -13,13 +13,14 @@ DESCRIPTOR_PATH = os.path.join(os.path.dirname(__file__), "proto", "descriptor.b
 
 
 async def test_connect_registers_tools(server):
-    """connect() should register the same tools as register()."""
+    """connect_grpc() should project the same tools as generated registration."""
     port = await server._start_grpc(port=0)
     try:
         from invariant import Server
 
         remote = Server.from_descriptor(DESCRIPTOR_PATH)
-        remote.connect(grpc.aio.insecure_channel(f"localhost:{port}"))
+        channel = grpc.aio.insecure_channel(f"localhost:{port}")
+        remote.connect_grpc(channel)
 
         try:
             assert "GreetService.Greet" in remote.tools
@@ -31,6 +32,7 @@ async def test_connect_registers_tools(server):
             assert local_schema == remote_schema
         finally:
             await remote.stop()
+            await channel.close()
     finally:
         await server._stop_grpc()
 
@@ -42,7 +44,8 @@ async def test_connect_greet(server):
         from invariant import Server
 
         remote = Server.from_descriptor(DESCRIPTOR_PATH)
-        remote.connect(grpc.aio.insecure_channel(f"localhost:{port}"))
+        channel = grpc.aio.insecure_channel(f"localhost:{port}")
+        remote.connect_grpc(channel)
 
         try:
             req = greet_pb2.GreetRequest(name="World")
@@ -50,6 +53,7 @@ async def test_connect_greet(server):
             assert resp.message == "Hi World"
         finally:
             await remote.stop()
+            await channel.close()
     finally:
         await server._stop_grpc()
 
@@ -61,7 +65,8 @@ async def test_connect_greet_with_enum_and_tags(server):
         from invariant import Server
 
         remote = Server.from_descriptor(DESCRIPTOR_PATH)
-        remote.connect(grpc.aio.insecure_channel(f"localhost:{port}"))
+        channel = grpc.aio.insecure_channel(f"localhost:{port}")
+        remote.connect_grpc(channel)
 
         try:
             req = greet_pb2.GreetRequest(
@@ -75,6 +80,7 @@ async def test_connect_greet_with_enum_and_tags(server):
             assert resp.tags["lang"] == "en"
         finally:
             await remote.stop()
+            await channel.close()
     finally:
         await server._stop_grpc()
 
@@ -86,7 +92,8 @@ async def test_connect_greet_group(server):
         from invariant import Server
 
         remote = Server.from_descriptor(DESCRIPTOR_PATH)
-        remote.connect(grpc.aio.insecure_channel(f"localhost:{port}"))
+        channel = grpc.aio.insecure_channel(f"localhost:{port}")
+        remote.connect_grpc(channel)
 
         try:
             req = greet_pb2.GreetGroupRequest(
@@ -100,6 +107,7 @@ async def test_connect_greet_group(server):
             assert resp.count == 2
         finally:
             await remote.stop()
+            await channel.close()
     finally:
         await server._stop_grpc()
 
@@ -135,8 +143,13 @@ from invariant import Server
 
 async def main():
     server = Server.from_descriptor({descriptor!r})
-    server.connect(grpc.aio.insecure_channel("localhost:{grpc_port}"))
-    await server.serve(mcp=True)
+    channel = grpc.aio.insecure_channel("localhost:{grpc_port}")
+    server.connect_grpc(channel)
+    try:
+        await server.serve_projections(mcp=True)
+    finally:
+        await server.stop()
+        await channel.close()
 
 asyncio.run(main())
 """

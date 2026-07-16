@@ -1,0 +1,310 @@
+{
+  "schema_version": 1,
+  "languages": ["go", "python", "rust", "typescript"],
+  "features": [
+    {
+      "id": "descriptor_runtime",
+      "kind": "core",
+      "description": "Load descriptor.binpb with source comments and build JSON Schema/tool metadata.",
+      "api": {
+        "go": "ServerFromDescriptor / ServerFromBytes",
+        "python": "Server.from_descriptor / Server.from_bytes",
+        "rust": "Server::from_descriptor / Server::from_bytes",
+        "typescript": "Server.fromDescriptor / Server.fromBytes"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/descriptor_test.go"],
+        "python": ["python/tests/test_descriptor.py"],
+        "rust": ["rust/tests/core.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts"]
+      }
+    },
+    {
+      "id": "generated_service_registration",
+      "kind": "core",
+      "description": "Register an implementation through the language's generated service surface and reject descriptor drift.",
+      "api": {
+        "go": "Register<Service>Server(server, impl)",
+        "python": "add_<Service>Servicer_to_server(impl, server)",
+        "rust": "register_<service>_server(server, impl)",
+        "typescript": "server.register(Service, implementation)"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/registration_test.go", "go/grpc_native_test.go"],
+        "python": ["python/tests/test_server.py", "python/tests/test_grpc.py"],
+        "rust": ["rust/tests/core.rs", "rust/tests/grpc.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts"]
+      }
+    },
+    {
+      "id": "programmatic_invoke",
+      "kind": "core",
+      "description": "Invoke unary and server-streaming methods in process with canonical method identity.",
+      "api": {
+        "go": "Invoke / InvokeStream",
+        "python": "invoke / invoke_stream",
+        "rust": "invoke / invoke_stream",
+        "typescript": "invoke / invokeStream"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/server_test.go", "go/streaming_test.go"],
+        "python": ["python/tests/test_server.py", "python/tests/test_streaming.py"],
+        "rust": ["rust/tests/core.rs", "rust/tests/streaming.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts"]
+      }
+    },
+    {
+      "id": "native_grpc",
+      "kind": "core",
+      "description": "Serve generated services over the native gRPC stack with unary, server streaming, full cardinality retention, reflection, and normal clients.",
+      "api": {
+        "go": "Serve / GRPCServer",
+        "python": "grpc_server",
+        "rust": "grpc_routes + tonic::transport::Server",
+        "typescript": "grpcServer"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/grpc_native_test.go"],
+        "python": ["python/tests/test_grpc.py"],
+        "rust": ["rust/tests/grpc.rs", "rust/tests/cardinality.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts", "typescript/tests/semantics.test.ts"]
+      }
+    },
+    {
+      "id": "http_connect_projection",
+      "kind": "core",
+      "description": "Serve Connect unary and server-streaming JSON/protobuf routes plus catalog, descriptor, health, and MCP HTTP endpoints.",
+      "api": {
+        "go": "HTTPHandler",
+        "python": "asgi_app",
+        "rust": "http_router",
+        "typescript": "httpHandler"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/http_test.go", "go/streaming_test.go"],
+        "python": ["python/tests/test_http.py", "python/tests/test_streaming.py"],
+        "rust": ["rust/tests/http.rs", "rust/tests/streaming.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts"]
+      }
+    },
+    {
+      "id": "mcp_stdio_and_http",
+      "kind": "core",
+      "description": "Expose the same tools through the non-SSE MCP 2025-11-25 JSON-RPC contract over stdio and POST /mcp, with notifications on both, cancellation notifications for in-flight stdio calls, and cancellation/deadlines scoped to each stateless HTTP request.",
+      "api": {
+        "go": "MCP / HTTPHandler",
+        "python": "serve_projections(mcp=True) / asgi_app",
+        "rust": "serve_mcp_stdio / http_router",
+        "typescript": "serveMcpStdio / httpHandler"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/mcp_test.go", "go/mcp_http_test.go"],
+        "python": ["python/tests/test_mcp.py", "python/tests/test_streaming.py"],
+        "rust": ["rust/tests/http.rs", "rust/tests/production.rs", "rust/tests/streaming.rs"],
+        "typescript": ["typescript/tests/semantics.test.ts"]
+      }
+    },
+    {
+      "id": "cli_projection",
+      "kind": "core",
+      "description": "Expose unary and server-streaming methods through an idiomatic CLI helper with JSON/binpb requests.",
+      "api": {
+        "go": "CLI / ServeProjections",
+        "python": "run_cli / serve_projections(cli=True)",
+        "rust": "cli_write",
+        "typescript": "runCli"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/cli_test.go", "go/streaming_test.go"],
+        "python": ["python/tests/test_cli.py"],
+        "rust": ["rust/tests/streaming.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts"]
+      }
+    },
+    {
+      "id": "shared_interceptors",
+      "kind": "core",
+      "description": "Run unary and stream middleware once, in registration order, with full method identity across every projection; locally registered services retain generated request and response types, while descriptor-only remote adapters may use dynamic protobuf messages.",
+      "api": {
+        "go": "Use / UseStream",
+        "python": "use(grpc.aio.ServerInterceptor)",
+        "rust": "use_shared_unary / use_shared_stream",
+        "typescript": "use(Connect-ES Interceptor)"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/interceptor_test.go", "go/grpc_native_test.go"],
+        "python": ["python/tests/test_interceptor.py"],
+        "rust": ["rust/tests/grpc.rs"],
+        "typescript": ["typescript/tests/semantics.test.ts"]
+      }
+    },
+    {
+      "id": "grpc_semantics",
+      "kind": "core",
+      "description": "Preserve codes, rich details, reviewed metadata, deadlines, cancellation, and transport-supported response headers/trailers for native and directly projected calls; remote gRPC keeps normal gRPC call semantics, while remote HTTP follows its separate explicit contract.",
+      "api": {
+        "go": "context + metadata + status",
+        "python": "grpc.aio.ServicerContext",
+        "rust": "tonic::Request / Response / Status",
+        "typescript": "HandlerContext + ConnectError/grpc-js metadata"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/grpc_native_test.go", "go/http_projection_test.go"],
+        "python": ["python/tests/test_grpc.py", "python/tests/test_http.py"],
+        "rust": ["rust/tests/grpc.rs", "rust/tests/http.rs", "rust/tests/remote.rs"],
+        "typescript": ["typescript/tests/semantics.test.ts"]
+      }
+    },
+    {
+      "id": "transport_limits",
+      "kind": "core",
+      "description": "Keep native gRPC limits under the native stack while independently enforcing four HTTP unary/stream request/response limits, with HTTP stream limits per message and per-method overrides.",
+      "api": {
+        "go": "SetMax* / ConfigureMethod",
+        "python": "set_max_* / configure_method",
+        "rust": "set_max_* / configure_method",
+        "typescript": "setMax* / configureMethod"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/http_projection_test.go", "go/grpc_native_test.go"],
+        "python": ["python/tests/test_grpc.py", "python/tests/test_hardening.py"],
+        "rust": ["rust/tests/grpc.rs", "rust/tests/http.rs", "rust/tests/streaming.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts", "typescript/tests/semantics.test.ts"]
+      }
+    },
+    {
+      "id": "registration_freeze_and_lifecycle",
+      "kind": "core",
+      "description": "Freeze registration/configuration before execution and provide graceful, deterministic shutdown through the native host abstraction.",
+      "api": {
+        "go": "GracefulStop / Stop / ServeProjections",
+        "python": "stop(grace) / serve_projections",
+        "rust": "grpc_routes / serve_with_incoming_shutdown",
+        "typescript": "grpcServer / stop / forceStop"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/grpc_native_test.go", "go/hardening_test.go"],
+        "python": ["python/tests/test_server.py", "python/tests/test_grpc.py"],
+        "rust": ["rust/tests/core.rs", "rust/tests/grpc.rs", "rust/tests/production.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts", "typescript/tests/semantics.test.ts"]
+      }
+    },
+    {
+      "id": "projection_filters",
+      "kind": "core",
+      "description": "Apply include/exclude globs only to optional projections without removing canonical native gRPC methods.",
+      "api": {
+        "go": "Include / Exclude",
+        "python": "include / exclude",
+        "rust": "include / exclude",
+        "typescript": "include / exclude"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/server_test.go", "go/grpc_native_test.go"],
+        "python": ["python/tests/test_server.py"],
+        "rust": ["rust/tests/grpc.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts"]
+      }
+    },
+    {
+      "id": "remote_grpc_projection",
+      "kind": "core",
+      "description": "Project a caller-owned remote gRPC client/channel while preserving standard call semantics.",
+      "api": {
+        "go": "ConnectGRPC",
+        "python": "connect_grpc",
+        "rust": "connect_grpc",
+        "typescript": "connectGrpc"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/grpc_client_test.go", "go/grpc_native_test.go"],
+        "python": ["python/tests/test_grpc.py"],
+        "rust": ["rust/tests/remote.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts", "typescript/tests/semantics.test.ts"]
+      }
+    },
+    {
+      "id": "remote_http_projection",
+      "kind": "core",
+      "description": "Project remote HTTP unary methods over canonical Connect paths with bounded responses, canonical statuses, and explicit transport header/authentication policies, using each language's conventional client ownership model without claiming gRPC metadata/header/trailer equivalence.",
+      "api": {
+        "go": "ConnectHTTP",
+        "python": "connect_http",
+        "rust": "connect_http",
+        "typescript": "connectHttp"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/http_client_test.go"],
+        "python": ["python/tests/test_http_client.py"],
+        "rust": ["rust/tests/remote.rs"],
+        "typescript": ["typescript/tests/runtime.test.ts", "typescript/tests/semantics.test.ts"]
+      }
+    },
+    {
+      "id": "protovalidate",
+      "kind": "ecosystem",
+      "description": "Optional request validation adapter using the language ecosystem's maintained Protovalidate implementation.",
+      "rationale": "Validation is an ecosystem adapter. It may ship only where a maintained implementation exists, but its status must remain explicit.",
+      "support": {"go": "supported", "python": "supported", "rust": "unavailable", "typescript": "supported"},
+      "tests": {
+        "go": ["go/validation_test.go"],
+        "python": ["python/tests/test_validation.py"],
+        "rust": [],
+        "typescript": ["typescript/tests/semantics.test.ts"]
+      }
+    },
+    {
+      "id": "schema_bundle_reader",
+      "kind": "core",
+      "description": "Read and reject unsupported versions of the shared SchemaBundle artifact.",
+      "api": {
+        "go": "data.ParseSchemaBundle",
+        "python": "parse_schema_bundle",
+        "rust": "parse_schema_bundle",
+        "typescript": "parseSchemaBundle"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/data/bundle_test.go"],
+        "python": ["python/tests/test_data_schema.py"],
+        "rust": ["rust/tests/data_schema.rs"],
+        "typescript": ["typescript/tests/data_schema.test.ts"]
+      }
+    },
+    {
+      "id": "schema_compiler_and_renderers",
+      "kind": "build_tool",
+      "description": "Compile descriptor roots into SchemaBundle and render Arrow, Parquet, Iceberg, and PostgreSQL schemas.",
+      "availability": "One repository CLI consumes language-neutral protobuf artifacts; duplicating the compiler per runtime is forbidden.",
+      "consumers": ["go", "python", "rust", "typescript"],
+      "implementation": ["go/cmd/invariant-schema", "go/data"]
+    },
+    {
+      "id": "pyarrow_record_bridge",
+      "kind": "ecosystem",
+      "description": "Convert matching generated protobuf messages into native PyArrow tables for Python data workloads.",
+      "rationale": "This is a Python ecosystem bridge, not a portable server-runtime capability.",
+      "support": {"go": "not_applicable", "python": "supported", "rust": "not_applicable", "typescript": "not_applicable"},
+      "tests": {
+        "go": [],
+        "python": ["python/tests/test_data_arrow.py"],
+        "rust": [],
+        "typescript": []
+      }
+    }
+  ]
+}

@@ -3,40 +3,23 @@ package invariant
 import (
 	"testing"
 
+	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-type testGreetServicer struct{}
-
-func (s *testGreetServicer) Greet(_, _ any) any      { return nil }
-func (s *testGreetServicer) GreetGroup(_, _ any) any { return nil }
+type testGreetServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func registeredServer(t *testing.T) *Server {
 	t.Helper()
-	srv := newServer(mustParse(t))
-	require.NoError(t, srv.Register(&testGreetServicer{}))
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
 	return srv
-}
-
-func TestRegisterExplicitServiceName(t *testing.T) {
-	srv := newServer(mustParse(t))
-	require.NoError(t, srv.Register(&testGreetServicer{}, "greet.v1.GreetService"))
-	assert.Len(t, srv.tools, 2)
-}
-
-func TestRegisterUnknownService(t *testing.T) {
-	srv := newServer(mustParse(t))
-	assert.Error(t, srv.Register(&testGreetServicer{}, "does.not.ExistService"))
-}
-
-type noMethodServicer struct{}
-
-func TestRegisterNoMatchingService(t *testing.T) {
-	srv := newServer(mustParse(t))
-	assert.Error(t, srv.Register(&noMethodServicer{}))
 }
 
 func TestInvokeUnknownToolReturnsNotFound(t *testing.T) {
@@ -46,6 +29,28 @@ func TestInvokeUnknownToolReturnsNotFound(t *testing.T) {
 	st, ok := status.FromError(err)
 	require.True(t, ok)
 	assert.Equal(t, codes.NotFound, st.Code())
+}
+
+func TestToolSnapshotsDoNotExposeSchemaSlices(t *testing.T) {
+	srv := registeredServer(t)
+
+	tools := srv.Tools()
+	schema := tools["GreetService.Greet"].InputSchema
+	required := schema["required"].([]string)
+	required[0] = "mutated"
+	properties := schema["properties"].(map[string]any)
+	mood := properties["mood"].(map[string]any)
+	mood["enum"].([]string)[0] = "MUTATED"
+
+	freshTool := srv.Tools()["GreetService.Greet"].InputSchema
+	assert.NotContains(t, freshTool["required"].([]string), "mutated")
+	freshProperties := freshTool["properties"].(map[string]any)
+	assert.NotContains(t, freshProperties["mood"].(map[string]any)["enum"].([]string), "MUTATED")
+
+	catalog := srv.ToolCatalog()
+	catalogSchema := catalog[0]["inputSchema"].(map[string]any)
+	catalogSchema["required"].([]string)[0] = "also-mutated"
+	assert.NotContains(t, srv.ToolCatalog()[0]["inputSchema"].(map[string]any)["required"].([]string), "also-mutated")
 }
 
 func TestGlobMatch(t *testing.T) {
@@ -79,42 +84,63 @@ func TestGlobMatch(t *testing.T) {
 }
 
 func TestIncludeFilter(t *testing.T) {
-	srv := newServer(mustParse(t))
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
 	srv.Include("greet.v1.GreetService.Greet")
-	require.NoError(t, srv.Register(&testGreetServicer{}))
+	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
 	assert.Len(t, srv.tools, 1)
 	assert.Contains(t, srv.tools, "GreetService.Greet")
 }
 
 func TestExcludeFilter(t *testing.T) {
-	srv := newServer(mustParse(t))
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
 	srv.Exclude("*GreetGroup")
-	require.NoError(t, srv.Register(&testGreetServicer{}))
-	assert.Len(t, srv.tools, 1)
+	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
+	assert.Len(t, srv.tools, 2)
 	assert.Contains(t, srv.tools, "GreetService.Greet")
+	assert.Contains(t, srv.tools, "GreetService.StreamGreet")
 }
 
 func TestIncludeExcludeCombined(t *testing.T) {
-	srv := newServer(mustParse(t))
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
 	srv.Include("greet.v1.GreetService.*")
 	srv.Exclude("*GreetGroup")
-	require.NoError(t, srv.Register(&testGreetServicer{}))
-	assert.Len(t, srv.tools, 1)
+	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
+	assert.Len(t, srv.tools, 2)
 	assert.Contains(t, srv.tools, "GreetService.Greet")
+	assert.Contains(t, srv.tools, "GreetService.StreamGreet")
+}
+
+func TestProjectionFiltersFreezeAtFirstRegistration(t *testing.T) {
+	srv := registeredServer(t)
+
+	assert.PanicsWithValue(t,
+		"invariant: include filters must be configured before service registration",
+		func() { srv.Include("*.Greet") },
+	)
+	assert.PanicsWithValue(t,
+		"invariant: exclude filters must be configured before service registration",
+		func() { srv.Exclude("*.GreetGroup") },
+	)
 }
 
 func TestIncludeEnvVar(t *testing.T) {
 	t.Setenv("INVARIANT_INCLUDE", "greet.v1.GreetService.Greet")
-	srv := newServer(mustParse(t))
-	require.NoError(t, srv.Register(&testGreetServicer{}))
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
 	assert.Len(t, srv.tools, 1)
 	assert.Contains(t, srv.tools, "GreetService.Greet")
 }
 
 func TestExcludeEnvVar(t *testing.T) {
 	t.Setenv("INVARIANT_EXCLUDE", "*GreetGroup")
-	srv := newServer(mustParse(t))
-	require.NoError(t, srv.Register(&testGreetServicer{}))
-	assert.Len(t, srv.tools, 1)
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
+	assert.Len(t, srv.tools, 2)
 	assert.Contains(t, srv.tools, "GreetService.Greet")
+	assert.Contains(t, srv.tools, "GreetService.StreamGreet")
 }

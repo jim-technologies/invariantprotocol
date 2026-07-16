@@ -1,20 +1,39 @@
 import {
   create,
+  equals,
   fromJson,
+  type DescEnum,
   type DescMessage,
+  type DescMethod,
+  type DescService,
   type JsonValue,
   type MessageShape,
   toJson,
 } from "@bufbuild/protobuf";
+import {
+  createHandlerContext,
+  createServiceImplSpec,
+  type HandlerContext as ConnectHandlerContext,
+  type Interceptor,
+  type ServiceImpl,
+  type ServiceImplSpec,
+  type StreamRequest,
+  type StreamResponse,
+  type UnaryRequest,
+  type UnaryResponse,
+} from "@connectrpc/connect";
+import {
+  DescriptorProtoSchema,
+  EnumDescriptorProtoSchema,
+  ServiceDescriptorProtoSchema,
+} from "@bufbuild/protobuf/wkt";
+import type * as grpc from "@grpc/grpc-js";
 
 import { ParsedDescriptor, type ServiceInfo } from "./descriptor.js";
-import { failedPrecondition, InvariantError, notFound } from "./errors.js";
+import { failedPrecondition, InvariantError, normalizeHandlerError, notFound } from "./errors.js";
 import {
-  buildGrpcServer as buildGrpcProjection,
-  grpcClientForService,
+  createGrpcServer,
   grpcProxyHandler,
-  serveGrpc as serveGrpcProjection,
-  type GrpcConnectOptions,
 } from "./grpc.js";
 import { httpHandler as buildHttpHandler, serveHttp as serveHttpProjection } from "./http.js";
 import {
@@ -26,34 +45,24 @@ import {
 } from "./http_client.js";
 import { SchemaGenerator, type JsonSchema } from "./schema.js";
 
-export type HandlerContext = unknown;
-export type UnaryHandler = (request: MessageShape<DescMessage>, context: HandlerContext) => Promise<unknown>;
+export type HandlerContext = ConnectHandlerContext;
+export type ManagedHandlerContext = HandlerContext & { abort(reason?: unknown): void };
+export type ProjectionContextOptions = {
+  protocolName: string;
+  requestMethod?: string;
+  url?: string;
+  timeoutMs?: number;
+  requestSignal?: AbortSignal;
+  requestHeader?: HeadersInit;
+};
+export type HttpMetadataMapper = (requestHeaders: Readonly<Headers>) => HeadersInit;
+export type UnaryHandler = (
+  request: MessageShape<DescMessage>,
+  context: HandlerContext,
+) => Promise<unknown> | unknown;
 export type StreamHandler = (
   request: MessageShape<DescMessage>,
   context: HandlerContext,
-) => AsyncIterable<unknown>;
-export type UnaryNext = (request: MessageShape<DescMessage>, context: HandlerContext) => Promise<unknown>;
-export type StreamNext = (
-  request: MessageShape<DescMessage>,
-  context: HandlerContext,
-) => AsyncIterable<unknown>;
-
-export type ServerCallInfo = {
-  fullMethod: string;
-};
-
-export type UnaryInterceptor = (
-  request: MessageShape<DescMessage>,
-  context: HandlerContext,
-  info: ServerCallInfo,
-  next: UnaryNext,
-) => Promise<unknown>;
-
-export type StreamInterceptor = (
-  request: MessageShape<DescMessage>,
-  context: HandlerContext,
-  info: ServerCallInfo,
-  next: StreamNext,
 ) => AsyncIterable<unknown>;
 
 export type Tool = {
@@ -68,6 +77,14 @@ export type Tool = {
   serverStreaming: boolean;
   inputDesc: DescMessage;
   outputDesc: DescMessage;
+  methodDesc: DescMethod;
+};
+
+export type MethodConfig = {
+  maxUnaryRequestBytes?: number;
+  maxUnaryResponseBytes?: number;
+  maxStreamRequestBytes?: number;
+  maxStreamResponseBytes?: number;
 };
 
 export type ToolCatalogEntry = {
@@ -78,22 +95,79 @@ export type ToolCatalogEntry = {
 };
 
 export const SERVER_NAME = "invariant-protocol";
-export const SERVER_VERSION = "0.6.1";
+export const SERVER_VERSION = "0.7.0";
+const DEFAULT_HTTP_MESSAGE_BYTES = 16 * 1024 * 1024;
+const DEFAULT_HTTP_METADATA_KEYS = ["traceparent", "tracestate", "baggage", "x-request-id"] as const;
+
+export function defaultHttpMetadataMapper(requestHeaders: Readonly<Headers>): Headers {
+  const mapped = new Headers();
+  for (const key of DEFAULT_HTTP_METADATA_KEYS) {
+    const value = requestHeaders.get(key);
+    if (value !== null) {
+      mapped.set(key, value);
+    }
+  }
+  return mapped;
+}
+
+export const serverInternal = Symbol("invariant.server.internal");
 
 export class Server {
   readonly name = SERVER_NAME;
   readonly version = SERVER_VERSION;
   readonly parsed: ParsedDescriptor;
   readonly schemaGen: SchemaGenerator;
-  readonly tools = new Map<string, Tool>();
+  private readonly toolStore = new Map<string, Tool>();
+  readonly tools: ReadonlyMap<string, Tool> = readOnlyMap(this.toolStore);
 
-  private readonly interceptors: UnaryInterceptor[] = [];
-  private readonly streamInterceptors: StreamInterceptor[] = [];
-  private readonly grpcClients: Array<{ close: () => void }> = [];
+  private readonly interceptors: Interceptor[] = [];
+  private readonly services = new Map<string, ServiceImplSpec>();
+  private readonly methodConfigs = new Map<string, MethodConfig>();
   private includes: string[] = [];
   private excludes: string[] = [];
-  private httpMaxUnaryRequest = 16 * 1024 * 1024;
-  private connectStreamMaxRequest = 16 * 1024 * 1024;
+  private httpMaxUnaryRequest = DEFAULT_HTTP_MESSAGE_BYTES;
+  private httpMaxUnaryResponse = DEFAULT_HTTP_MESSAGE_BYTES;
+  private connectStreamMaxRequest = DEFAULT_HTTP_MESSAGE_BYTES;
+  private connectStreamMaxResponse = DEFAULT_HTTP_MESSAGE_BYTES;
+  private httpMetadataMapper: HttpMetadataMapper = defaultHttpMetadataMapper;
+  private grpcServerInstance: grpc.Server | undefined;
+  private frozen = false;
+  readonly [serverInternal] = {
+    freeze: () => this.freezeConfiguration(),
+    registeredServiceSpecs: (): readonly ServiceImplSpec[] => [...this.services.values()],
+    invokeUnaryMethod: (
+      method: DescMethod,
+      handler: UnaryHandler,
+      request: MessageShape<DescMessage>,
+      context: HandlerContext,
+    ) => this.invokeUnaryMethod(method, handler, request, context),
+    invokeServerStreamMethod: (
+      method: DescMethod,
+      handler: StreamHandler,
+      request: MessageShape<DescMessage>,
+      context: HandlerContext,
+    ) => this.invokeServerStreamMethod(method, handler, request, context),
+    invokeClientStreamMethod: (
+      method: DescMethod,
+      handler: (
+        requests: AsyncIterable<MessageShape<DescMessage>>,
+        context: HandlerContext,
+      ) => Promise<unknown>,
+      requests: AsyncIterable<MessageShape<DescMessage>>,
+      context: HandlerContext,
+    ) => this.invokeClientStreamMethod(method, handler, requests, context),
+    invokeBidiStreamMethod: (
+      method: DescMethod,
+      handler: (
+        requests: AsyncIterable<MessageShape<DescMessage>>,
+        context: HandlerContext,
+      ) => AsyncIterable<unknown>,
+      requests: AsyncIterable<MessageShape<DescMessage>>,
+      context: HandlerContext,
+    ) => this.invokeBidiStreamMethod(method, handler, requests, context),
+    createContext: (method: DescMethod, options: ProjectionContextOptions) => this.createContext(method, options),
+    mapHTTPContext: (context: HandlerContext) => this.mapHTTPContext(context),
+  };
 
   private constructor(parsed: ParsedDescriptor) {
     this.parsed = parsed;
@@ -109,138 +183,169 @@ export class Server {
   }
 
   include(...patterns: string[]): void {
+    this.assertProjectionFiltersMutable();
     this.includes.push(...patterns);
   }
 
   exclude(...patterns: string[]): void {
+    this.assertProjectionFiltersMutable();
     this.excludes.push(...patterns);
   }
 
-  use(interceptor: UnaryInterceptor): void {
-    if (!isAsyncFunction(interceptor)) {
-      throw new TypeError("Unary interceptors must be async functions.");
-    }
+  use(interceptor: Interceptor): void {
+    this.assertMutable("shared interceptors");
     this.interceptors.push(interceptor);
   }
 
-  useStream(interceptor: StreamInterceptor): void {
-    if (!isAsyncGeneratorFunction(interceptor)) {
-      throw new TypeError("Stream interceptors must be async generator functions.");
-    }
-    this.streamInterceptors.push(interceptor);
+  setMaxUnaryRequestBytes(n: number): void {
+    this.assertMutable("HTTP unary request limit");
+    this.httpMaxUnaryRequest = positiveByteLimit(n, "HTTP unary request limit");
   }
 
-  setMaxUnaryRequestBytes(n: number): void {
-    this.httpMaxUnaryRequest = n > 0 ? n : 16 * 1024 * 1024;
+  setMaxUnaryResponseBytes(n: number): void {
+    this.assertMutable("HTTP unary response limit");
+    this.httpMaxUnaryResponse = positiveByteLimit(n, "HTTP unary response limit");
   }
 
   setMaxStreamRequestBytes(n: number): void {
-    this.connectStreamMaxRequest = n > 0 ? n : 16 * 1024 * 1024;
+    this.assertMutable("HTTP stream request limit");
+    this.connectStreamMaxRequest = positiveByteLimit(n, "HTTP stream request limit");
   }
 
-  maxUnaryRequestBytes(): number {
-    return this.httpMaxUnaryRequest;
+  setMaxStreamResponseBytes(n: number): void {
+    this.assertMutable("HTTP stream response limit");
+    this.connectStreamMaxResponse = positiveByteLimit(n, "HTTP stream response limit");
   }
 
-  maxStreamRequestBytes(): number {
-    return this.connectStreamMaxRequest;
-  }
-
-  register(servicer: object, serviceName?: string): void {
-    const services = serviceName ? this.serviceByName(serviceName) : this.matchServicer(servicer);
-
-    for (const [svcFullName, svc] of services) {
-      for (const [methodName, method] of svc.methods) {
-        if (method.clientStreaming || !this.shouldInclude(svcFullName, methodName)) {
-          continue;
-        }
-
-        const handler = (servicer as Record<string, unknown>)[methodName];
-        if (typeof handler !== "function") {
-          continue;
-        }
-
-        if (method.serverStreaming) {
-          if (!isAsyncGeneratorFunction(handler)) {
-            throw new TypeError(
-              `${servicer.constructor.name}.${methodName} is server-streaming and must be an async generator.`,
-            );
-          }
-        } else if (!isAsyncFunction(handler)) {
-          throw new TypeError(`${servicer.constructor.name}.${methodName} must be an async function.`);
-        }
-
-        const inputDesc = this.parsed.getMessage(method.inputType);
-        const outputDesc = this.parsed.getMessage(method.outputType);
-        if (!inputDesc || !outputDesc) {
-          throw new InvariantError("internal", `missing message descriptor for ${svc.name}.${methodName}`);
-        }
-
-        this.addTool({
-          name: `${svc.name}.${methodName}`,
-          description: method.comment || `${svc.name}.${methodName}`,
-          inputSchema: this.schemaGen.messageToSchema(method.inputType),
-          handler: handler.bind(servicer) as UnaryHandler | StreamHandler,
-          inputType: method.inputType,
-          outputType: method.outputType,
-          serviceFullName: svcFullName,
-          methodName,
-          serverStreaming: method.serverStreaming,
-          inputDesc,
-          outputDesc,
-        });
+  configureMethod(fullMethod: string, config: MethodConfig): void {
+    this.assertMutable("method configuration");
+    for (const [name, value] of Object.entries(config)) {
+      if (value !== undefined) {
+        positiveByteLimit(value, `${fullMethod} ${name}`);
       }
     }
+    this.methodConfigs.set(fullMethod, { ...config });
   }
 
-  connect(address: string, options: GrpcConnectOptions = {}): void {
-    const services = options.serviceName ? this.serviceByName(options.serviceName) : this.parsed.services;
+  useHttpMetadataMapper(mapper: HttpMetadataMapper = defaultHttpMetadataMapper): void {
+    this.assertMutable("HTTP metadata mapper");
+    this.httpMetadataMapper = mapper;
+  }
 
-    for (const [svcFullName, svc] of services) {
-      const proxyTools: Tool[] = [];
-      for (const [methodName, method] of svc.methods) {
-        if (method.clientStreaming || method.serverStreaming || !this.shouldInclude(svcFullName, methodName)) {
-          continue;
-        }
-        const inputDesc = this.parsed.getMessage(method.inputType);
-        const outputDesc = this.parsed.getMessage(method.outputType);
-        if (!inputDesc || !outputDesc) {
-          throw new InvariantError("internal", `missing message descriptor for ${svc.name}.${methodName}`);
-        }
-        proxyTools.push({
-          name: `${svc.name}.${methodName}`,
-          description: method.comment || `${svc.name}.${methodName}`,
-          inputSchema: this.schemaGen.messageToSchema(method.inputType),
-          handler: async () => {
-            throw new InvariantError("internal", "gRPC proxy handler not initialized");
-          },
-          inputType: method.inputType,
-          outputType: method.outputType,
-          serviceFullName: svcFullName,
-          methodName,
-          serverStreaming: false,
-          inputDesc,
-          outputDesc,
-        });
+  maxUnaryRequestBytes(tool?: Tool): number {
+    return this.methodLimit(tool, "maxUnaryRequestBytes", this.httpMaxUnaryRequest);
+  }
+
+  maxUnaryResponseBytes(tool?: Tool): number {
+    return this.methodLimit(tool, "maxUnaryResponseBytes", this.httpMaxUnaryResponse);
+  }
+
+  maxStreamRequestBytes(tool?: Tool): number {
+    return this.methodLimit(tool, "maxStreamRequestBytes", this.connectStreamMaxRequest);
+  }
+
+  maxStreamResponseBytes(tool?: Tool): number {
+    return this.methodLimit(tool, "maxStreamResponseBytes", this.connectStreamMaxResponse);
+  }
+
+  register<T extends DescService>(service: T, implementation: Partial<ServiceImpl<T>>): void {
+    this.assertMutable("service registration");
+    const descriptorService = this.validateGeneratedService(service);
+    if (this.services.has(service.typeName)) {
+      throw new Error(`Service ${service.typeName} is already registered.`);
+    }
+
+    const spec = createServiceImplSpec(service, implementation);
+    const stagedTools: Tool[] = [];
+
+    for (const method of service.methods) {
+      const methodInfo = descriptorService.methods.get(method.name);
+      if (!methodInfo) {
+        throw new InvariantError("internal", `missing method descriptor for ${service.typeName}.${method.name}`);
       }
-
-      if (proxyTools.length === 0) {
+      if (methodInfo.clientStreaming || !this.shouldInclude(service.typeName, method.name)) {
         continue;
       }
 
-      const client = grpcClientForService(address, svcFullName, proxyTools, options);
-      this.grpcClients.push(client);
-      for (const tool of proxyTools) {
-        tool.handler = grpcProxyHandler(client, tool.methodName, tool);
-        this.addTool(tool);
+      const methodSpec = spec.methods[method.localName];
+      stagedTools.push({
+        name: `${descriptorService.name}.${method.name}`,
+        description: methodInfo.comment || `${descriptorService.name}.${method.name}`,
+        inputSchema: this.schemaGen.messageToSchema(method.input.typeName),
+        handler: methodSpec.impl as UnaryHandler | StreamHandler,
+        inputType: method.input.typeName,
+        outputType: method.output.typeName,
+        serviceFullName: service.typeName,
+        methodName: method.name,
+        serverStreaming: methodInfo.serverStreaming,
+        inputDesc: method.input,
+        outputDesc: method.output,
+        methodDesc: method,
+      });
+    }
+    this.assertToolsAvailable(stagedTools);
+    this.services.set(service.typeName, spec);
+    for (const tool of stagedTools) {
+      this.addTool(tool);
+    }
+  }
+
+  connectGrpc<T extends DescService>(
+    service: T,
+    client: grpc.Client,
+    defaultCallOptions: grpc.CallOptions = {},
+  ): void {
+    this.assertMutable("gRPC proxy registration");
+    const descriptorService = this.validateGeneratedService(service);
+    const proxyTools: Tool[] = [];
+    for (const method of service.methods) {
+      const methodInfo = descriptorService.methods.get(method.name);
+      if (!methodInfo) {
+        throw new InvariantError("internal", `missing method descriptor for ${service.typeName}.${method.name}`);
       }
+      if (
+        methodInfo.clientStreaming ||
+        methodInfo.serverStreaming ||
+        !this.shouldInclude(service.typeName, method.name)
+      ) {
+        continue;
+      }
+      if (typeof (client as unknown as Record<string, unknown>)[method.localName] !== "function") {
+        throw new Error(`gRPC client does not implement ${service.typeName}.${method.localName}.`);
+      }
+      const tool: Tool = {
+        name: `${descriptorService.name}.${method.name}`,
+        description: methodInfo.comment || `${descriptorService.name}.${method.name}`,
+        inputSchema: this.schemaGen.messageToSchema(method.input.typeName),
+        handler: async () => {
+          throw new InvariantError("internal", "gRPC proxy handler not initialized");
+        },
+        inputType: method.input.typeName,
+        outputType: method.output.typeName,
+        serviceFullName: service.typeName,
+        methodName: method.name,
+        serverStreaming: false,
+        inputDesc: method.input,
+        outputDesc: method.output,
+        methodDesc: method,
+      };
+      tool.handler = grpcProxyHandler(client, method.localName, tool, defaultCallOptions);
+      if (this.tools.has(tool.name) || proxyTools.some((candidate) => candidate.name === tool.name)) {
+        throw new Error(`Tool ${tool.name} is already registered.`);
+      }
+      proxyTools.push(tool);
+    }
+    for (const tool of proxyTools) {
+      this.addTool(tool);
     }
   }
 
   connectHttp(baseUrl: string, options: ConnectHttpOptions = {}): void {
+    this.assertMutable("HTTP proxy registration");
     const services = options.serviceName ? this.serviceByName(options.serviceName) : this.parsed.services;
     const rules = httpRulesByMethodPath(this);
     const connection = new HTTPConnection(baseUrl, options);
+    const stagedTools: Tool[] = [];
 
     for (const [svcFullName, svc] of services) {
       for (const [methodName, method] of svc.methods) {
@@ -269,14 +374,20 @@ export class Server {
           serverStreaming: false,
           inputDesc,
           outputDesc,
+          methodDesc: method.desc,
         };
         tool.handler = httpProxyHandler(this, connection, binding, tool, methodPath);
-        this.addTool(tool);
+        stagedTools.push(tool);
       }
+    }
+    this.assertToolsAvailable(stagedTools);
+    for (const tool of stagedTools) {
+      this.addTool(tool);
     }
   }
 
-  async invoke(toolName: string, request: unknown, context: HandlerContext = undefined): Promise<MessageShape<DescMessage>> {
+  async invoke(toolName: string, request: unknown, context?: HandlerContext): Promise<MessageShape<DescMessage>> {
+    this.freezeConfiguration();
     const tool = this.tools.get(toolName);
     if (!tool) {
       throw notFound(`Unknown tool '${toolName}'. Available: ${JSON.stringify([...this.tools.keys()].sort())}`);
@@ -290,8 +401,9 @@ export class Server {
   async *invokeStream(
     toolName: string,
     request: unknown,
-    context: HandlerContext = undefined,
+    context?: HandlerContext,
   ): AsyncIterable<MessageShape<DescMessage>> {
+    this.freezeConfiguration();
     const tool = this.tools.get(toolName);
     if (!tool) {
       throw notFound(`Unknown tool '${toolName}'. Available: ${JSON.stringify([...this.tools.keys()].sort())}`);
@@ -319,25 +431,43 @@ export class Server {
   }
 
   httpHandler(): ReturnType<typeof buildHttpHandler> {
+    this.freezeConfiguration();
     return buildHttpHandler(this);
   }
 
   serveHttp(port: number, host?: string) {
+    this.freezeConfiguration();
     return serveHttpProjection(this, port, host);
   }
 
-  buildGrpcServer() {
-    return buildGrpcProjection(this);
-  }
-
-  serveGrpc(port: number, host?: string) {
-    return serveGrpcProjection(this, port, host);
-  }
-
-  async stop(): Promise<void> {
-    for (const client of this.grpcClients.splice(0)) {
-      client.close();
+  grpcServer(options?: grpc.ServerOptions): grpc.Server {
+    if (this.grpcServerInstance) {
+      throw new Error("Invariant's native gRPC server has already been created.");
     }
+    this.freezeConfiguration();
+    const server = createGrpcServer(this, options);
+    this.grpcServerInstance = server;
+    return server;
+  }
+
+  stop(): Promise<void> {
+    const server = this.grpcServerInstance;
+    if (!server) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      server.tryShutdown((error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    });
+  }
+
+  forceStop(): void {
+    this.grpcServerInstance?.forceShutdown();
   }
 
   toJson(tool: Tool, message: MessageShape<DescMessage>): JsonValue {
@@ -358,62 +488,270 @@ export class Server {
   async invokeTool(
     tool: Tool,
     request: MessageShape<DescMessage>,
-    context: HandlerContext,
+    context?: HandlerContext,
   ): Promise<MessageShape<DescMessage>> {
-    const info = { fullMethod: `/${tool.serviceFullName}/${tool.methodName}` };
-    const handler = tool.handler as UnaryHandler;
-    const response = await this.chainedInvoke(request, context, info, handler);
-    return this.coerceMessage(tool.outputDesc, response);
+    return this.invokeUnaryMethod(tool.methodDesc, tool.handler as UnaryHandler, request, context);
   }
 
   async *invokeStreamTool(
     tool: Tool,
     request: MessageShape<DescMessage>,
-    context: HandlerContext,
+    context?: HandlerContext,
   ): AsyncIterable<MessageShape<DescMessage>> {
-    const info = { fullMethod: `/${tool.serviceFullName}/${tool.methodName}` };
-    const stream = this.chainedStream(request, context, info, tool.handler as StreamHandler);
-    for await (const response of stream) {
-      yield this.coerceMessage(tool.outputDesc, response);
+    yield* this.invokeServerStreamMethod(tool.methodDesc, tool.handler as StreamHandler, request, context);
+  }
+
+  private async invokeUnaryMethod(
+    method: DescMethod,
+    handler: UnaryHandler,
+    request: MessageShape<DescMessage>,
+    context?: HandlerContext,
+  ): Promise<MessageShape<DescMessage>> {
+    this.freezeConfiguration();
+    const fullMethod = `/${method.parent.typeName}/${method.name}`;
+    const ownedContext = context === undefined ? this.createContext(method, { protocolName: "in-process" }) : undefined;
+    const callContext = context ?? ownedContext!;
+    try {
+      const response = await this.interceptUnary(method, request, callContext, handler);
+      return this.coerceMessage(method.output, response.message);
+    } catch (error) {
+      throw normalizeHandlerError(error, fullMethod);
+    } finally {
+      ownedContext?.abort();
+    }
+  }
+
+  private async *invokeServerStreamMethod(
+    method: DescMethod,
+    handler: StreamHandler,
+    request: MessageShape<DescMessage>,
+    context?: HandlerContext,
+  ): AsyncIterable<MessageShape<DescMessage>> {
+    const streamingHandler = (
+      requests: AsyncIterable<MessageShape<DescMessage>>,
+      callContext: HandlerContext,
+    ): AsyncIterable<unknown> =>
+      (async function* () {
+        const input = await exactlyOneMessage(requests, "server-streaming call");
+        yield* handler(input, callContext);
+      })();
+    yield* this.invokeStreamingMethod(method, streamingHandler, oneMessage(request), context);
+  }
+
+  private async invokeClientStreamMethod(
+    method: DescMethod,
+    handler: (
+      requests: AsyncIterable<MessageShape<DescMessage>>,
+      context: HandlerContext,
+    ) => Promise<unknown>,
+    requests: AsyncIterable<MessageShape<DescMessage>>,
+    context?: HandlerContext,
+  ): Promise<MessageShape<DescMessage>> {
+    const streamingHandler = (
+      input: AsyncIterable<MessageShape<DescMessage>>,
+      callContext: HandlerContext,
+    ): AsyncIterable<unknown> =>
+      (async function* () {
+        yield await handler(input, callContext);
+      })();
+    return exactlyOneMessage(
+      this.invokeStreamingMethod(method, streamingHandler, requests, context),
+      "client-streaming call",
+    );
+  }
+
+  private async *invokeBidiStreamMethod(
+    method: DescMethod,
+    handler: (
+      requests: AsyncIterable<MessageShape<DescMessage>>,
+      context: HandlerContext,
+    ) => AsyncIterable<unknown>,
+    requests: AsyncIterable<MessageShape<DescMessage>>,
+    context?: HandlerContext,
+  ): AsyncIterable<MessageShape<DescMessage>> {
+    yield* this.invokeStreamingMethod(method, handler, requests, context);
+  }
+
+  private async *invokeStreamingMethod(
+    method: DescMethod,
+    handler: (
+      requests: AsyncIterable<MessageShape<DescMessage>>,
+      context: HandlerContext,
+    ) => AsyncIterable<unknown>,
+    requests: AsyncIterable<MessageShape<DescMessage>>,
+    context?: HandlerContext,
+  ): AsyncIterable<MessageShape<DescMessage>> {
+    this.freezeConfiguration();
+    const fullMethod = `/${method.parent.typeName}/${method.name}`;
+    const ownedContext = context === undefined ? this.createContext(method, { protocolName: "in-process" }) : undefined;
+    const callContext = context ?? ownedContext!;
+    try {
+      const response = await this.interceptStream(method, requests, callContext, handler);
+      copyHeaders(response.header, callContext.responseHeader);
+      for await (const message of response.message) {
+        yield this.coerceMessage(method.output, message);
+      }
+      copyHeaders(response.trailer, callContext.responseTrailer);
+    } catch (error) {
+      throw normalizeHandlerError(error, fullMethod);
+    } finally {
+      ownedContext?.abort();
     }
   }
 
   private addTool(tool: Tool): void {
     const existing = this.tools.get(tool.name);
-    if (existing && existing.serviceFullName !== tool.serviceFullName) {
+    if (existing) {
       throw new Error(
-        `Tool name collision: ${tool.name} is registered by both ${existing.serviceFullName} and ${tool.serviceFullName}. Use include() to scope to one.`,
+        `Tool ${tool.name} is already registered by ${existing.serviceFullName}; cannot register ${tool.serviceFullName}.`,
       );
     }
-    this.tools.set(tool.name, tool);
+    this.toolStore.set(tool.name, tool);
   }
 
-  private async chainedInvoke(
-    request: MessageShape<DescMessage>,
+  private assertToolsAvailable(tools: readonly Tool[]): void {
+    const staged = new Map<string, string>();
+    for (const tool of tools) {
+      const owner = this.tools.get(tool.name)?.serviceFullName ?? staged.get(tool.name);
+      if (owner !== undefined) {
+        throw new Error(
+          `Tool ${tool.name} is already registered by ${owner}; cannot register ${tool.serviceFullName}.`,
+        );
+      }
+      staged.set(tool.name, tool.serviceFullName);
+    }
+  }
+
+  private assertMutable(subject: string): void {
+    if (this.frozen) {
+      throw new Error(`Invariant server ${subject} cannot be changed after execution begins.`);
+    }
+  }
+
+  private assertProjectionFiltersMutable(): void {
+    this.assertMutable("projection filters");
+    if (this.services.size > 0 || this.toolStore.size > 0) {
+      throw new Error("Invariant projection filters must be configured before service registration.");
+    }
+  }
+
+  private freezeConfiguration(): void {
+    this.frozen = true;
+  }
+
+  private methodLimit(tool: Tool | undefined, key: keyof MethodConfig, fallback: number): number {
+    if (!tool) {
+      return fallback;
+    }
+    const config = this.methodConfigs.get(`/${tool.serviceFullName}/${tool.methodName}`);
+    const value = config?.[key];
+    return value ?? fallback;
+  }
+
+  private createContext(method: DescMethod, options: ProjectionContextOptions): ManagedHandlerContext {
+    return createHandlerContext({
+      service: method.parent,
+      method,
+      protocolName: options.protocolName,
+      requestMethod: options.requestMethod ?? "POST",
+      url: options.url ?? `${options.protocolName}:///${method.parent.typeName}/${method.name}`,
+      timeoutMs: options.timeoutMs,
+      requestSignal: options.requestSignal,
+      requestHeader: options.requestHeader,
+    });
+  }
+
+  private mapHTTPContext(context: HandlerContext): HandlerContext {
+    const mapped = new Headers(this.httpMetadataMapper(new Headers(context.requestHeader)));
+    const safe = new Headers();
+    mapped.forEach((value, rawKey) => {
+      const key = rawKey.trim().toLowerCase();
+      if (validMetadataKey(key) && !reservedInboundMetadata(key) && validMetadataValue(value)) {
+        safe.append(key, value);
+      }
+    });
+    // The Connect context is deliberately retained so its cancellation,
+    // response headers/trailers, timeout, and context values keep their normal
+    // behavior. Only the untrusted incoming header view is replaced.
+    Object.assign(context, { requestHeader: safe });
+    return context;
+  }
+
+  private async interceptUnary(
+    method: DescMethod,
+    message: MessageShape<DescMessage>,
     context: HandlerContext,
-    info: ServerCallInfo,
     handler: UnaryHandler,
-  ): Promise<unknown> {
-    let current: UnaryNext = handler;
+  ): Promise<UnaryResponse> {
+    let next = async (request: UnaryRequest): Promise<UnaryResponse> => ({
+      stream: false,
+      service: method.parent,
+      method: method as UnaryRequest["method"],
+      header: context.responseHeader,
+      trailer: context.responseTrailer,
+      message: this.coerceMessage(
+        method.output,
+        await handler(request.message, handlerContextForRequest(context, request)),
+      ),
+    });
     for (const interceptor of [...this.interceptors].reverse()) {
-      const next = current;
-      current = (req, ctx) => interceptor(req, ctx, info, next);
+      next = interceptor(next as unknown as Parameters<Interceptor>[0]) as typeof next;
     }
-    return current(request, context);
+    const response = await next({
+      stream: false,
+      service: method.parent,
+      method: method as UnaryRequest["method"],
+      requestMethod: context.requestMethod,
+      url: context.url,
+      signal: context.signal,
+      header: context.requestHeader,
+      contextValues: context.values,
+      message,
+    });
+    copyHeaders(response.header, context.responseHeader);
+    copyHeaders(response.trailer, context.responseTrailer);
+    return response;
   }
 
-  private chainedStream(
-    request: MessageShape<DescMessage>,
+  private async interceptStream(
+    method: DescMethod,
+    messages: AsyncIterable<MessageShape<DescMessage>>,
     context: HandlerContext,
-    info: ServerCallInfo,
-    handler: StreamHandler,
-  ): AsyncIterable<unknown> {
-    let current: StreamNext = handler;
-    for (const interceptor of [...this.streamInterceptors].reverse()) {
-      const next = current;
-      current = (req, ctx) => interceptor(req, ctx, info, next);
+    handler: (
+      requests: AsyncIterable<MessageShape<DescMessage>>,
+      context: HandlerContext,
+    ) => AsyncIterable<unknown>,
+  ): Promise<StreamResponse> {
+    let next = async (request: StreamRequest): Promise<StreamResponse> => {
+      const output = handler(request.message, handlerContextForRequest(context, request));
+      const normalized = (async function* (server: Server) {
+        for await (const message of output) {
+          yield server.coerceMessage(method.output, message);
+        }
+      })(this);
+      return {
+        stream: true,
+        service: method.parent,
+        method: method as StreamRequest["method"],
+        header: context.responseHeader,
+        trailer: context.responseTrailer,
+        message: normalized,
+      };
+    };
+    for (const interceptor of [...this.interceptors].reverse()) {
+      next = interceptor(next as unknown as Parameters<Interceptor>[0]) as typeof next;
     }
-    return current(request, context);
+    return next({
+      stream: true,
+      service: method.parent,
+      method: method as StreamRequest["method"],
+      requestMethod: context.requestMethod,
+      url: context.url,
+      signal: context.signal,
+      header: context.requestHeader,
+      contextValues: context.values,
+      message: messages,
+    });
   }
 
   private serviceByName(serviceName: string): Map<string, ServiceInfo> {
@@ -424,23 +762,65 @@ export class Server {
     return new Map([[serviceName, service]]);
   }
 
-  private matchServicer(servicer: object): Map<string, ServiceInfo> {
-    const names = new Set(
-      Object.getOwnPropertyNames(Object.getPrototypeOf(servicer)).filter((name) => {
-        return name !== "constructor" && typeof (servicer as Record<string, unknown>)[name] === "function";
-      }),
-    );
-    const matched = new Map<string, ServiceInfo>();
-    for (const [svcFullName, svc] of this.parsed.services) {
-      const rpcNames = [...svc.methods].filter(([, info]) => !info.clientStreaming).map(([name]) => name);
-      if (rpcNames.some((name) => names.has(name))) {
-        matched.set(svcFullName, svc);
+  private validateGeneratedService(service: DescService): ServiceInfo {
+    const descriptorService = this.parsed.services.get(service.typeName);
+    if (!descriptorService) {
+      throw new Error(`Generated service '${service.typeName}' is not present in descriptor.binpb.`);
+    }
+    if (!equals(ServiceDescriptorProtoSchema, service.proto, descriptorService.desc.proto)) {
+      throw new Error(`Generated service '${service.typeName}' does not match descriptor.binpb.`);
+    }
+
+    const seenMessages = new Set<string>();
+    const seenEnums = new Set<string>();
+    for (const method of service.methods) {
+      this.validateGeneratedMessage(method.input, seenMessages, seenEnums);
+      this.validateGeneratedMessage(method.output, seenMessages, seenEnums);
+    }
+    return descriptorService;
+  }
+
+  private validateGeneratedMessage(message: DescMessage, seenMessages: Set<string>, seenEnums: Set<string>): void {
+    if (seenMessages.has(message.typeName)) {
+      return;
+    }
+    seenMessages.add(message.typeName);
+
+    const descriptorMessage = this.parsed.getMessage(message.typeName);
+    if (!descriptorMessage || !equals(DescriptorProtoSchema, message.proto, descriptorMessage.proto)) {
+      throw new Error(`Generated message '${message.typeName}' does not match descriptor.binpb.`);
+    }
+
+    for (const field of message.fields) {
+      if (field.fieldKind === "message") {
+        this.validateGeneratedMessage(field.message, seenMessages, seenEnums);
+      } else if (field.fieldKind === "enum") {
+        this.validateGeneratedEnum(field.enum, seenEnums);
+      } else if (field.fieldKind === "list") {
+        if (field.listKind === "message") {
+          this.validateGeneratedMessage(field.message, seenMessages, seenEnums);
+        } else if (field.listKind === "enum") {
+          this.validateGeneratedEnum(field.enum, seenEnums);
+        }
+      } else if (field.fieldKind === "map") {
+        if (field.mapKind === "message") {
+          this.validateGeneratedMessage(field.message, seenMessages, seenEnums);
+        } else if (field.mapKind === "enum") {
+          this.validateGeneratedEnum(field.enum, seenEnums);
+        }
       }
     }
-    if (matched.size === 0) {
-      throw new Error(`No matching service found for servicer. Available: ${JSON.stringify([...this.parsed.services.keys()])}`);
+  }
+
+  private validateGeneratedEnum(en: DescEnum, seenEnums: Set<string>): void {
+    if (seenEnums.has(en.typeName)) {
+      return;
     }
-    return matched;
+    seenEnums.add(en.typeName);
+    const descriptorEnum = this.parsed.getEnum(en.typeName);
+    if (!descriptorEnum || !equals(EnumDescriptorProtoSchema, en.proto, descriptorEnum.proto)) {
+      throw new Error(`Generated enum '${en.typeName}' does not match descriptor.binpb.`);
+    }
   }
 
   private shouldInclude(serviceFullName: string, methodName: string): boolean {
@@ -467,14 +847,128 @@ function globMatch(pattern: string, value: string): boolean {
   return new RegExp(`^${escaped}$`).test(value);
 }
 
-function isAsyncFunction(fn: unknown): boolean {
-  return typeof fn === "function" && fn.constructor.name === "AsyncFunction";
-}
-
-function isAsyncGeneratorFunction(fn: unknown): boolean {
-  return typeof fn === "function" && fn.constructor.name === "AsyncGeneratorFunction";
-}
-
 function isMessageFor(desc: DescMessage, value: unknown): boolean {
   return typeof value === "object" && value !== null && "$typeName" in value && (value as { $typeName?: string }).$typeName === desc.typeName;
+}
+
+function reservedInboundMetadata(key: string): boolean {
+  if (
+    key.startsWith("grpc-") ||
+    key.startsWith("connect-") ||
+    key.startsWith("invariant-internal-") ||
+    key.startsWith("x-invariant-internal-") ||
+    key.startsWith("x-tenant") ||
+    key.startsWith("x-principal") ||
+    key.startsWith("x-role") ||
+    key.startsWith("x-user") ||
+    key.startsWith("x-auth") ||
+    key.startsWith("x-internal-") ||
+    key.startsWith("internal-") ||
+    key.startsWith("tenant-") ||
+    key.startsWith("principal-") ||
+    key.startsWith("role-") ||
+    key.startsWith("user-") ||
+    key.startsWith("auth-") ||
+    key.startsWith("subject-") ||
+    key.startsWith("identity-")
+  ) {
+    return true;
+  }
+  return new Set([
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "authentication",
+    "api-key",
+    "x-api-key",
+    "tenant",
+    "principal",
+    "role",
+    "user",
+    "subject",
+    "identity",
+    "te",
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "content-type",
+    "trailer",
+  ]).has(key);
+}
+
+function validMetadataKey(key: string): boolean {
+  return key.length > 0 && /^[a-z0-9._-]+$/.test(key);
+}
+
+function validMetadataValue(value: string): boolean {
+  return value.length > 0 && /^[\x20-\x7e]+$/.test(value);
+}
+
+function positiveByteLimit(value: number, subject: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${subject} must be a positive integer number of bytes.`);
+  }
+  return value;
+}
+
+function readOnlyMap<K, V>(source: Map<K, V>): ReadonlyMap<K, V> {
+  return new Proxy(source, {
+    get(target, property) {
+      if (property === "set" || property === "delete" || property === "clear") {
+        return () => {
+          throw new TypeError("Invariant's registered tool catalog is read-only.");
+        };
+      }
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+function handlerContextForRequest(
+  context: HandlerContext,
+  request: UnaryRequest | StreamRequest,
+): HandlerContext {
+  return Object.assign({}, context, {
+    service: request.service,
+    method: request.method,
+    requestMethod: request.requestMethod,
+    url: request.url,
+    requestHeader: request.header,
+    signal: request.signal,
+    values: request.contextValues,
+  });
+}
+
+async function* oneMessage(message: MessageShape<DescMessage>): AsyncIterable<MessageShape<DescMessage>> {
+  yield message;
+}
+
+async function exactlyOneMessage(
+  messages: AsyncIterable<MessageShape<DescMessage>>,
+  subject: string,
+): Promise<MessageShape<DescMessage>> {
+  const iterator = messages[Symbol.asyncIterator]();
+  const first = await iterator.next();
+  if (first.done) {
+    throw new InvariantError("internal", `${subject} produced no message where exactly one was required`);
+  }
+  const second = await iterator.next();
+  if (!second.done) {
+    throw new InvariantError("internal", `${subject} produced multiple messages where exactly one was required`);
+  }
+  return first.value;
+}
+
+function copyHeaders(source: Headers, target: Headers): void {
+  if (source === target) {
+    return;
+  }
+  target.forEach((_value, key) => target.delete(key));
+  source.forEach((value, key) => target.set(key, value));
 }

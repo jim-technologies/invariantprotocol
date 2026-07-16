@@ -1,0 +1,72 @@
+ ëváviBÎìõÅ¶oP¡J:∆&»5:Œ˛ãËf7%πî"‚ 
+data.v1.CanonicalRecorddata_v1_canonical_recordLCanonicalRecord exercises every protobuf shape supported by data projection."k
+$data.v1.CanonicalRecord.double_valuedouble_value (BA double-precision value.JPjdoubleValue"h
+#data.v1.CanonicalRecord.float_valuefloat_value (BA single-precision value.JPj
+floatValue"t
+#data.v1.CanonicalRecord.int64_valueint64_value (B%A variable-width signed 64-bit value.JPj
+int64Value"y
+$data.v1.CanonicalRecord.uint64_valueuint64_value (B'A variable-width unsigned 64-bit value.JPjuint64Value"t
+#data.v1.CanonicalRecord.int32_valueint32_value (B%A variable-width signed 32-bit value.JPj
+int32Value"y
+%data.v1.CanonicalRecord.fixed64_valuefixed64_value (B$A fixed-width unsigned 64-bit value.JPjfixed64Value"y
+%data.v1.CanonicalRecord.fixed32_valuefixed32_value (B$A fixed-width unsigned 32-bit value.JPjfixed32Value"\
+"data.v1.CanonicalRecord.bool_value
+bool_value (BA boolean value.JPj	boolValue"`
+$data.v1.CanonicalRecord.string_value	string_value 	(BA UTF-8 value.J	PjstringValue"f
+#data.v1.CanonicalRecord.bytes_value
+bytes_value 
+(BAn opaque binary value.J
+Pj
+bytesValue"y
+$data.v1.CanonicalRecord.uint32_valueuint32_value (B'A variable-width unsigned 32-bit value.JPjuint32Value"z
+&data.v1.CanonicalRecord.sfixed32_valuesfixed32_value (B"A fixed-width signed 32-bit value.JPjsfixed32Value"z
+&data.v1.CanonicalRecord.sfixed64_valuesfixed64_value (B"A fixed-width signed 64-bit value.JPjsfixed64Value"x
+$data.v1.CanonicalRecord.sint32_valuesint32_value (B&A zig-zag encoded signed 32-bit value.JPjsint32Value"x
+$data.v1.CanonicalRecord.sint64_valuesint64_value (B&A zig-zag encoded signed 64-bit value.JPjsint64Value"ß
+data.v1.CanonicalRecord.statestate (BAn open numeric enum.J◊
+data.v1.DataState¡
+data.v1.DataState6
+DATA_STATE_UNSPECIFIEDThe state was not specified.*
+DATA_STATE_READYThe record is ready.H
+DATA_STATE_ACTIVE1An alias retained for an earlier source spelling.Pjstate"}
+%data.v1.CanonicalRecord.optional_noteoptional_note (0B&A field with explicit scalar presence.J	PjoptionalNote"§
+data.v1.CanonicalRecord.nestednested (0B(A nested message with explicit presence.Jº
+data.v1.NestedRecord"£
+K
+data.v1.NestedRecord.idid (BNested numeric identity.JPjid
+T
+data.v1.NestedRecord.labellabel (0BNested optional label.J	PjlabelPjnested"â
+data.v1.CanonicalRecord.labelslabels (BA scalar list.J>*<
+:
+ data.v1.CanonicalRecord.labels[]element (J	PPjlabels"’
+ data.v1.CanonicalRecord.childrenchildren (BA nested-message list.J˚*¯
+ı
+"data.v1.CanonicalRecord.children[]element  (Jº
+data.v1.NestedRecord"£
+K
+data.v1.NestedRecord.idid !(BNested numeric identity.JPjid
+T
+data.v1.NestedRecord.labellabel "(0BNested optional label.J	PjlabelPPjchildren"÷
+ data.v1.CanonicalRecord.counterscounters (BA typed protobuf map.J~2|
+:
+$data.v1.CanonicalRecord.counters.keykey #(J	P>
+&data.v1.CanonicalRecord.counters.valuevalue $(JPPjcounters"m
+$data.v1.CanonicalRecord.choice_countchoice_count (0:choiceBA numeric choice.JPjchoiceCount"j
+#data.v1.CanonicalRecord.choice_namechoice_name (0:choiceBA textual choice.J	Pj
+choiceName"ñ
+"data.v1.CanonicalRecord.created_at
+created_at (0B(A UTC instant with nanosecond precision.J$
+google.protobuf.Timestamp:UTCPj	createdAt"å
+data.v1.CanonicalRecord.elapsedelapsed (0B,A signed duration with nanosecond precision.J
+google.protobuf.DurationBPjelapsed"ç
+%data.v1.CanonicalRecord.wrapped_countwrapped_count (0BA nullable wrapped scalar.J 
+google.protobuf.Int32ValuePjwrappedCount"}
+"data.v1.CanonicalRecord.attributes
+attributes (0BA dynamic JSON object.J
+google.protobuf.StructJPj
+attributes"{
+data.v1.CanonicalRecord.opaqueopaque (0B#A dynamically typed protobuf value.J
+google.protobuf.AnyJPjopaque($"¬
+data.v1.Proto2Recorddata_v1_proto2_recordJProto2Record exercises explicit optional, required, and declared defaults."H
+data.v1.Proto2Record.idid (BA required identifier.JPjid"{
+data.v1.Proto2Record.labellabel (0B3An optional label with a declared protobuf default.J	PXbunknownjlabel(

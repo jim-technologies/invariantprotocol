@@ -2,12 +2,12 @@
 //! pretty-printed JSON response (unary) or one compact JSON line per chunk
 //! (streaming). Mirrors `go/cli.go` and `python/.../cli.py`.
 
-use crate::errors::Status;
 use crate::server::Server;
 use futures::StreamExt;
 use prost_reflect::{DynamicMessage, SerializeOptions};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tonic::{Request as GrpcRequest, Status};
 
 /// Run a single CLI invocation, writing output to `out`. For streaming tools
 /// each chunk is flushed immediately — same UX as the Go/Python projections.
@@ -15,9 +15,12 @@ pub async fn cli_write<W>(server: Arc<Server>, args: &[String], out: &mut W) -> 
 where
     W: AsyncWriteExt + Unpin,
 {
+    server.freeze();
     if args.is_empty() || matches!(args[0].as_str(), "-h" | "--help") {
         let help = cli_help(&server);
-        out.write_all(help.as_bytes()).await?;
+        out.write_all(help.as_bytes())
+            .await
+            .map_err(|error| Status::internal(format!("write output: {error}")))?;
         return Ok(());
     }
 
@@ -30,20 +33,34 @@ where
     let req = build_request(&tool, request_value.as_deref())?;
 
     if tool.server_streaming {
-        let mut stream = server.invoke_stream(&tool_name, req);
+        let mut stream = server
+            .invoke_stream(&tool_name, GrpcRequest::new(req))
+            .await?
+            .into_inner();
         while let Some(item) = stream.next().await {
             let msg = item?;
             let line = serialize_compact(&msg);
-            out.write_all(line.as_bytes()).await?;
-            out.write_all(b"\n").await?;
-            out.flush().await?;
+            out.write_all(line.as_bytes())
+                .await
+                .map_err(|error| Status::internal(format!("write output: {error}")))?;
+            out.write_all(b"\n")
+                .await
+                .map_err(|error| Status::internal(format!("write output: {error}")))?;
+            out.flush()
+                .await
+                .map_err(|error| Status::internal(format!("flush output: {error}")))?;
         }
         return Ok(());
     }
 
-    let resp = server.invoke(&tool_name, req).await?;
+    let resp = server
+        .invoke(&tool_name, GrpcRequest::new(req))
+        .await?
+        .into_inner();
     let text = serialize_pretty(&resp);
-    out.write_all(text.as_bytes()).await?;
+    out.write_all(text.as_bytes())
+        .await
+        .map_err(|error| Status::internal(format!("write output: {error}")))?;
     Ok(())
 }
 

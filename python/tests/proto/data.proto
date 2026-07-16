@@ -1,0 +1,131 @@
+syntax = "proto3";
+
+package data.v1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+option go_package = "github.com/jim-technologies/invariantprotocol/go/tests/gen;greetpb";
+
+// CanonicalRecord exercises every protobuf shape supported by data projection.
+message CanonicalRecord {
+  // A double-precision value.
+  double double_value = 1;
+
+  // A single-precision value.
+  float float_value = 2;
+
+  // A variable-width signed 64-bit value.
+  int64 int64_value = 3;
+
+  // A variable-width unsigned 64-bit value.
+  uint64 uint64_value = 4;
+
+  // A variable-width signed 32-bit value.
+  int32 int32_value = 5;
+
+  // A fixed-width unsigned 64-bit value.
+  fixed64 fixed64_value = 6;
+
+  // A fixed-width unsigned 32-bit value.
+  fixed32 fixed32_value = 7;
+
+  // A boolean value.
+  bool bool_value = 8;
+
+  // A UTF-8 value.
+  string string_value = 9;
+
+  // An opaque binary value.
+  bytes bytes_value = 10;
+
+  // A variable-width unsigned 32-bit value.
+  uint32 uint32_value = 11;
+
+  // A fixed-width signed 32-bit value.
+  sfixed32 sfixed32_value = 12;
+
+  // A fixed-width signed 64-bit value.
+  sfixed64 sfixed64_value = 13;
+
+  // A zig-zag encoded signed 32-bit value.
+  sint32 sint32_value = 14;
+
+  // A zig-zag encoded signed 64-bit value.
+  sint64 sint64_value = 15;
+
+  // An open numeric enum.
+  DataState state = 16;
+
+  // A field with explicit scalar presence.
+  optional string optional_note = 17;
+
+  // A nested message with explicit presence.
+  NestedRecord nested = 18;
+
+  // A scalar list.
+  repeated string labels = 19;
+
+  // A nested-message list.
+  repeated NestedRecord children = 20;
+
+  // A typed protobuf map.
+  map<string, uint64> counters = 21;
+
+  // Mutually exclusive values whose selected default remains observable.
+  oneof choice {
+    // A numeric choice.
+    int32 choice_count = 22;
+
+    // A textual choice.
+    string choice_name = 23;
+  }
+
+  // A UTC instant with nanosecond precision.
+  google.protobuf.Timestamp created_at = 24;
+
+  // A signed duration with nanosecond precision.
+  google.protobuf.Duration elapsed = 25;
+
+  // A nullable wrapped scalar.
+  google.protobuf.Int32Value wrapped_count = 26;
+
+  // A dynamic JSON object.
+  google.protobuf.Struct attributes = 27;
+
+  // A dynamically typed protobuf value.
+  google.protobuf.Any opaque = 28;
+}
+
+// NestedRecord is embedded in singular and repeated fields.
+message NestedRecord {
+  // Nested numeric identity.
+  int64 id = 1;
+
+  // Nested optional label.
+  optional string label = 2;
+}
+
+// RecursiveRecord proves recursive row schemas fail instead of recursing or
+// silently becoming untyped JSON.
+message RecursiveRecord {
+  // Recursive parent link.
+  RecursiveRecord parent = 1;
+}
+
+// DataState demonstrates aliases while retaining the numeric enum domain.
+enum DataState {
+  option allow_alias = true;
+
+  // The state was not specified.
+  DATA_STATE_UNSPECIFIED = 0;
+
+  // The record is ready.
+  DATA_STATE_READY = 1;
+
+  // An alias retained for an earlier source spelling.
+  DATA_STATE_ACTIVE = 1;
+}

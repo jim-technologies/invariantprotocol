@@ -15,14 +15,14 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const mcpProtocolVersion = "2024-11-05"
+const mcpProtocolVersion = "2025-11-25"
 
 type mcpSession struct {
 	server *Server
 	r      io.Reader
 	w      io.Writer
 	mu     sync.Mutex
-	// inflight tracks per-request cancel funcs so notifications/canceled
+	// inflight tracks per-request cancel funcs so MCP cancellation notifications
 	// can interrupt long-running tools/call invocations.
 	inflightMu sync.Mutex
 	inflight   map[string]context.CancelFunc
@@ -118,7 +118,7 @@ func (m *mcpSession) run(ctx context.Context) error {
 		}
 
 		// tools/call is the only method that can block (user handler) —
-		// dispatch it concurrently so notifications/canceled can interrupt
+		// dispatch it concurrently so an MCP cancellation notification can interrupt
 		// it. Fast metadata methods (initialize, tools/list, ping) run inline
 		// to keep response order deterministic.
 		if req.Method != "tools/call" {
@@ -129,7 +129,7 @@ func (m *mcpSession) run(ctx context.Context) error {
 		}
 
 		// Register the cancel func synchronously *before* starting the goroutine
-		// so a notifications/canceled arriving on the next read always finds it.
+		// so a cancellation notification on the next read always finds it.
 		callCtx, cancel := context.WithCancel(ctx) //nolint:gosec // cancel stored in inflight map and invoked via defer below
 		idKey := string(req.ID)
 		m.inflightMu.Lock()
@@ -167,7 +167,7 @@ func (m *mcpSession) writeResponse(resp *jsonRPCResponse) {
 }
 
 func (m *mcpSession) handleNotification(req *jsonRPCRequest) {
-	if req.Method != "notifications/canceled" {
+	if req.Method != "notifications/cancelled" { //nolint:misspell // Method name defined by MCP.
 		return
 	}
 	var p struct {
@@ -289,7 +289,7 @@ func (s *Server) toolsCallStream(ctx context.Context, id json.RawMessage, tool *
 
 	marshalOpts := protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}
 	var content []any
-	stream := newCallbackStream(ctx, func(msg proto.Message) error {
+	err = s.invokeStream(ctx, tool, req, func(msg proto.Message) error {
 		raw, err := marshalOpts.Marshal(msg)
 		if err != nil {
 			return fmt.Errorf("marshal stream chunk: %w", err)
@@ -297,9 +297,7 @@ func (s *Server) toolsCallStream(ctx context.Context, id json.RawMessage, tool *
 		content = append(content, map[string]any{"type": "text", "text": string(raw)})
 		return nil
 	})
-	defer stream.close()
-
-	if err := s.invokeStream(tool, req, stream); err != nil {
+	if err != nil {
 		// Include any chunks that were already emitted before the error.
 		payload := errorPayload(err)
 		content = append(content, map[string]any{"type": "text", "text": errorMessage(err)})
@@ -331,9 +329,8 @@ func errorContent(err error) map[string]any {
 //   - MCP, HTTP: JSON → proto → invoke → proto → JSON  (via invokeJSON())
 //   - gRPC:           proto(dynamic) → invoke → proto → proto(dynamic)
 //
-// The per-tool invoke handler (cached at addTool time) handles the
-// dynamicpb→typed conversion for reflected handlers, using a binary roundtrip
-// when proto names match (~10x faster than JSON) and JSON fallback otherwise.
+// The captured generated gRPC method handler decodes directly into its typed
+// request before invoking the registered service implementation.
 func (s *Server) invoke(ctx context.Context, tool *Tool, req proto.Message) (proto.Message, error) {
 	s.freeze()
 	ctx, _ = withProjectionUnaryTransport(ctx, tool.callInfo.FullMethod)

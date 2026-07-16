@@ -1,7 +1,8 @@
 import { fromJson, getOption, toJson, type DescField, type DescMessage, type JsonValue } from "@bufbuild/protobuf";
+import { ConnectError } from "@connectrpc/connect";
 
-import { codeFromHttpStatus, InvariantError, invalidArgument } from "./errors.js";
-import { type Server, type Tool, type UnaryHandler } from "./server.js";
+import { asInvariantError, codeFromHttpStatus, InvariantError, invalidArgument, type Code } from "./errors.js";
+import { type HandlerContext, type Server, type Tool, type UnaryHandler } from "./server.js";
 
 export type OutboundHTTPRequest = {
   methodPath: string;
@@ -64,57 +65,83 @@ export class HTTPConnection {
     this.envHeaders = outboundHeadersFromEnv();
   }
 
-  async send(methodPath: string, method: string, url: string, body: Uint8Array): Promise<Uint8Array> {
+  async send(
+    methodPath: string,
+    method: string,
+    url: string,
+    body: Uint8Array,
+    context: HandlerContext,
+  ): Promise<Uint8Array> {
     const req: OutboundHTTPRequest = { methodPath, method, url, body };
-    const signedUrl = await this.applyQueryProvider(req);
-    const signedReq: OutboundHTTPRequest = { ...req, url: signedUrl };
-    const headers = await this.headers(signedReq);
-    const started = performance.now();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.connectTimeoutMs + this.options.readTimeoutMs);
-    let response: Response;
-    let bytes: Uint8Array;
+    const requestScope = outboundRequestScope(context, this.options.connectTimeoutMs + this.options.readTimeoutMs);
+    let signedReq!: OutboundHTTPRequest;
+    let response!: Response;
+    let read!: ReadResult;
+    let started = 0;
     try {
-      response = await fetch(signedUrl, {
-        method,
-        headers,
-        body: method === "GET" || method === "HEAD" || body.length === 0 ? undefined : Buffer.from(body),
-        signal: controller.signal,
-      });
-      bytes = new Uint8Array(await response.arrayBuffer());
-    } catch (e) {
-      if ((e as Error).name === "AbortError") {
-        throw new InvariantError("deadline_exceeded", `HTTP request exceeded ${this.options.connectTimeoutMs + this.options.readTimeoutMs}ms`);
+      if (requestScope.signal.aborted) {
+        throw asInvariantError(requestScope.signal.reason);
       }
-      throw new InvariantError("unavailable", (e as Error).message);
+      const signedUrl = await this.applyQueryProvider(req);
+      signedReq = { ...req, url: signedUrl };
+      const headers = await this.headers(signedReq, context);
+      if (requestScope.signal.aborted) {
+        throw asInvariantError(requestScope.signal.reason);
+      }
+      started = performance.now();
+      try {
+        response = await fetch(signedUrl, {
+          method,
+          headers,
+          body: method === "GET" || method === "HEAD" || body.length === 0 ? undefined : Buffer.from(body),
+          signal: requestScope.signal,
+        });
+        read = await readResponseBody(response, this.options.maxReceiveMessageSize);
+      } catch (e) {
+        if (requestScope.signal.aborted) {
+          throw asInvariantError(requestScope.signal.reason);
+        }
+        if ((e as Error).name === "AbortError" || (e as Error).name === "TimeoutError") {
+          throw new InvariantError("canceled", (e as Error).message || "HTTP request canceled");
+        }
+        throw new InvariantError("unavailable", (e as Error).message);
+      }
     } finally {
-      clearTimeout(timeout);
+      requestScope.cleanup();
     }
 
     const durationMs = performance.now() - started;
     const headersRecord = Object.fromEntries(response.headers.entries());
-    const success = response.ok && bytes.length <= this.options.maxReceiveMessageSize;
+    const responseMetadata = outboundResponseMetadata(response.headers);
+    const success = response.ok && !read.exceeded;
     await this.observe({
       methodPath,
       statusCode: response.status,
       headers: headersRecord,
-      body: bytes,
+      body: read.body,
       durationMs,
       success,
       request: signedReq,
     });
 
-    if (bytes.length > this.options.maxReceiveMessageSize) {
-      throw new InvariantError("resource_exhausted", `response body exceeds ${this.options.maxReceiveMessageSize} byte limit`);
+    if (read.exceeded) {
+      throw new InvariantError(
+        "resource_exhausted",
+        `response body exceeds ${this.options.maxReceiveMessageSize} byte limit`,
+        [],
+        responseMetadata,
+      );
     }
     if (!response.ok) {
-      throw httpError(response.status, bytes);
+      throw httpError(response.status, read.body, responseMetadata);
     }
-    return bytes;
+    appendHeaders(context.responseHeader, responseMetadata);
+    return read.body;
   }
 
-  private async headers(request: OutboundHTTPRequest): Promise<Record<string, string>> {
+  private async headers(request: OutboundHTTPRequest, context: HandlerContext): Promise<Record<string, string>> {
     const headers: Record<string, string> = {
+      ...reviewedRequestMetadata(context.requestHeader),
       ...this.envHeaders,
       "content-type": "application/json",
       accept: "application/json",
@@ -257,10 +284,10 @@ export function httpProxyHandler(
   methodPath: string,
 ): UnaryHandler {
   binding.resolveFields(tool.inputDesc);
-  return async (request) => {
+  return async (request, context) => {
     const args = toJson(tool.inputDesc, request, { registry: server.parsed.registry }) as Record<string, unknown>;
     const built = binding.build(args, connection.baseUrl);
-    const bytes = await connection.send(methodPath, binding.method, built.url, built.body);
+    const bytes = await connection.send(methodPath, binding.method, built.url, built.body, context);
     const payload = bytes.length === 0 ? {} : JSON.parse(Buffer.from(bytes).toString("utf8"));
     return fromJson(tool.outputDesc, responseBody(payload, binding.responseBody) as JsonValue, { registry: server.parsed.registry });
   };
@@ -430,23 +457,186 @@ function responseBody(payload: unknown, selector: string): unknown {
   return getNested(payload as Record<string, unknown>, selector) ?? {};
 }
 
-function httpError(status: number, body: Uint8Array): InvariantError {
+function httpError(status: number, body: Uint8Array, metadata: Headers): InvariantError {
   const text = Buffer.from(body).toString("utf8");
   try {
-    const payload = JSON.parse(text) as { code?: string; message?: string; details?: unknown[]; error?: { code?: string; message?: string; details?: unknown[] } };
-    const err = payload.error ?? payload;
-    if (err.code || err.message) {
-      return new InvariantError(normalizeCode(err.code) ?? codeFromHttpStatus(status), err.message ?? `HTTP ${status}`, err.details ?? []);
+    const payload = JSON.parse(text) as { code?: unknown; message?: unknown; details?: unknown };
+    const code = connectCode(payload.code);
+    if (code) {
+      return new InvariantError(
+        code,
+        typeof payload.message === "string" ? payload.message : `HTTP ${status}`,
+        Array.isArray(payload.details) ? payload.details : [],
+        metadata,
+      );
     }
   } catch {
     // Fall through to the generic HTTP error.
   }
-  return new InvariantError(codeFromHttpStatus(status), text || `HTTP ${status}`);
+  return new InvariantError(codeFromHttpStatus(status), text || `HTTP ${status}`, [], metadata);
 }
 
-function normalizeCode(code: string | undefined) {
-  if (!code) {
-    return undefined;
+type ReadResult = {
+  body: Uint8Array;
+  exceeded: boolean;
+};
+
+async function readResponseBody(response: Response, maxBytes: number): Promise<ReadResult> {
+  if (response.body === null) {
+    return { body: new Uint8Array(), exceeded: false };
   }
-  return code.toLowerCase() as InvariantError["code"];
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let retained = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) {
+        return { body: Buffer.concat(chunks, retained), exceeded: false };
+      }
+      const chunk = result.value;
+      if (retained + chunk.byteLength > maxBytes) {
+        const remaining = maxBytes - retained;
+        if (remaining > 0) {
+          chunks.push(chunk.subarray(0, remaining));
+          retained += remaining;
+        }
+        await reader.cancel().catch(() => undefined);
+        return { body: Buffer.concat(chunks, retained), exceeded: true };
+      }
+      chunks.push(chunk);
+      retained += chunk.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function outboundRequestScope(
+  context: HandlerContext,
+  configuredTimeoutMs: number,
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  const callerTimeoutMs = context.timeoutMs();
+  const timeoutMs = Math.max(
+    0,
+    callerTimeoutMs === undefined
+      ? configuredTimeoutMs
+      : Math.min(configuredTimeoutMs, callerTimeoutMs),
+  );
+  const timeout = setTimeout(() => {
+    controller.abort(new InvariantError("deadline_exceeded", `HTTP request exceeded ${timeoutMs}ms`));
+  }, timeoutMs);
+  const cancel = () => controller.abort(contextAbortError(context));
+  if (context.signal.aborted) {
+    cancel();
+  } else {
+    context.signal.addEventListener("abort", cancel, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      context.signal.removeEventListener("abort", cancel);
+    },
+  };
+}
+
+function contextAbortError(context: HandlerContext): InvariantError {
+  const reason = context.signal.reason;
+  if (reason instanceof InvariantError) {
+    return reason;
+  }
+  if (reason instanceof ConnectError) {
+    return asInvariantError(reason);
+  }
+  const remaining = context.timeoutMs();
+  if (remaining !== undefined && remaining <= 0) {
+    return new InvariantError("deadline_exceeded", "HTTP request deadline exceeded");
+  }
+  return new InvariantError(
+    "canceled",
+    reason instanceof Error && reason.message ? reason.message : "HTTP request canceled",
+  );
+}
+
+const REVIEWED_REQUEST_METADATA = ["traceparent", "tracestate", "baggage", "x-request-id"] as const;
+
+function reviewedRequestMetadata(headers: Headers): Record<string, string> {
+  const reviewed: Record<string, string> = {};
+  for (const name of REVIEWED_REQUEST_METADATA) {
+    const value = headers.get(name);
+    if (value !== null && validMetadataValue(value)) {
+      reviewed[name] = value;
+    }
+  }
+  return reviewed;
+}
+
+function outboundResponseMetadata(headers: Headers): Headers {
+  const metadata = new Headers();
+  headers.forEach((value, rawName) => {
+    const name = rawName.trim().toLowerCase();
+    if (validMetadataName(name) && validMetadataValue(value) && !reservedResponseHeader(name)) {
+      metadata.append(name, value);
+    }
+  });
+  return metadata;
+}
+
+function appendHeaders(target: Headers, source: Headers): void {
+  source.forEach((value, name) => target.append(name, value));
+}
+
+function validMetadataName(name: string): boolean {
+  return name.length > 0 && /^[a-z0-9._-]+$/.test(name);
+}
+
+function validMetadataValue(value: string): boolean {
+  return value.length > 0 && /^[\x20-\x7e]+$/.test(value);
+}
+
+function reservedResponseHeader(name: string): boolean {
+  if (name.startsWith("grpc-") || name.startsWith("connect-")) {
+    return true;
+  }
+  return new Set([
+    "connection",
+    "content-encoding",
+    "content-length",
+    "content-type",
+    "date",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "server",
+    "set-cookie",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+  ]).has(name);
+}
+
+const CONNECT_CODES = new Set<Code>([
+  "canceled",
+  "unknown",
+  "invalid_argument",
+  "deadline_exceeded",
+  "not_found",
+  "already_exists",
+  "permission_denied",
+  "resource_exhausted",
+  "failed_precondition",
+  "aborted",
+  "out_of_range",
+  "unimplemented",
+  "internal",
+  "unavailable",
+  "data_loss",
+  "unauthenticated",
+]);
+
+function connectCode(value: unknown): Code | undefined {
+  return typeof value === "string" && CONNECT_CODES.has(value as Code) ? (value as Code) : undefined;
 }

@@ -8,15 +8,6 @@ from google.protobuf import descriptor_pb2
 
 from invariant.gen.invariant.v1 import types_pb2 as invpb
 
-# Re-export proto types for backward compat
-FieldInfo = invpb.FieldInfo
-OneofInfo = invpb.OneofInfo
-EnumValueInfo = invpb.EnumValueInfo
-EnumInfo = invpb.EnumInfo
-MessageInfo = invpb.MessageInfo
-MethodInfo = invpb.MethodInfo
-ServiceInfo = invpb.ServiceInfo
-
 
 class ParsedDescriptor:
     """Parsed representation of a FileDescriptorSet with extracted comments."""

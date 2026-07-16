@@ -238,9 +238,6 @@ func validMetadataKey(key string) bool {
 }
 
 func validASCIIMetadataValue(value string) bool {
-	if value == "" {
-		return false
-	}
 	for _, char := range []byte(value) {
 		if char < 0x20 || char > 0x7e {
 			return false

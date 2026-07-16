@@ -1,10 +1,19 @@
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 import * as grpc from "@grpc/grpc-js";
 import * as protoLoader from "@grpc/proto-loader";
-import { toBinary } from "@bufbuild/protobuf";
+import { create, createFileRegistry, fromBinary, toBinary } from "@bufbuild/protobuf";
+import {
+  DescriptorProtoSchema,
+  FileDescriptorProtoSchema,
+  FileDescriptorSetSchema,
+  MethodDescriptorProtoSchema,
+  ServiceDescriptorProtoSchema,
+} from "@bufbuild/protobuf/wkt";
+import type { ServiceImpl } from "@connectrpc/connect";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
@@ -12,46 +21,54 @@ import {
   ParsedDescriptor,
   SchemaGenerator,
   Server,
-  buildGrpcServer,
-  grpcClientForService,
   httpHandler,
-  mcpDispatch,
   runCli,
 } from "../src/index.js";
+import { grpcServiceDefinitionForService } from "../src/grpc.js";
+import { mcpDispatch } from "../src/mcp.js";
+import { codeFromGrpcStatus, codeFromHttpStatus, grpcStatusFor, InvariantError } from "../src/errors.js";
+import {
+  GreetService,
+  type GreetGroupRequest,
+  type GreetRequest,
+  type StreamGreetRequest,
+} from "./gen/greet_pb.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const descriptorPath = resolve(here, "../../python/tests/proto/descriptor.binpb");
 
-class GreetServicer {
-  async Greet(request: any) {
-    return {
+class GreetServicer implements ServiceImpl<typeof GreetService> {
+  greet(request: GreetRequest) {
+    return Promise.resolve({
       message: `Hi ${request.name}`,
       mood: request.mood ?? 0,
-      tags: request.tags ?? {},
-    };
+      tags: request.tags,
+    });
   }
 
-  async GreetGroup(request: any) {
-    return {
-      messages: (request.people ?? []).map((person: any) => `Hi ${person.name}`),
-      count: request.people?.length ?? 0,
-    };
+  greetGroup(request: GreetGroupRequest) {
+    return Promise.resolve({
+      messages: request.people.map((person) => `Hi ${person.name}`),
+      count: request.people.length,
+    });
   }
 
-  async *StreamGreet(request: any) {
-    for (let i = 0; i < (request.count || 1); i += 1) {
-      yield {
-        message: `Hi ${request.name} #${i + 1}`,
-        mood: 0,
-        tags: {},
-      };
-    }
+  streamGreet(request: StreamGreetRequest) {
+    return (async function* () {
+      for (let i = 0; i < (request.count || 1); i += 1) {
+        yield {
+          message: `Hi ${request.name} #${i + 1}`,
+          mood: 0,
+          tags: {},
+        };
+      }
+    })();
   }
 }
 
 function registeredServer(): Server {
   const server = Server.fromDescriptor(descriptorPath);
-  server.register(new GreetServicer());
+  server.register(GreetService, new GreetServicer());
   return server;
 }
 
@@ -96,7 +113,35 @@ describe("schema generation", () => {
 });
 
 describe("server dispatch", () => {
-  test("registers unary and server-streaming handlers", async () => {
+  test("uses Connect's canonical canceled spelling", () => {
+    expect(new InvariantError("canceled", "stopped").toPayload().code).toBe("canceled");
+    expect(codeFromGrpcStatus(1)).toBe("canceled");
+    expect(grpcStatusFor("canceled")).toBe(1);
+  });
+
+  test("uses Connect's HTTP status fallback mapping", () => {
+    expect(
+      [400, 401, 403, 404, 429, 502, 503, 504, 418, 409, 499, 500, 501].map((status) =>
+        codeFromHttpStatus(status),
+      ),
+    ).toEqual([
+      "internal",
+      "unauthenticated",
+      "permission_denied",
+      "unimplemented",
+      "unavailable",
+      "unavailable",
+      "unavailable",
+      "unavailable",
+      "unknown",
+      "unknown",
+      "unknown",
+      "unknown",
+      "unknown",
+    ]);
+  });
+
+  test("registers a generated service with Promise and AsyncIterable handlers", async () => {
     const server = registeredServer();
     expect([...server.tools.keys()].sort()).toEqual([
       "GreetService.Greet",
@@ -125,15 +170,247 @@ describe("server dispatch", () => {
   test("runs unary interceptors in registration order", async () => {
     const server = registeredServer();
     const calls: string[] = [];
-    server.use(async (request, context, info, next) => {
-      calls.push(`before:${info.fullMethod}`);
-      const response = await next(request, context);
+    server.use((next) => async (request) => {
+      expect(request.stream).toBe(false);
+      if (!request.stream) {
+        expect(request.message.$typeName).toBe("greet.v1.GreetRequest");
+      }
+      calls.push(`before:/${request.service.typeName}/${request.method.name}`);
+      const response = await next(request);
+      if (!response.stream) {
+        expect(response.message.$typeName).toBe("greet.v1.GreetResponse");
+      }
       calls.push("after");
       return response;
     });
 
     await server.invoke("GreetService.Greet", { name: "Ada" });
     expect(calls).toEqual(["before:/greet.v1.GreetService/Greet", "after"]);
+  });
+
+  test("accepts stream interceptors that return an AsyncIterable", async () => {
+    const server = registeredServer();
+    const calls: string[] = [];
+    server.use((next) => async (request) => {
+      calls.push(`before:/${request.service.typeName}/${request.method.name}`);
+      const response = await next(request);
+      if (!response.stream) {
+        return response;
+      }
+      const messages = response.message;
+      return {
+        ...response,
+        message: (async function* () {
+          for await (const message of messages) {
+            expect(message.$typeName).toBe("greet.v1.GreetResponse");
+            yield message;
+          }
+          calls.push("after");
+        })(),
+      };
+    });
+
+    for await (const _chunk of server.invokeStream("GreetService.StreamGreet", { name: "Ada", count: 1 })) {
+      // Consume the stream so the interceptor terminal completes.
+    }
+    expect(calls).toEqual(["before:/greet.v1.GreetService/StreamGreet", "after"]);
+  });
+
+  test("rejects duplicate registration", () => {
+    const server = registeredServer();
+    expect(() => server.register(GreetService, new GreetServicer())).toThrow(/already registered/);
+    expect(() => (server.tools as Map<string, unknown>).clear()).toThrow(/read-only/);
+  });
+
+  test("rejects generated message descriptors that drift from the descriptor image", () => {
+    const fds = fromBinary(FileDescriptorSetSchema, readFileSync(descriptorPath));
+    const greetFile = fds.file.find((file) => file.name === "greet.proto");
+    const request = greetFile?.messageType.find((message) => message.name === "GreetRequest");
+    if (!request?.field[0]) {
+      throw new Error("missing greet request descriptor");
+    }
+    request.field[0].name = "drifted_name";
+    const registry = createFileRegistry(fds);
+    const driftedService = [...registry].find(
+      (desc) => desc.kind === "service" && desc.typeName === GreetService.typeName,
+    );
+    if (!driftedService || driftedService.kind !== "service") {
+      throw new Error("missing drifted service");
+    }
+
+    const server = Server.fromDescriptor(descriptorPath);
+    expect(() => server.register(driftedService, {})).toThrow(/Generated message .* does not match descriptor\.binpb/);
+  });
+
+  test("freezes registration, interceptors, filters, and limits on first execution", async () => {
+    const server = registeredServer();
+    await server.invoke("GreetService.Greet", { name: "Ada" });
+
+    expect(() => server.register(GreetService, new GreetServicer())).toThrow(/cannot be changed after execution begins/);
+    expect(() => server.use((next) => next)).toThrow(/cannot be changed after execution begins/);
+    expect(() => server.include("*")).toThrow(/cannot be changed after execution begins/);
+    expect(() => server.setMaxUnaryRequestBytes(1024)).toThrow(/cannot be changed after execution begins/);
+    expect(() => server.configureMethod("/greet.v1.GreetService/Greet", {})).toThrow(
+      /cannot be changed after execution begins/,
+    );
+
+    const grpcBuilt = registeredServer();
+    const grpcServer = grpcBuilt.grpcServer();
+    expect(() => grpcBuilt.exclude("*")).toThrow(/cannot be changed after execution begins/);
+    expect(() => grpcBuilt.grpcServer()).toThrow(/already been created/);
+    grpcBuilt.forceStop();
+
+    const httpBuilt = registeredServer();
+    httpHandler(httpBuilt);
+    expect(() => httpBuilt.use((next) => next)).toThrow(
+      /cannot be changed after execution begins/,
+    );
+  });
+
+  test("requires projection filters before service registration", () => {
+    const server = registeredServer();
+    expect(() => server.include("*")).toThrow(/before service registration/);
+    expect(() => server.exclude("*")).toThrow(/before service registration/);
+  });
+
+  test("rejects invalid global and per-method byte limits", () => {
+    const server = registeredServer();
+    expect(() => server.setMaxUnaryRequestBytes(0)).toThrow(/positive integer/);
+    expect(() => server.setMaxUnaryResponseBytes(-1)).toThrow(/positive integer/);
+    expect(() => server.setMaxStreamRequestBytes(Number.NaN)).toThrow(/positive integer/);
+    expect(() => server.setMaxStreamResponseBytes(1.5)).toThrow(/positive integer/);
+    expect(() =>
+      server.configureMethod("/greet.v1.GreetService/Greet", { maxUnaryResponseBytes: 0 }),
+    ).toThrow(/positive integer/);
+  });
+
+  test("serves native client-streaming and bidi methods through the shared Connect interceptor", async () => {
+    const fds = create(FileDescriptorSetSchema, {
+      file: [
+        create(FileDescriptorProtoSchema, {
+          name: "streams.proto",
+          package: "streams.v1",
+          syntax: "proto3",
+          messageType: [create(DescriptorProtoSchema, { name: "Envelope" })],
+          service: [
+            create(ServiceDescriptorProtoSchema, {
+              name: "Streams",
+              method: [
+                create(MethodDescriptorProtoSchema, {
+                  name: "Upload",
+                  inputType: ".streams.v1.Envelope",
+                  outputType: ".streams.v1.Envelope",
+                  clientStreaming: true,
+                }),
+                create(MethodDescriptorProtoSchema, {
+                  name: "Chat",
+                  inputType: ".streams.v1.Envelope",
+                  outputType: ".streams.v1.Envelope",
+                  clientStreaming: true,
+                  serverStreaming: true,
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    const server = Server.fromBytes(toBinary(FileDescriptorSetSchema, fds));
+    server.exclude("*");
+    const service = server.parsed.services.get("streams.v1.Streams")?.desc;
+    if (!service) {
+      throw new Error("missing synthetic streaming service");
+    }
+    const intercepted: string[] = [];
+    const inputTypes: string[] = [];
+    const outputTypes: string[] = [];
+    server.use((next) => async (request) => {
+      expect(request.stream).toBe(true);
+      intercepted.push(`/${request.service.typeName}/${request.method.name}`);
+      if (!request.stream) {
+        return next(request);
+      }
+      const inputs = request.message;
+      const response = await next({
+        ...request,
+        message: (async function* () {
+          for await (const message of inputs) {
+            inputTypes.push(message.$typeName);
+            yield message;
+          }
+        })(),
+      });
+      if (!response.stream) {
+        return response;
+      }
+      const outputs = response.message;
+      return {
+        ...response,
+        message: (async function* () {
+          for await (const message of outputs) {
+            outputTypes.push(message.$typeName);
+            yield message;
+          }
+        })(),
+      };
+    });
+    server.register(service, {
+      async upload(requests: AsyncIterable<unknown>) {
+        for await (const _request of requests) {
+          // Consume the client stream before producing its one response.
+        }
+        return {};
+      },
+      chat(requests: AsyncIterable<unknown>) {
+        return (async function* () {
+          const first = await requests[Symbol.asyncIterator]().next();
+          if (!first.done) {
+            yield first.value;
+          }
+        })();
+      },
+    } as never);
+
+    expect(server.tools.size).toBe(0);
+    const definition = grpcServiceDefinitionForService(service);
+    expect(definition.upload).toMatchObject({ requestStream: true, responseStream: false });
+    expect(definition.chat).toMatchObject({ requestStream: true, responseStream: true });
+
+    const started = await startGrpc(server);
+    const Client = grpc.makeGenericClientConstructor(definition, service.typeName);
+    const client = new Client(started.address, grpc.credentials.createInsecure());
+    try {
+      await new Promise<void>((resolveCall, rejectCall) => {
+        const call = (client as any).upload((error: grpc.ServiceError | null) => {
+          if (error) {
+            rejectCall(error);
+          } else {
+            resolveCall();
+          }
+        }) as grpc.ClientWritableStream<unknown>;
+        call.write({});
+        call.write({});
+        call.end();
+      });
+
+      const bidiMessages = await new Promise<unknown[]>((resolveCall, rejectCall) => {
+        const messages: unknown[] = [];
+        const call = (client as any).chat() as grpc.ClientDuplexStream<unknown, unknown>;
+        call.on("data", (message) => messages.push(message));
+        call.on("error", rejectCall);
+        call.on("end", () => resolveCall(messages));
+        call.write({});
+        call.end();
+      });
+      expect(bidiMessages).toHaveLength(1);
+    } finally {
+      client.close();
+      started.server.forceShutdown();
+    }
+
+    expect(intercepted).toEqual(["/streams.v1.Streams/Upload", "/streams.v1.Streams/Chat"]);
+    expect(inputTypes).toEqual(Array(3).fill("streams.v1.Envelope"));
+    expect(outputTypes).toEqual(Array(2).fill("streams.v1.Envelope"));
   });
 });
 
@@ -197,7 +474,15 @@ describe("projections", () => {
 
     const descriptor = await fetch(`${base}/__invariant/descriptor.binpb`);
     expect(descriptor.status).toBe(200);
+    expect(descriptor.headers.get("content-type")).toBe("application/proto");
     expect((await descriptor.arrayBuffer()).byteLength).toBeGreaterThan(0);
+
+    const grpcWeb = await fetch(`${base}/greet.v1.GreetService/Greet`, {
+      method: "POST",
+      headers: { "content-type": "application/grpc-web+proto" },
+      body: Buffer.alloc(5),
+    });
+    expect(grpcWeb.status).not.toBe(200);
   });
 
   test("serves Connect streaming envelopes over HTTP", async () => {
@@ -251,21 +536,125 @@ describe("projections", () => {
     expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0);
   });
 
+  test("enforces independent unary request and response limits with per-method overrides", async () => {
+    const requestLimited = registeredServer();
+    requestLimited.setMaxUnaryRequestBytes(32);
+    const requestBase = await startHttp(requestLimited, servers);
+    const oversizedRequest = await fetch(`${requestBase}/greet.v1.GreetService/Greet`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "x".repeat(64) }),
+    });
+    expect(oversizedRequest.status).toBe(429);
+    expect(await oversizedRequest.json()).toMatchObject({ code: "resource_exhausted" });
+
+    const responseLimited = Server.fromDescriptor(descriptorPath);
+    responseLimited.setMaxUnaryResponseBytes(32);
+    responseLimited.register(GreetService, {
+      greet: () => Promise.resolve({ message: "x".repeat(128) }),
+    });
+    const responseBase = await startHttp(responseLimited, servers);
+    const oversizedResponse = await fetch(`${responseBase}/greet.v1.GreetService/Greet`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Ada" }),
+    });
+    expect(oversizedResponse.status).toBe(429);
+    expect(await oversizedResponse.json()).toMatchObject({ code: "resource_exhausted" });
+
+    const overridden = Server.fromDescriptor(descriptorPath);
+    overridden.setMaxUnaryResponseBytes(32);
+    overridden.configureMethod("/greet.v1.GreetService/Greet", { maxUnaryResponseBytes: 1024 });
+    overridden.register(GreetService, {
+      greet: () => Promise.resolve({ message: "x".repeat(128) }),
+    });
+    const overrideBase = await startHttp(overridden, servers);
+    const allowedResponse = await fetch(`${overrideBase}/greet.v1.GreetService/Greet`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Ada" }),
+    });
+    expect(allowedResponse.status).toBe(200);
+    expect((await allowedResponse.json()).message).toHaveLength(128);
+  });
+
+  test("enforces Connect streaming request and response limits per message", async () => {
+    const requestLimited = registeredServer();
+    requestLimited.setMaxStreamRequestBytes(32);
+    const requestBase = await startHttp(requestLimited, servers);
+    const oversizedRequest = connectEnvelope(
+      0,
+      Buffer.from(JSON.stringify({ name: "x".repeat(64), count: 1 })),
+    );
+    const requestResponse = await fetch(`${requestBase}/greet.v1.GreetService/StreamGreet`, {
+      method: "POST",
+      headers: { "content-type": CONNECT_STREAM_JSON },
+      body: oversizedRequest,
+    });
+    expect(requestResponse.status).toBe(200);
+    const requestFrames = readConnectFrames(new Uint8Array(await requestResponse.arrayBuffer()));
+    expect(JSON.parse(Buffer.from(requestFrames.at(-1)!.payload).toString("utf8"))).toMatchObject({
+      error: { code: "resource_exhausted" },
+    });
+
+    const responseLimited = Server.fromDescriptor(descriptorPath);
+    responseLimited.setMaxStreamResponseBytes(32);
+    responseLimited.register(GreetService, {
+      streamGreet: () =>
+        (async function* () {
+          yield { message: "x".repeat(128) };
+        })(),
+    });
+    const responseBase = await startHttp(responseLimited, servers);
+    const response = await fetch(`${responseBase}/greet.v1.GreetService/StreamGreet`, {
+      method: "POST",
+      headers: { "content-type": CONNECT_STREAM_JSON },
+      body: connectEnvelope(0, Buffer.from(JSON.stringify({ name: "Ada", count: 1 }))),
+    });
+    expect(response.status).toBe(200);
+    const responseFrames = readConnectFrames(new Uint8Array(await response.arrayBuffer()));
+    expect(responseFrames).toHaveLength(1);
+    expect(JSON.parse(Buffer.from(responseFrames[0]!.payload).toString("utf8"))).toMatchObject({
+      error: { code: "resource_exhausted" },
+    });
+  });
+
   test("serves dynamic gRPC unary and server-streaming methods", async () => {
     const server = registeredServer();
     const started = await startGrpc(server);
     grpcServers.push(started.server);
-    const tools = [...server.tools.values()].filter((tool) => tool.serviceFullName === "greet.v1.GreetService");
-    const client = grpcClientForService(started.address, "greet.v1.GreetService", tools);
+    const Client = grpc.makeGenericClientConstructor(
+      grpcServiceDefinitionForService(GreetService),
+      GreetService.typeName,
+    );
+    const client = new Client(started.address, grpc.credentials.createInsecure());
 
-    const unary = await unaryCall(client, "Greet", { name: "Ada", mood: "MOOD_HAPPY" });
+    const unary = await unaryCall(client, "greet", { name: "Ada", mood: "MOOD_HAPPY" });
     expect(server.toJson(server.tools.get("GreetService.Greet")!, unary)).toEqual({
       message: "Hi Ada",
       mood: "MOOD_HAPPY",
     });
 
-    const chunks = await streamCall(client, "StreamGreet", { name: "Ada", count: 2 });
+    const chunks = await streamCall(client, "streamGreet", { name: "Ada", count: 2 });
     expect(chunks.map((chunk: any) => chunk.message)).toEqual(["Hi Ada #1", "Hi Ada #2"]);
+    client.close();
+  });
+
+  test("keeps filtered methods available on the complete native gRPC service", async () => {
+    const server = Server.fromDescriptor(descriptorPath);
+    server.exclude("*");
+    server.register(GreetService, new GreetServicer());
+    expect(server.tools.size).toBe(0);
+
+    const started = await startGrpc(server);
+    grpcServers.push(started.server);
+    const Client = grpc.makeGenericClientConstructor(
+      grpcServiceDefinitionForService(GreetService),
+      GreetService.typeName,
+    );
+    const client = new Client(started.address, grpc.credentials.createInsecure());
+    const response = await unaryCall(client, "greet", { name: "Ada" });
+    expect(response.message).toBe("Hi Ada");
     client.close();
   });
 
@@ -296,10 +685,15 @@ describe("projections", () => {
     grpcServers.push(started.server);
 
     const proxy = Server.fromDescriptor(descriptorPath);
-    proxy.connect(started.address);
+    const Client = grpc.makeGenericClientConstructor(
+      grpcServiceDefinitionForService(GreetService),
+      GreetService.typeName,
+    );
+    const client = new Client(started.address, grpc.credentials.createInsecure());
+    proxy.connectGrpc(GreetService, client);
     const response = await proxy.invoke("GreetService.Greet", { name: "Ada" });
     expect(proxy.toJson(proxy.tools.get("GreetService.Greet")!, response)).toEqual({ message: "Hi Ada" });
-    await proxy.stop();
+    client.close();
   });
 
   test("proxies HTTP calls with google.api.http annotations, auth, and observer", async () => {
@@ -310,6 +704,18 @@ describe("projections", () => {
         expect(req.headers["x-test-auth"]).toBe("yes");
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ message: `REST ${url.pathname.split("/").at(-1)}`, mood: url.searchParams.get("mood") }));
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/v1/greet/Bad") {
+        res.statusCode = 400;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ code: "invalid_argument", message: "bad name" }));
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/v1/greet/Cancel") {
+        res.statusCode = 499;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ code: "canceled", message: "request canceled" }));
         return;
       }
       res.statusCode = 404;
@@ -325,7 +731,9 @@ describe("projections", () => {
     const proxy = Server.fromDescriptor(descriptorPath);
     proxy.connectHttp(`http://127.0.0.1:${address.port}`, {
       auth: { headerProvider: () => ({ "x-test-auth": "yes" }) },
-      observer: (response) => observed.push(response),
+      observer: (response) => {
+        observed.push(response);
+      },
     });
     const response = await proxy.invoke("GreetService.Greet", { name: "Ada", mood: "MOOD_HAPPY" });
     expect(proxy.toJson(proxy.tools.get("GreetService.Greet")!, response)).toEqual({
@@ -334,11 +742,23 @@ describe("projections", () => {
     });
     expect(observed).toHaveLength(1);
     expect(observed[0].request.url).toContain("/v1/greet/Ada");
+
+    await expect(proxy.invoke("GreetService.Greet", { name: "Bad" })).rejects.toMatchObject({
+      code: "invalid_argument",
+      message: "bad name",
+    });
+    expect(observed).toHaveLength(2);
+
+    await expect(proxy.invoke("GreetService.Greet", { name: "Cancel" })).rejects.toMatchObject({
+      code: "canceled",
+      message: "request canceled",
+    });
+    expect(observed).toHaveLength(3);
   });
 });
 
 async function startGrpc(server: Server): Promise<{ server: grpc.Server; address: string }> {
-  const grpcServer = buildGrpcServer(server);
+  const grpcServer = server.grpcServer();
   const port = await new Promise<number>((resolvePort, rejectPort) => {
     grpcServer.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (err, boundPort) => {
       if (err) {
@@ -349,6 +769,22 @@ async function startGrpc(server: Server): Promise<{ server: grpc.Server; address
     });
   });
   return { server: grpcServer, address: `127.0.0.1:${port}` };
+}
+
+async function startHttp(
+  server: Server,
+  servers: Array<ReturnType<typeof createServer>>,
+): Promise<string> {
+  const nodeServer = createServer((req, res) => {
+    void httpHandler(server)(req, res);
+  });
+  servers.push(nodeServer);
+  await new Promise<void>((resolveListen) => nodeServer.listen(0, "127.0.0.1", resolveListen));
+  const address = nodeServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("missing test server address");
+  }
+  return `http://127.0.0.1:${address.port}`;
 }
 
 function unaryCall(client: grpc.Client, method: string, request: unknown): Promise<any> {
@@ -373,10 +809,10 @@ function streamCall(client: grpc.Client, method: string, request: unknown): Prom
   });
 }
 
-function connectEnvelope(flags: number, data: Uint8Array): Buffer {
-  const out = Buffer.alloc(5 + data.length);
+function connectEnvelope(flags: number, data: Uint8Array): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(5 + data.length);
   out[0] = flags;
-  out.writeUInt32BE(data.length, 1);
+  new DataView(out.buffer).setUint32(1, data.length);
   out.set(data, 5);
   return out;
 }

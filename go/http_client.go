@@ -37,7 +37,6 @@ type httpDynamicHandler struct {
 	headers        map[string]string
 	headerProvider HTTPHeaderProvider
 	maxRetries     int
-	reqDesc        protoreflect.MessageDescriptor
 	respDesc       protoreflect.MessageDescriptor
 	newResponse    func() proto.Message
 	methodPath     string
@@ -63,10 +62,6 @@ const (
 	// Same 16 MiB shape as the inbound caps; users wanting more can wrap.
 	httpClientMaxResponseBytes = 16 << 20
 )
-
-func (h *httpDynamicHandler) requestDescriptor() protoreflect.MessageDescriptor {
-	return h.reqDesc
-}
 
 func (h *httpDynamicHandler) callProto(ctx context.Context, req proto.Message) (proto.Message, error) {
 	bodyBytes, endpointURL, err := h.binding.build(req, h.baseURL)
@@ -278,6 +273,14 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 			if err != nil {
 				return err
 			}
+			reqFactory, err := s.checkedMessageFactory(reqDesc)
+			if err != nil {
+				return err
+			}
+			respFactory, err := s.checkedMessageFactory(respDesc)
+			if err != nil {
+				return err
+			}
 
 			methodPath := fmt.Sprintf("/%s/%s", svcFullName, methodName)
 			binding, err := pickHTTPClientBinding(httpRules[methodPath], svcFullName, methodName)
@@ -289,7 +292,7 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 			if desc == nil {
 				desc = &grpc.ServiceDesc{
 					ServiceName: svcFullName,
-					HandlerType: (*legacyGRPCService)(nil),
+					HandlerType: (*projectedGRPCService)(nil),
 					Metadata:    reqDesc.ParentFile().Path(),
 				}
 				serviceDescs[svcFullName] = desc
@@ -302,13 +305,12 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 				headers:        headers,
 				headerProvider: headerProvider,
 				maxRetries:     defaultHTTPClientMaxRetries,
-				reqDesc:        reqDesc,
 				respDesc:       respDesc,
-				newResponse:    s.messageFactory(methodInfo.OutputType),
+				newResponse:    respFactory,
 				methodPath:     methodPath,
 			}
 			desc.Methods = append(desc.Methods, proxyUnaryMethodDesc(
-				methodName, methodPath, s.messageFactory(methodInfo.InputType), caller,
+				methodName, methodPath, reqFactory, caller,
 			))
 		}
 	}
@@ -428,7 +430,6 @@ func (b *httpClientBinding) build(req proto.Message, baseURL *url.URL) ([]byte, 
 
 	query := url.Values{}
 	if b.body != "*" {
-		working = flattenQueryWrapper(working)
 		if err := encodeQueryFields("", working, query); err != nil {
 			return nil, "", err
 		}
@@ -534,6 +535,8 @@ func cloneMap(in map[string]any) map[string]any {
 			out[key] = cloneMap(v)
 		case []any:
 			out[key] = cloneSlice(v)
+		case []string:
+			out[key] = slices.Clone(v)
 		}
 	}
 	return out
@@ -548,25 +551,11 @@ func cloneSlice(in []any) []any {
 			out[i] = cloneMap(v)
 		case []any:
 			out[i] = cloneSlice(v)
+		case []string:
+			out[i] = slices.Clone(v)
 		}
 	}
 	return out
-}
-
-func flattenQueryWrapper(args map[string]any) map[string]any {
-	query, ok := args["query"].(map[string]any)
-	if !ok {
-		return args
-	}
-
-	merged := cloneMap(args)
-	delete(merged, "query")
-	for key, value := range query {
-		if _, exists := merged[key]; !exists {
-			merged[key] = value
-		}
-	}
-	return merged
 }
 
 func wrapResponseBody(payload any, fieldPath string) map[string]any {
@@ -724,8 +713,8 @@ func scalarToString(val any) (string, error) {
 	}
 }
 
-// httpClientError parses a remote error envelope. Accepts both Connect-style
-// (unwrapped, lowercase code) and the legacy wrapped format ({"error": {...}}).
+// httpClientError parses the canonical unwrapped, lowercase Connect error
+// envelope. HTTP status remains the fallback when the body is malformed.
 func httpClientError(statusCode int, body []byte) error {
 	code := grpcCodeFromHTTPStatus(statusCode)
 	msg := fmt.Sprintf("HTTP %d", statusCode)
@@ -738,34 +727,25 @@ func httpClientError(statusCode int, body []byte) error {
 			Value string `json:"value"`
 		} `json:"details"`
 	}
-	var payload struct {
-		envelope
-		Error envelope `json:"error"`
-	}
+	var payload envelope
 	var details []*anypb.Any
 	if err := json.Unmarshal(body, &payload); err == nil {
-		env := payload.envelope
-		if env.Code == "" && payload.Error.Code != "" {
-			env = payload.Error
-		}
-		if env.Message != "" {
-			msg = env.Message
-		}
-		if env.Code != "" {
-			if envelopeCode := grpcCodeFromName(env.Code); envelopeCode != codes.OK {
-				code = envelopeCode
+		if envelopeCode, ok := connectCodeFromName(payload.Code); ok {
+			code = envelopeCode
+			if payload.Message != "" {
+				msg = payload.Message
 			}
-		}
-		for _, detail := range env.Details {
-			if detail.Type == "" {
-				continue
-			}
-			value, err := base64.RawStdEncoding.DecodeString(detail.Value)
-			if err != nil {
-				value, err = base64.StdEncoding.DecodeString(detail.Value)
-			}
-			if err == nil {
-				details = append(details, &anypb.Any{TypeUrl: "type.googleapis.com/" + detail.Type, Value: value})
+			for _, detail := range payload.Details {
+				if detail.Type == "" {
+					continue
+				}
+				value, err := base64.RawStdEncoding.DecodeString(detail.Value)
+				if err != nil {
+					value, err = base64.StdEncoding.DecodeString(detail.Value)
+				}
+				if err == nil {
+					details = append(details, &anypb.Any{TypeUrl: "type.googleapis.com/" + detail.Type, Value: value})
+				}
 			}
 		}
 	}
@@ -791,27 +771,16 @@ func httpCallContextError(ctx context.Context, err error) error {
 
 func grpcCodeFromHTTPStatus(statusCode int) codes.Code {
 	switch statusCode {
-	case http.StatusOK:
-		return codes.OK
-	case 499:
-		return codes.Canceled
 	case http.StatusBadRequest:
-		return codes.InvalidArgument
-	case http.StatusGatewayTimeout:
-		return codes.DeadlineExceeded
+		return codes.Internal
 	case http.StatusNotFound:
-		return codes.NotFound
-	case http.StatusConflict:
-		return codes.AlreadyExists
+		return codes.Unimplemented
 	case http.StatusForbidden:
 		return codes.PermissionDenied
-	case http.StatusTooManyRequests:
-		return codes.ResourceExhausted
-	case http.StatusNotImplemented:
-		return codes.Unimplemented
-	case http.StatusInternalServerError:
-		return codes.Internal
-	case http.StatusServiceUnavailable:
+	case http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
 		return codes.Unavailable
 	case http.StatusUnauthorized:
 		return codes.Unauthenticated
@@ -820,20 +789,14 @@ func grpcCodeFromHTTPStatus(statusCode int) codes.Code {
 	}
 }
 
-// grpcCodeFromName matches either uppercase ("INVALID_ARGUMENT") or
-// Connect-style lowercase ("invalid_argument") since remote services may
-// emit either format. grpcCodeName is canonical lowercase.
-func grpcCodeFromName(name string) codes.Code {
-	lower := strings.ToLower(name)
-	if lower == "cancelled" { //nolint:misspell // accept the legacy British spelling from remote peers
-		return codes.Canceled
-	}
-	for i := codes.OK; i <= codes.Unauthenticated; i++ {
-		if grpcCodeName(i) == lower {
-			return i
+// connectCodeFromName accepts only canonical lowercase Connect error codes.
+func connectCodeFromName(name string) (codes.Code, bool) {
+	for i := codes.Canceled; i <= codes.Unauthenticated; i++ {
+		if grpcCodeName(i) == name {
+			return i, true
 		}
 	}
-	return codes.Unknown
+	return codes.Unknown, false
 }
 
 func shouldRetryHTTPStatus(statusCode int) bool {

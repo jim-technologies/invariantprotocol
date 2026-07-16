@@ -11,18 +11,19 @@ import json
 import sys
 from typing import TYPE_CHECKING
 
-from google.protobuf import descriptor_pool, json_format, message_factory
+from google.protobuf import json_format
 
 from invariant.errors import (
     InvariantError,
     as_invariant_error,
     invalid_argument_from_json_error,
 )
+from invariant.projection_context import ProjectionContext
 
 if TYPE_CHECKING:
     from invariant.server import Server
 
-_PROTOCOL_VERSION = "2024-11-05"
+_PROTOCOL_VERSION = "2025-11-25"
 
 
 async def serve_mcp(server: Server) -> None:
@@ -33,7 +34,6 @@ async def serve_mcp(server: Server) -> None:
 class _StdioMCP:
     def __init__(self, server: Server):
         self.server = server
-        self._pool = descriptor_pool.Default()
         # in-flight tools/call tasks keyed by JSON-RPC request id; cancelled on
         # notifications/cancelled. Registered synchronously in the read loop
         # before the task starts, so a notification arriving on the next read
@@ -83,10 +83,18 @@ class _StdioMCP:
                 self._inflight[key] = task
                 task.add_done_callback(lambda _t, k=key: self._inflight.pop(k, None))
                 background.append(task)
-        finally:
-            # On stdin EOF, wait for in-flight tools/call to finish so callers
-            # see their responses. Tasks are only cancelled if the run() coroutine
-            # itself is cancelled (passed through the gather below).
+        except BaseException:
+            # Cancelling the stdio projection must also cancel application work;
+            # otherwise a multi-projection shutdown could hang on a tool call.
+            for task in background:
+                if not task.done():
+                    task.cancel()
+            if background:
+                await asyncio.gather(*background, return_exceptions=True)
+            raise
+        else:
+            # Normal stdin EOF drains calls that were not explicitly cancelled,
+            # so their responses are not lost merely because input closed.
             if background:
                 await asyncio.gather(*background, return_exceptions=True)
 
@@ -113,20 +121,9 @@ class _StdioMCP:
         return await mcp_call_tool(self.server, msg_id, params)
 
 
-_dispatch_pool = descriptor_pool.Default()
-
-
-def _build_request(type_name: str, arguments: dict):
+def _build_request(tool, arguments: dict):
     """Construct a typed proto request from JSON args, raising InvariantError on schema mismatch."""
-    try:
-        desc = _dispatch_pool.FindMessageTypeByName(type_name)
-    except KeyError as e:
-        raise ValueError(
-            f"Message type '{type_name}' not found in descriptor pool. "
-            f"Make sure the corresponding _pb2 module is imported."
-        ) from e
-    msg_class = message_factory.GetMessageClass(desc)
-    msg = msg_class()
+    msg = tool.new_request()
     try:
         json_format.ParseDict(arguments, msg)
     except Exception as e:
@@ -134,18 +131,19 @@ def _build_request(type_name: str, arguments: dict):
     return msg
 
 
-async def mcp_dispatch(server: Server, msg: dict) -> dict | None:
+async def mcp_dispatch(server: Server, msg: dict, context: ProjectionContext | None = None) -> dict | None:
     """Dispatch a single MCP JSON-RPC request.
 
     Shared by stdio and the HTTP /mcp transport. Returns None for
     notifications (no id field); otherwise returns the JSON-RPC response dict.
     """
+    server._freeze()
     method = msg.get("method", "")
     msg_id = msg.get("id")
     params = msg.get("params", {})
 
     if msg_id is None:
-        # Notification — caller decides what to do (stdio: nothing; HTTP: 204).
+        # Notification — caller decides what to do (stdio: nothing; HTTP: 202).
         return None
 
     if method == "initialize":
@@ -162,7 +160,7 @@ async def mcp_dispatch(server: Server, msg: dict) -> dict | None:
         return _ok(msg_id, {"tools": server.tool_catalog()})
 
     if method == "tools/call":
-        return await mcp_call_tool(server, msg_id, params)
+        return await mcp_call_tool(server, msg_id, params, context=context)
 
     if method == "ping":
         return _ok(msg_id, {})
@@ -170,24 +168,38 @@ async def mcp_dispatch(server: Server, msg: dict) -> dict | None:
     return _err(msg_id, -32601, f"Method not found: {method}")
 
 
-async def mcp_call_tool(server: Server, msg_id, params: dict) -> dict:
+async def mcp_call_tool(
+    server: Server,
+    msg_id,
+    params: dict,
+    *,
+    context: ProjectionContext | None = None,
+) -> dict:
     """Execute a tools/call — unary or server-streaming."""
     tool_name = params.get("name", "")
     arguments = params.get("arguments", {})
 
-    tool = server.tools.get(tool_name)
+    tool = server._tools.get(tool_name)
     if tool is None:
         return _err(msg_id, -32602, f"Unknown tool: {tool_name}")
 
+    owns_context = context is None
+    if context is None:
+        context = ProjectionContext(peer="invariant:mcp")
+
     if tool.server_streaming:
-        return await _call_stream_tool(server, msg_id, tool, arguments)
+        try:
+            return await _call_stream_tool(server, msg_id, tool, arguments, context)
+        finally:
+            if owns_context:
+                context.finish(cancelled=context.cancelled())
 
     try:
-        request = _build_request(tool.input_type, arguments)
+        request = _build_request(tool, arguments)
         # Don't swallow CancelledError — let it propagate. Stdio's task scheduler
         # cleans up cancelled requests without a response (per MCP spec); HTTP's
         # asyncio.timeout converts it to deadline_exceeded.
-        response = await server._invoke(tool, request, None)
+        response = await server._invoke(tool, request, context)
 
         if response is not None:
             result_dict = json_format.MessageToDict(response, preserving_proto_field_name=True)
@@ -198,22 +210,31 @@ async def mcp_call_tool(server: Server, msg_id, params: dict) -> dict:
         return _ok(msg_id, {"content": [{"type": "text", "text": text}]})
     except Exception as e:
         return _error_result(msg_id, as_invariant_error(e))
+    finally:
+        if owns_context:
+            context.finish(cancelled=context.cancelled())
 
 
-async def _call_stream_tool(server: Server, msg_id, tool, arguments: dict) -> dict:
+async def _call_stream_tool(
+    server: Server,
+    msg_id,
+    tool,
+    arguments: dict,
+    context: ProjectionContext,
+) -> dict:
     """Run a server-streaming tool, collecting each chunk as a text block in
     the response content. Errors mid-stream become an isError result preserving
     whatever chunks were emitted first. CancelledError propagates so callers
     (stdio task scheduler, HTTP asyncio.timeout) can handle it correctly.
     """
     try:
-        request = _build_request(tool.input_type, arguments)
+        request = _build_request(tool, arguments)
     except Exception as e:
         return _error_result(msg_id, as_invariant_error(e))
 
     content: list[dict] = []
     try:
-        async for response in server._invoke_stream(tool, request, None):
+        async for response in server._invoke_stream(tool, request, context):
             chunk = json_format.MessageToDict(response, preserving_proto_field_name=True)
             content.append({"type": "text", "text": json.dumps(chunk, indent=2)})
     except Exception as e:

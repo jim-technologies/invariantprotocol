@@ -11,14 +11,18 @@ import json
 import struct
 
 import greet_pb2
+import greet_pb2_grpc
 import grpc
 import httpx
 import pytest
 import pytest_asyncio
-from conftest import DESCRIPTOR_PATH
+from conftest import DESCRIPTOR_PATH, register_greet
 from google.protobuf import descriptor_pool, message_factory
 
 from invariant import InvariantError, Server
+
+_MCP_ACCEPT = {"Accept": "application/json, text/event-stream"}
+_MCP_HEADERS = {**_MCP_ACCEPT, "MCP-Protocol-Version": "2025-11-25"}
 
 
 class StreamGreetServicer:
@@ -48,7 +52,7 @@ class StreamErrorServicer:
 @pytest_asyncio.fixture
 async def stream_server():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(StreamGreetServicer())
+    register_greet(srv, StreamGreetServicer())
     yield srv
     await srv.stop()
 
@@ -56,7 +60,7 @@ async def stream_server():
 @pytest_asyncio.fixture
 async def stream_err_server():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(StreamErrorServicer())
+    register_greet(srv, StreamErrorServicer())
     yield srv
     await srv.stop()
 
@@ -82,14 +86,14 @@ def test_tool_catalog_marks_streaming_tools(stream_server):
 
 
 def test_register_rejects_non_async_gen_stream_handler():
-    class BadServicer:
+    class BadServicer(StreamGreetServicer):
         async def StreamGreet(self, request, context):
             # async def without yield — coroutine, not async gen.
             return greet_pb2.GreetResponse(message="nope")
 
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
     with pytest.raises(TypeError, match="async generator"):
-        srv.register(BadServicer())
+        greet_pb2_grpc.add_GreetServiceServicer_to_server(BadServicer(), srv)
 
 
 async def test_invoke_stream_collects_chunks(stream_server):
@@ -102,29 +106,34 @@ async def test_invoke_stream_collects_chunks(stream_server):
 async def test_stream_interceptor_chain(stream_server):
     seen = []
 
-    async def trace(request, context, info, handler):
-        seen.append(info.full_method)
-        async for msg in handler(request, context):
-            seen.append(msg.message)
-            yield msg
+    class Trace(grpc.aio.ServerInterceptor):
+        async def intercept_service(self, continuation, handler_call_details):
+            handler = await continuation(handler_call_details)
+            assert handler is not None
+            terminal = handler.unary_stream
+            assert terminal is not None
 
-    stream_server.use_stream(trace)
+            async def wrapped(request, context):
+                seen.append((handler_call_details.method, type(request)))
+                async for msg in terminal(request, context):
+                    seen.append(msg.message)
+                    yield msg
+
+            return grpc.unary_stream_rpc_method_handler(
+                wrapped,
+                request_deserializer=handler.request_deserializer,
+                response_serializer=handler.response_serializer,
+            )
+
+    stream_server.use(Trace())
 
     tool = stream_server.tools["GreetService.StreamGreet"]
     request = greet_pb2.StreamGreetRequest(name="Z", count=2)
     out = [m async for m in stream_server._invoke_stream(tool, request, None)]
     assert len(out) == 2
-    assert seen[0] == "/greet.v1.GreetService/StreamGreet"
+    assert seen[0] == ("/greet.v1.GreetService/StreamGreet", greet_pb2.StreamGreetRequest)
     assert "Hi Z #0" in seen
     assert "Hi Z #1" in seen
-
-
-def test_use_stream_rejects_non_async_gen(stream_server):
-    async def not_a_generator(request, context, info, handler):  # coroutine, not async gen
-        return None
-
-    with pytest.raises(TypeError, match="async generator"):
-        stream_server.use_stream(not_a_generator)
 
 
 # -- MCP projection (in-process dispatch) --
@@ -204,7 +213,7 @@ async def test_stream_cli_flushes_per_chunk():
             yield greet_pb2.GreetResponse(message=f"Hi {request.name} #1")
 
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(GatedServicer())
+    register_greet(srv, GatedServicer())
 
     written: list[str] = []
     flushed_first = asyncio.Event()
@@ -248,8 +257,8 @@ async def test_grpc_server_streaming(stream_server):
     port = await stream_server._start_grpc(port=0)
     try:
         async with grpc.aio.insecure_channel(f"localhost:{port}") as channel:
-            stub = _stream_stub(channel, "/greet.v1.GreetService/StreamGreet", "greet.v1.GreetResponse")
-            stream = stub(greet_pb2.StreamGreetRequest(name="Gee", count=3))
+            stub = greet_pb2_grpc.GreetServiceStub(channel)
+            stream = stub.StreamGreet(greet_pb2.StreamGreetRequest(name="Gee", count=3))
             msgs = [resp.message async for resp in stream]
         assert msgs == ["Hi Gee #0", "Hi Gee #1", "Hi Gee #2"]
     finally:
@@ -368,10 +377,11 @@ async def test_mcp_http_initialize(stream_server):
             r = await client.post(
                 "/mcp",
                 json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                headers=_MCP_ACCEPT,
             )
         assert r.status_code == 200
         body = r.json()
-        assert body["result"]["protocolVersion"] == "2024-11-05"
+        assert body["result"]["protocolVersion"] == "2025-11-25"
         assert body["result"]["serverInfo"]["name"] == "invariant-protocol"
     finally:
         await stream_server._stop_http()
@@ -384,6 +394,7 @@ async def test_mcp_http_tools_list_includes_stream(stream_server):
             r = await client.post(
                 "/mcp",
                 json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                headers=_MCP_HEADERS,
             )
         names = [t["name"] for t in r.json()["result"]["tools"]]
         assert set(names) == {"GreetService.Greet", "GreetService.GreetGroup", "GreetService.StreamGreet"}
@@ -403,6 +414,7 @@ async def test_mcp_http_unary_tools_call(stream_server):
                     "method": "tools/call",
                     "params": {"name": "GreetService.Greet", "arguments": {"name": "World"}},
                 },
+                headers=_MCP_HEADERS,
             )
         result = r.json()["result"]
         text = json.loads(result["content"][0]["text"])
@@ -426,6 +438,7 @@ async def test_mcp_http_stream_tools_call_collects_chunks(stream_server):
                         "arguments": {"name": "Stream", "count": 3},
                     },
                 },
+                headers=_MCP_HEADERS,
             )
         result = r.json()["result"]
         assert len(result["content"]) == 3
@@ -433,15 +446,24 @@ async def test_mcp_http_stream_tools_call_collects_chunks(stream_server):
         await stream_server._stop_http()
 
 
-async def test_mcp_http_notification_returns_204(stream_server):
+async def test_mcp_http_notification_and_client_response_return_202(stream_server):
     port = await stream_server._start_http(port=0)
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
             r = await client.post(
                 "/mcp",
                 json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                headers=_MCP_HEADERS,
             )
-        assert r.status_code == 204
+            client_response = await client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "id": 7, "result": {}},
+                headers=_MCP_HEADERS,
+            )
+        assert r.status_code == 202
+        assert r.content == b""
+        assert client_response.status_code == 202
+        assert client_response.content == b""
     finally:
         await stream_server._stop_http()
 
@@ -453,7 +475,7 @@ async def test_mcp_http_parse_error(stream_server):
             r = await client.post(
                 "/mcp",
                 content="{not json",
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **_MCP_HEADERS},
             )
         body = r.json()
         assert body["error"]["code"] == -32700
@@ -468,8 +490,62 @@ async def test_mcp_http_unknown_method(stream_server):
             r = await client.post(
                 "/mcp",
                 json={"jsonrpc": "2.0", "id": 5, "method": "does/not/exist"},
+                headers=_MCP_HEADERS,
             )
         assert r.json()["error"]["code"] == -32601
+    finally:
+        await stream_server._stop_http()
+
+
+async def test_mcp_http_response_limit(stream_server):
+    stream_server.set_max_unary_response_bytes(160)
+    port = await stream_server._start_http(port=0)
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            response = await client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "id": 8, "method": "tools/list"},
+                headers=_MCP_HEADERS,
+            )
+        assert response.status_code == 429
+        assert response.json()["code"] == "resource_exhausted"
+    finally:
+        await stream_server._stop_http()
+
+
+async def test_mcp_http_transport_headers_and_get(stream_server):
+    port = await stream_server._start_http(port=0)
+    initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize"}
+    tools_list = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            for accept in ("", "application/json", "text/event-stream", "application/json, text/event-stream;q=0"):
+                response = await client.post("/mcp", json=initialize, headers={"Accept": accept})
+                assert response.status_code == 406
+
+            origin = await client.post(
+                "/mcp",
+                json=initialize,
+                headers={**_MCP_ACCEPT, "Origin": "https://example.test"},
+            )
+            assert origin.status_code == 403
+
+            for protocol_version in (None, "2099-01-01"):
+                headers = dict(_MCP_ACCEPT)
+                if protocol_version is not None:
+                    headers["MCP-Protocol-Version"] = protocol_version
+                response = await client.post("/mcp", json=tools_list, headers=headers)
+                assert response.status_code == 400
+
+            unsupported_initialize = await client.post(
+                "/mcp",
+                json=initialize,
+                headers={**_MCP_ACCEPT, "MCP-Protocol-Version": "2099-01-01"},
+            )
+            assert unsupported_initialize.status_code == 400
+
+            get_response = await client.get("/mcp")
+            assert get_response.status_code == 405
     finally:
         await stream_server._stop_http()
 

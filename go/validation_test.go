@@ -12,7 +12,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type validatingGreetServicer struct{}
+type validatingGreetServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func (s *validatingGreetServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	return &greetpb.GreetResponse{Message: "Hi " + req.Name}, nil
@@ -25,7 +27,7 @@ func (s *validatingGreetServicer) GreetGroup(_ context.Context, _ *greetpb.Greet
 func TestValidationPassesWhenConstraintsSatisfied(t *testing.T) {
 	srv, err := ServerFromDescriptor(descriptorPath())
 	require.NoError(t, err)
-	require.NoError(t, srv.Register(&validatingGreetServicer{}))
+	greetpb.RegisterGreetServiceServer(srv, &validatingGreetServicer{})
 
 	v, err := Validation()
 	require.NoError(t, err)
@@ -39,7 +41,7 @@ func TestValidationPassesWhenConstraintsSatisfied(t *testing.T) {
 func TestValidationRejectsConstraintViolation(t *testing.T) {
 	srv, err := ServerFromDescriptor(descriptorPath())
 	require.NoError(t, err)
-	require.NoError(t, srv.Register(&validatingGreetServicer{}))
+	greetpb.RegisterGreetServiceServer(srv, &validatingGreetServicer{})
 
 	v, err := Validation()
 	require.NoError(t, err)

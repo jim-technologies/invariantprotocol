@@ -7,14 +7,14 @@
 //! that `prost-reflect` doesn't surface, and (b) drive registration with
 //! the same tool-name → method-info lookup the Go/Python versions use.
 
-use crate::errors::Status;
 use prost::Message;
 use prost_reflect::DescriptorPool;
 use prost_types::{
     DescriptorProto, EnumDescriptorProto, FileDescriptorProto, FileDescriptorSet,
-    ServiceDescriptorProto,
+    ServiceDescriptorProto, field_descriptor_proto,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use tonic::Status;
 
 #[derive(Debug, Clone)]
 pub struct MethodInfo {
@@ -118,6 +118,14 @@ impl ParsedDescriptor {
         let data = std::fs::read(path)
             .map_err(|e| Status::invalid_argument(format!("read descriptor file: {e}")))?;
         Self::from_bytes(&data)
+    }
+
+    /// Normalized files reachable from one service's request/response value
+    /// graph. Source comments are intentionally excluded from code agreement.
+    pub(crate) fn service_graph(&self, service_name: &str) -> Result<Vec<u8>, Status> {
+        let fds = FileDescriptorSet::decode(self.raw_fds.as_slice())
+            .map_err(|error| Status::internal(format!("decode descriptor graph: {error}")))?;
+        normalized_service_graph(&fds, service_name)
     }
 
     fn parse_file(&mut self, file: &FileDescriptorProto) {
@@ -230,6 +238,135 @@ impl ParsedDescriptor {
                 is_map_entry,
             },
         );
+    }
+}
+
+type MessageIndex<'a> = BTreeMap<String, (&'a FileDescriptorProto, &'a DescriptorProto)>;
+type EnumIndex<'a> = BTreeMap<String, &'a str>;
+
+fn normalized_service_graph(
+    fds: &FileDescriptorSet,
+    service_name: &str,
+) -> Result<Vec<u8>, Status> {
+    let files = fds
+        .file
+        .iter()
+        .filter_map(|file| file.name.as_ref().map(|name| (name.clone(), file)))
+        .collect::<BTreeMap<_, _>>();
+    let mut messages = BTreeMap::new();
+    let mut enums = BTreeMap::new();
+    for file in &fds.file {
+        let package = file.package.as_deref().unwrap_or("");
+        for message in &file.message_type {
+            index_message(file, package, message, &mut messages, &mut enums);
+        }
+        for enumeration in &file.enum_type {
+            enums.insert(qualified_name(package, enumeration.name()), file.name());
+        }
+    }
+
+    for file in &fds.file {
+        let package = file.package.as_deref().unwrap_or("");
+        for service in &file.service {
+            if qualified_name(package, service.name()) != service_name {
+                continue;
+            }
+            let mut paths = BTreeSet::from([file.name().to_string()]);
+            let mut seen = BTreeSet::new();
+            for method in &service.method {
+                add_message_files(
+                    method.input_type().trim_start_matches('.'),
+                    &messages,
+                    &enums,
+                    &mut paths,
+                    &mut seen,
+                );
+                add_message_files(
+                    method.output_type().trim_start_matches('.'),
+                    &messages,
+                    &enums,
+                    &mut paths,
+                    &mut seen,
+                );
+            }
+            add_file_dependencies(&files, &mut paths);
+            let mut graph = FileDescriptorSet::default();
+            for path in paths {
+                if let Some(file) = files.get(&path) {
+                    let mut file = (*file).clone();
+                    file.source_code_info = None;
+                    graph.file.push(file);
+                }
+            }
+            return Ok(graph.encode_to_vec());
+        }
+    }
+    Err(Status::not_found(format!(
+        "service {service_name} is absent from descriptor.binpb"
+    )))
+}
+
+fn add_file_dependencies(
+    files: &BTreeMap<String, &FileDescriptorProto>,
+    paths: &mut BTreeSet<String>,
+) {
+    let mut pending = paths.iter().cloned().collect::<Vec<_>>();
+    while let Some(path) = pending.pop() {
+        let Some(file) = files.get(&path) else {
+            continue;
+        };
+        for dependency in &file.dependency {
+            if paths.insert(dependency.clone()) {
+                pending.push(dependency.clone());
+            }
+        }
+    }
+}
+
+fn index_message<'a>(
+    file: &'a FileDescriptorProto,
+    parent: &str,
+    message: &'a DescriptorProto,
+    messages: &mut MessageIndex<'a>,
+    enums: &mut EnumIndex<'a>,
+) {
+    let name = qualified_name(parent, message.name());
+    messages.insert(name.clone(), (file, message));
+    for nested in &message.nested_type {
+        index_message(file, &name, nested, messages, enums);
+    }
+    for enumeration in &message.enum_type {
+        enums.insert(qualified_name(&name, enumeration.name()), file.name());
+    }
+}
+
+fn add_message_files(
+    name: &str,
+    messages: &MessageIndex<'_>,
+    enums: &EnumIndex<'_>,
+    paths: &mut BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
+) {
+    if !seen.insert(name.to_string()) {
+        return;
+    }
+    let Some((file, message)) = messages.get(name) else {
+        return;
+    };
+    paths.insert(file.name().to_string());
+    for field in &message.field {
+        let type_name = field.type_name().trim_start_matches('.');
+        match field.r#type() {
+            field_descriptor_proto::Type::Message | field_descriptor_proto::Type::Group => {
+                add_message_files(type_name, messages, enums, paths, seen);
+            }
+            field_descriptor_proto::Type::Enum => {
+                if let Some(path) = enums.get(type_name) {
+                    paths.insert((*path).to_string());
+                }
+            }
+            _ => {}
+        }
     }
 }
 

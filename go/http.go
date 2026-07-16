@@ -58,7 +58,7 @@ type httpToolEntry struct {
 // instead of binding a separate port:
 //
 //	mux := http.NewServeMux()
-//	h, _ := server.HTTPHandler()
+//	h := server.HTTPHandler()
 //	mux.Handle("/inv/", http.StripPrefix("/inv", h))
 //
 // Routes:
@@ -67,7 +67,7 @@ type httpToolEntry struct {
 //	GET  /                                — tool catalog (same shape as MCP tools/list)
 //	GET  /__invariant/tools               — tool catalog
 //	GET  /__invariant/descriptor.binpb    — raw FileDescriptorSet bytes
-func (s *Server) HTTPHandler() (http.Handler, error) { //nolint:unparam // error result retained for public API compatibility
+func (s *Server) HTTPHandler() http.Handler {
 	s.freeze()
 	entries := make(map[string]*httpToolEntry, len(s.tools))
 
@@ -92,10 +92,12 @@ func (s *Server) HTTPHandler() (http.Handler, error) { //nolint:unparam // error
 		case r.Method == http.MethodGet && r.URL.Path == "/__invariant/descriptor.binpb":
 			s.handleDescriptor(w)
 		case r.Method == http.MethodPost && r.URL.Path == "/mcp":
-			// MCP Streamable HTTP transport — accepts a single JSON-RPC request
-			// per POST and returns one JSON-RPC response. Lets remote agent
-			// platforms speak MCP without a stdio process.
+			// MCP Streamable HTTP transport — one JSON-RPC message per POST.
 			s.handleMCPHTTP(w, r)
+		case r.URL.Path == "/mcp":
+			// This projection intentionally does not offer the optional SSE
+			// receive stream used by GET in the full Streamable HTTP transport.
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		case r.Method == http.MethodPost:
 			entry, ok := entries[r.URL.Path]
 			if !ok {
@@ -112,16 +114,13 @@ func (s *Server) HTTPHandler() (http.Handler, error) { //nolint:unparam // error
 		}
 	})
 
-	return mux, nil
+	return mux
 }
 
 // serveHTTP starts a blocking HTTP server on the given port. Honors ctx for
 // graceful shutdown.
 func (s *Server) serveHTTP(ctx context.Context, port int) error {
-	handler, err := s.HTTPHandler()
-	if err != nil {
-		return err
-	}
+	handler := s.HTTPHandler()
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
@@ -339,11 +338,21 @@ func (s *Server) handleHTTPStream(w http.ResponseWriter, r *http.Request, entry 
 
 // handleMCPHTTP serves a single JSON-RPC request over HTTP as the MCP
 // Streamable HTTP transport. Request body is one JSON-RPC envelope; response
-// body is one JSON-RPC envelope (or 204 for notifications).
+// body is one JSON-RPC envelope. Accepted notifications and client responses
+// return 202 with an empty body.
 //
 // We don't accept multiple JSON-RPC messages per POST or open an SSE stream
 // here — keep the transport minimal and shaped like the rest of the framework.
 func (s *Server) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
+	if httpHeaderPresent(r.Header, "Origin") {
+		http.Error(w, "Origin is not accepted", http.StatusForbidden)
+		return
+	}
+	if !acceptsMCPResponseTypes(strings.Join(r.Header.Values("Accept"), ",")) {
+		http.Error(w, "Accept must include application/json and text/event-stream", http.StatusNotAcceptable)
+		return
+	}
+
 	ctx, cancel := applyConnectTimeout(r)
 	defer cancel()
 	trustedMetadata, _ := metadata.FromIncomingContext(ctx)
@@ -369,19 +378,80 @@ func (s *Server) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var req jsonRPCRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(mcpErr(nil, -32700, "Parse error: "+err.Error()))
+		writeMCPJSON(w, mcpErr(nil, -32700, "Parse error: "+err.Error()), s.httpMaxUnaryResponse)
 		return
+	}
+	protocolVersion := r.Header.Get("MCP-Protocol-Version")
+	if (req.Method == "initialize" && protocolVersion != "" && protocolVersion != mcpProtocolVersion) ||
+		(req.Method != "initialize" && protocolVersion != mcpProtocolVersion) {
+		http.Error(w, "unsupported or missing MCP-Protocol-Version", http.StatusBadRequest)
+		return
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err == nil && req.Method == "" && req.ID != nil {
+		_, hasResult := fields["result"]
+		_, hasError := fields["error"]
+		if hasResult || hasError {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 	}
 
 	resp := s.mcpDispatch(ctx, &req)
 	if resp == nil {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	writeMCPJSON(w, resp, s.httpMaxUnaryResponse)
+}
+
+func acceptsMCPResponseTypes(accept string) bool {
+	var acceptsJSON, acceptsSSE bool
+	for value := range strings.SplitSeq(accept, ",") {
+		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(value))
+		if err != nil {
+			continue
+		}
+		if quality, ok := params["q"]; ok {
+			weight, parseErr := strconv.ParseFloat(quality, 64)
+			if parseErr != nil || weight <= 0 {
+				continue
+			}
+		}
+		switch strings.ToLower(mediaType) {
+		case jsonContentType:
+			acceptsJSON = true
+		case "text/event-stream":
+			acceptsSSE = true
+		}
+	}
+	return acceptsJSON && acceptsSSE
+}
+
+func httpHeaderPresent(headers http.Header, name string) bool {
+	for key := range headers {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeMCPJSON(w http.ResponseWriter, response *jsonRPCResponse, maxBytes int64) {
+	payload, err := json.Marshal(response)
+	if err != nil {
+		httpErrorWithLimit(w, status.Error(codes.Internal, "encode MCP response"), maxBytes)
+		return
+	}
+	if maxBytes > 0 && int64(len(payload)) > maxBytes {
+		httpErrorWithLimit(w, status.Error(codes.ResourceExhausted, "encoded MCP response exceeds configured byte limit"), maxBytes)
+		return
+	}
+	w.Header().Set("Content-Type", jsonContentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+	_, _ = w.Write(payload)
 }
 
 // isConnectStreamJSON reports whether ct is application/connect+json (with

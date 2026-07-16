@@ -43,10 +43,8 @@ func startAnnotatedHTTPBackend(t *testing.T) (baseURL string, stop func()) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error": map[string]any{
-					"code":    "INVALID_ARGUMENT",
-					"message": "bad name",
-				},
+				"code":    "invalid_argument",
+				"message": "bad name",
 			})
 			return
 		}
@@ -197,7 +195,7 @@ func TestConnectHTTPProgrammaticAndNative(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Hello, Direct", result.(*greetpb.GreetResponse).GetMessage())
 
-	client := nativeRefactorStart(t, srv)
+	client := nativeTestStart(t, srv)
 	nativeResult, err := client.Greet(t.Context(), &greetpb.GreetRequest{Name: "Native"})
 	require.NoError(t, err)
 	assert.Equal(t, "Hello, Native", nativeResult.GetMessage())
@@ -255,35 +253,6 @@ func TestConnectHTTPBasePath(t *testing.T) {
 	assert.Contains(t, block["text"], "Hello, World")
 }
 
-func TestFlattenQueryWrapper(t *testing.T) {
-	in := map[string]any{
-		"id": 42,
-		"query": map[string]any{
-			"limit":   5,
-			"filters": map[string]any{"hero_id": 1},
-		},
-	}
-	got := flattenQueryWrapper(in)
-
-	require.NotContains(t, got, "query")
-	assert.Equal(t, 42, got["id"])
-	assert.Equal(t, 5, got["limit"])
-	assert.Equal(t, map[string]any{"hero_id": 1}, got["filters"])
-}
-
-func TestFlattenQueryWrapperDoesNotOverrideExplicitFields(t *testing.T) {
-	in := map[string]any{
-		"id":    42,
-		"limit": 3,
-		"query": map[string]any{
-			"limit": 5,
-		},
-	}
-	got := flattenQueryWrapper(in)
-
-	assert.Equal(t, 3, got["limit"])
-}
-
 func TestDecodeHTTPResponseWithResponseBody(t *testing.T) {
 	resp := &greetpb.GreetResponse{}
 	err := decodeHTTPResponse([]byte(`"Hello, World"`), resp, "message")
@@ -300,10 +269,8 @@ func TestConnectHTTPInjectsHeadersFromEnv(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error": map[string]any{
-					"code":    "UNAUTHENTICATED",
-					"message": "missing auth",
-				},
+				"code":    "unauthenticated",
+				"message": "missing auth",
 			})
 			return
 		}
@@ -392,10 +359,8 @@ func TestConnectHTTPRetriesTransientGET(t *testing.T) {
 			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error": map[string]any{
-					"code":    "UNAVAILABLE",
-					"message": "temporary outage",
-				},
+				"code":    "unavailable",
+				"message": "temporary outage",
 			})
 			return
 		}
@@ -427,10 +392,8 @@ func TestConnectHTTPDoesNotRetryPOST(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"error": map[string]any{
-				"code":    "UNAVAILABLE",
-				"message": "temporary outage",
-			},
+			"code":    "unavailable",
+			"message": "temporary outage",
 		})
 	})
 
@@ -458,10 +421,8 @@ func TestConnectHTTPUsesDynamicHeaderProvider(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error": map[string]any{
-					"code":    "UNAUTHENTICATED",
-					"message": "missing signature",
-				},
+				"code":    "unauthenticated",
+				"message": "missing signature",
 			})
 			return
 		}

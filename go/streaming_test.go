@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
@@ -23,15 +22,13 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // streamServicer covers Greet, GreetGroup, and StreamGreet so streaming tests
 // can drive the same Server instance used by other projections.
 type streamServicer struct {
+	greetpb.UnimplementedGreetServiceServer
 	preSendErr error // optional: emit n chunks then fail
 }
 
@@ -47,7 +44,7 @@ func (s *streamServicer) GreetGroup(_ context.Context, req *greetpb.GreetGroupRe
 	return &greetpb.GreetGroupResponse{Messages: msgs, Count: int32(len(msgs))}, nil
 }
 
-func (s *streamServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream ServerStream) error {
+func (s *streamServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 	n := int(req.GetCount())
 	if n <= 0 {
 		n = 1
@@ -65,11 +62,11 @@ func (s *streamServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream Ser
 	return nil
 }
 
-func streamServer(t *testing.T, srv any) *Server {
+func streamServer(t *testing.T, service greetpb.GreetServiceServer) *Server {
 	t.Helper()
 	full, err := ServerFromDescriptor(descriptorPath())
 	require.NoError(t, err)
-	require.NoError(t, full.Register(srv))
+	greetpb.RegisterGreetServiceServer(full, service)
 	return full
 }
 
@@ -107,17 +104,13 @@ func TestToolCatalogMarksStreamingTools(t *testing.T) {
 
 func TestStreamInvocationCollectsAllChunks(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
-	tool := srv.tools["GreetService.StreamGreet"]
 
 	var got []string
-	stream := newCallbackStream(t.Context(), func(msg proto.Message) error {
+	err := srv.InvokeStream(t.Context(), "GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "Alice", Count: 3}, func(msg proto.Message) error {
 		resp := msg.(*greetpb.GreetResponse)
 		got = append(got, resp.Message)
 		return nil
 	})
-	defer stream.close()
-
-	err := srv.invokeStream(tool, &greetpb.StreamGreetRequest{Name: "Alice", Count: 3}, stream)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Hi Alice #0", "Hi Alice #1", "Hi Alice #2"}, got)
 }
@@ -131,15 +124,12 @@ func TestStreamInterceptorWraps(t *testing.T) {
 		return handler(service, stream)
 	})
 
-	tool := srv.tools["GreetService.StreamGreet"]
 	var got []string
-	stream := newCallbackStream(t.Context(), func(msg proto.Message) error {
+	err := srv.InvokeStream(t.Context(), "GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "B", Count: 2}, func(msg proto.Message) error {
 		got = append(got, msg.(*greetpb.GreetResponse).Message)
 		return nil
 	})
-	defer stream.close()
-
-	require.NoError(t, srv.invokeStream(tool, &greetpb.StreamGreetRequest{Name: "B", Count: 2}, stream))
+	require.NoError(t, err)
 	assert.Equal(t, int32(1), saw.Load())
 	assert.Len(t, got, 2)
 }
@@ -147,16 +137,12 @@ func TestStreamInterceptorWraps(t *testing.T) {
 func TestStreamHandlerErrorPropagates(t *testing.T) {
 	boom := errors.New("boom")
 	srv := streamServer(t, &streamServicer{preSendErr: boom})
-	tool := srv.tools["GreetService.StreamGreet"]
 
 	var got []string
-	stream := newCallbackStream(t.Context(), func(msg proto.Message) error {
+	err := srv.InvokeStream(t.Context(), "GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "x", Count: 4}, func(msg proto.Message) error {
 		got = append(got, msg.(*greetpb.GreetResponse).Message)
 		return nil
 	})
-	defer stream.close()
-
-	err := srv.invokeStream(tool, &greetpb.StreamGreetRequest{Name: "x", Count: 4}, stream)
 	require.ErrorIs(t, err, boom)
 	// preSendErr fires at i == n/2 (= 2 when n=4), so chunks 0..1 land before the error.
 	assert.Len(t, got, 2)
@@ -266,6 +252,7 @@ func TestStreamingCLIFlushesPerChunk(t *testing.T) {
 // second. Used by the per-chunk flush test to prove the consumer sees chunk
 // 1 before chunk 2 is even produced.
 type gatedServicer struct {
+	greetpb.UnimplementedGreetServiceServer
 	gate chan struct{}
 }
 
@@ -273,7 +260,7 @@ func (g *gatedServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*gr
 	return &greetpb.GreetResponse{Message: "hi " + req.Name}, nil
 }
 
-func (g *gatedServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream ServerStream) error {
+func (g *gatedServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 	if err := stream.Send(&greetpb.GreetResponse{Message: "Hi " + req.GetName() + " #0"}); err != nil {
 		return err
 	}
@@ -289,8 +276,7 @@ func (g *gatedServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream Serv
 
 func TestStreamingHTTPConnectEnvelopes(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
@@ -329,8 +315,7 @@ func TestStreamingHTTPConnectEnvelopes(t *testing.T) {
 
 func TestStreamingHTTPRejectsNonStreamContentType(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -350,8 +335,7 @@ func TestStreamingHTTPRejectsNonStreamContentType(t *testing.T) {
 
 func TestStreamingHTTPSurfacesErrorAsEndStream(t *testing.T) {
 	srv := streamServer(t, &streamServicer{preSendErr: errors.New("kapow")})
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -380,116 +364,61 @@ func TestStreamingHTTPSurfacesErrorAsEndStream(t *testing.T) {
 
 func TestStreamingGRPCNative(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
-
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-
-	port := lis.Addr().(*net.TCPAddr).Port
-	require.NoError(t, lis.Close())
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	errc := make(chan error, 1)
-	go func() { errc <- srv.serveGRPC(ctx, port) }()
-
-	require.Eventually(t, func() bool {
-		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond)
-		if err != nil {
-			return false
-		}
-		_ = c.Close()
-		return true
-	}, 2*time.Second, 20*time.Millisecond)
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
 
 	conn, err := grpc.NewClient(
-		fmt.Sprintf("127.0.0.1:%d", port),
+		lis.Addr().String(),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	// Use the codec-side dynamic client: gRPC encodes our typed request and
-	// decodes responses into dynamicpb (no generated stream stub).
-	reqDesc := mustFindMessageDescriptor(t, srv, "greet.v1.StreamGreetRequest")
-	respDesc := mustFindMessageDescriptor(t, srv, "greet.v1.GreetResponse")
-
-	desc := &grpc.StreamDesc{StreamName: "StreamGreet", ServerStreams: true}
-	stream, err := conn.NewStream(t.Context(), desc, "/greet.v1.GreetService/StreamGreet")
+	stream, err := greetpb.NewGreetServiceClient(conn).StreamGreet(
+		t.Context(),
+		&greetpb.StreamGreetRequest{Name: "Gee", Count: 3},
+	)
 	require.NoError(t, err)
-
-	reqMsg := dynamicpb.NewMessage(reqDesc)
-	// Build via proto marshal-from-typed for simplicity.
-	raw, _ := proto.Marshal(&greetpb.StreamGreetRequest{Name: "Gee", Count: 3})
-	require.NoError(t, proto.Unmarshal(raw, reqMsg))
-	require.NoError(t, stream.SendMsg(reqMsg))
-	require.NoError(t, stream.CloseSend())
 
 	var msgs []string
 	for {
-		out := dynamicpb.NewMessage(respDesc)
-		if err := stream.RecvMsg(out); err != nil {
+		out, err := stream.Recv()
+		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
 			t.Fatalf("recv: %v", err)
 		}
-		buf, _ := protojson.Marshal(out)
-		var parsed map[string]any
-		_ = json.Unmarshal(buf, &parsed)
-		msgs = append(msgs, parsed["message"].(string))
+		msgs = append(msgs, out.GetMessage())
 	}
 	assert.Equal(t, []string{"Hi Gee #0", "Hi Gee #1", "Hi Gee #2"}, msgs)
-
-	cancel()
-	<-errc
 }
 
 func TestStreamingGRPCErrorBecomesStatusError(t *testing.T) {
 	srv := streamServer(t, &streamServicer{preSendErr: status.Error(codes.FailedPrecondition, "nope")})
-
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := lis.Addr().(*net.TCPAddr).Port
-	require.NoError(t, lis.Close())
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	errc := make(chan error, 1)
-	go func() { errc <- srv.serveGRPC(ctx, port) }()
-
-	require.Eventually(t, func() bool {
-		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond)
-		if err != nil {
-			return false
-		}
-		_ = c.Close()
-		return true
-	}, 2*time.Second, 20*time.Millisecond)
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
 
 	conn, err := grpc.NewClient(
-		fmt.Sprintf("127.0.0.1:%d", port),
+		lis.Addr().String(),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	reqDesc := mustFindMessageDescriptor(t, srv, "greet.v1.StreamGreetRequest")
-	respDesc := mustFindMessageDescriptor(t, srv, "greet.v1.GreetResponse")
-
-	desc := &grpc.StreamDesc{StreamName: "StreamGreet", ServerStreams: true}
-	stream, err := conn.NewStream(t.Context(), desc, "/greet.v1.GreetService/StreamGreet")
+	stream, err := greetpb.NewGreetServiceClient(conn).StreamGreet(
+		t.Context(),
+		&greetpb.StreamGreetRequest{Name: "X", Count: 4},
+	)
 	require.NoError(t, err)
-
-	reqMsg := dynamicpb.NewMessage(reqDesc)
-	raw, _ := proto.Marshal(&greetpb.StreamGreetRequest{Name: "X", Count: 4})
-	require.NoError(t, proto.Unmarshal(raw, reqMsg))
-	require.NoError(t, stream.SendMsg(reqMsg))
-	require.NoError(t, stream.CloseSend())
 
 	var lastErr error
 	for {
-		out := dynamicpb.NewMessage(respDesc)
-		if err := stream.RecvMsg(out); err != nil {
+		if _, err := stream.Recv(); err != nil {
 			lastErr = err
 			break
 		}
@@ -498,9 +427,6 @@ func TestStreamingGRPCErrorBecomesStatusError(t *testing.T) {
 	require.True(t, ok, "expected gRPC status, got %T", lastErr)
 	assert.Equal(t, codes.FailedPrecondition, st.Code())
 	assert.Contains(t, st.Message(), "nope")
-
-	cancel()
-	<-errc
 }
 
 // -- helpers --
@@ -532,13 +458,4 @@ func readAllEnvelopes(t *testing.T, r io.Reader) []connectFrame {
 		}
 	}
 	return out
-}
-
-func mustFindMessageDescriptor(t *testing.T, srv *Server, fullName string) protoreflect.MessageDescriptor {
-	t.Helper()
-	files, err := srv.buildProtoFiles()
-	require.NoError(t, err)
-	desc, err := findMessageDescriptor(files, fullName)
-	require.NoError(t, err)
-	return desc
 }

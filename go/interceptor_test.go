@@ -14,11 +14,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	grpcpkg "google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // interceptorTestServicer implements GreetService RPCs using generated proto types.
-type interceptorTestServicer struct{}
+type interceptorTestServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func (s *interceptorTestServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	return &greetpb.GreetResponse{Message: "Hello, " + req.Name}, nil
@@ -29,8 +30,8 @@ func (s *interceptorTestServicer) GreetGroup(_ context.Context, _ *greetpb.Greet
 }
 
 // trackingInterceptor appends a label to the log before and after calling handler.
-func trackingInterceptor(label string, log *[]string) UnaryServerInterceptor {
-	return func(ctx context.Context, req any, _ *ServerCallInfo, handler UnaryHandler) (any, error) {
+func trackingInterceptor(label string, log *[]string) grpcpkg.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpcpkg.UnaryServerInfo, handler grpcpkg.UnaryHandler) (any, error) {
 		*log = append(*log, label+"-before")
 		resp, err := handler(ctx, req)
 		*log = append(*log, label+"-after")
@@ -38,10 +39,11 @@ func trackingInterceptor(label string, log *[]string) UnaryServerInterceptor {
 	}
 }
 
-func interceptorServer(t *testing.T, interceptors ...UnaryServerInterceptor) *Server {
+func interceptorServer(t *testing.T, interceptors ...grpcpkg.UnaryServerInterceptor) *Server {
 	t.Helper()
-	srv := newServer(mustParse(t))
-	require.NoError(t, srv.Register(&interceptorTestServicer{}))
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	greetpb.RegisterGreetServiceServer(srv, &interceptorTestServicer{})
 	for _, i := range interceptors {
 		srv.Use(i)
 	}
@@ -71,8 +73,7 @@ func TestInterceptorFiresOnHTTP(t *testing.T) {
 	var log []string
 	srv := interceptorServer(t, trackingInterceptor("A", &log))
 
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
@@ -108,73 +109,6 @@ func TestInterceptorFiresOnCLI(t *testing.T) {
 	assert.Equal(t, []string{"A-before", "A-after"}, log)
 }
 
-// --- gRPC ---
-
-func TestInterceptorFiresOnGRPC(t *testing.T) {
-	var log []string
-	srv, err := ServerFromDescriptor(descriptorPath())
-	require.NoError(t, err)
-	require.NoError(t, srv.Register(&interceptorTestServicer{}))
-	srv.Use(trackingInterceptor("A", &log))
-
-	lis, err := net.Listen("tcp", "localhost:0")
-	require.NoError(t, err)
-	addr := lis.Addr().String()
-
-	files, err := srv.buildProtoFiles()
-	require.NoError(t, err)
-	var nativeCalls int
-	gs := grpcpkg.NewServer(grpcpkg.UnaryInterceptor(func(ctx context.Context, req any, info *grpcpkg.UnaryServerInfo, handler grpcpkg.UnaryHandler) (any, error) {
-		nativeCalls++
-		assert.Equal(t, "/greet.v1.GreetService/Greet", info.FullMethod)
-		return handler(ctx, req)
-	}))
-	type svcEntry struct{ methods []grpcpkg.MethodDesc }
-	svcMap := make(map[string]*svcEntry)
-	for _, tool := range srv.tools {
-		entry, ok := svcMap[tool.ServiceFullName]
-		if !ok {
-			entry = &svcEntry{}
-			svcMap[tool.ServiceFullName] = entry
-		}
-		reqMD, err := findMessageDescriptor(files, tool.InputType)
-		require.NoError(t, err)
-		respMD, err := findMessageDescriptor(files, tool.OutputType)
-		require.NoError(t, err)
-		entry.methods = append(entry.methods, grpcpkg.MethodDesc{
-			MethodName: tool.MethodName,
-			Handler:    srv.grpcMethodHandler(tool, reqMD, respMD),
-		})
-	}
-	type grpcServicer any
-	for svcName, entry := range svcMap {
-		gs.RegisterService(&grpcpkg.ServiceDesc{
-			ServiceName: svcName,
-			HandlerType: (*grpcServicer)(nil),
-			Methods:     entry.methods,
-		}, struct{}{})
-	}
-	go func() { _ = gs.Serve(lis) }()
-	defer gs.Stop()
-
-	// Call via dynamic handler
-	conn, err := grpcpkg.NewClient(addr, grpcpkg.WithTransportCredentials(insecure.NewCredentials()))
-	require.NoError(t, err)
-	defer conn.Close()
-
-	reqDesc, err := findMessageDescriptor(files, "greet.v1.GreetRequest")
-	require.NoError(t, err)
-	respDesc, err := findMessageDescriptor(files, "greet.v1.GreetResponse")
-	require.NoError(t, err)
-
-	dh := &grpcDynamicHandler{conn: conn, methodPath: "/greet.v1.GreetService/Greet", reqDesc: reqDesc, respDesc: respDesc}
-	result, err := callDynamicJSON(t.Context(), dh, []byte(`{"name":"gRPC"}`))
-	require.NoError(t, err)
-	assert.Contains(t, result, "Hello, gRPC")
-	assert.Equal(t, []string{"A-before", "A-after"}, log)
-	assert.Equal(t, 1, nativeCalls, "grpc.ServerOption interceptor must execute exactly once")
-}
-
 // --- Chain order ---
 
 func TestInterceptorChainOrder(t *testing.T) {
@@ -198,10 +132,11 @@ func TestInterceptorChainOrder(t *testing.T) {
 // --- Short-circuit ---
 
 func TestInterceptorShortCircuit(t *testing.T) {
-	srv := newServer(mustParse(t))
-	require.NoError(t, srv.Register(&interceptorTestServicer{}))
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	greetpb.RegisterGreetServiceServer(srv, &interceptorTestServicer{})
 
-	srv.Use(func(_ context.Context, _ any, _ *ServerCallInfo, _ UnaryHandler) (any, error) {
+	srv.Use(func(_ context.Context, _ any, _ *grpcpkg.UnaryServerInfo, _ grpcpkg.UnaryHandler) (any, error) {
 		return nil, errors.New("blocked by interceptor")
 	})
 
@@ -224,7 +159,7 @@ func TestInterceptorShortCircuit(t *testing.T) {
 
 func TestInterceptorFullMethod(t *testing.T) {
 	var capturedMethod string
-	srv := interceptorServer(t, func(ctx context.Context, req any, info *ServerCallInfo, handler UnaryHandler) (any, error) {
+	srv := interceptorServer(t, func(ctx context.Context, req any, info *grpcpkg.UnaryServerInfo, handler grpcpkg.UnaryHandler) (any, error) {
 		capturedMethod = info.FullMethod
 		return handler(ctx, req)
 	})

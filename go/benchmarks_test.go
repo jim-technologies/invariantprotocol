@@ -76,7 +76,7 @@ func BenchmarkInvokeDirect(b *testing.B) {
 // BenchmarkInvokeWithInterceptor measures the path with one no-op interceptor.
 func BenchmarkInvokeWithInterceptor(b *testing.B) {
 	srv := benchServer(b)
-	srv.Use(func(ctx context.Context, req any, _ *ServerCallInfo, handler UnaryHandler) (any, error) {
+	srv.Use(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		return handler(ctx, req)
 	})
 	ctx := b.Context()
@@ -94,10 +94,7 @@ func BenchmarkInvokeWithInterceptor(b *testing.B) {
 // BenchmarkHTTPJSON measures the full HTTP/JSON path (parse → invoke → serialize).
 func BenchmarkHTTPJSON(b *testing.B) {
 	srv := benchServer(b)
-	handler, err := srv.HTTPHandler()
-	if err != nil {
-		b.Fatal(err)
-	}
+	handler := srv.HTTPHandler()
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -129,10 +126,7 @@ func BenchmarkHTTPJSON(b *testing.B) {
 // BenchmarkHTTPProto measures the full HTTP/binary-proto path.
 func BenchmarkHTTPProto(b *testing.B) {
 	srv := benchServer(b)
-	handler, err := srv.HTTPHandler()
-	if err != nil {
-		b.Fatal(err)
-	}
+	handler := srv.HTTPHandler()
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
@@ -164,7 +158,7 @@ func BenchmarkHTTPProto(b *testing.B) {
 
 // BenchmarkGRPCUnary measures the full gRPC unary path through the framework.
 func BenchmarkGRPCUnary(b *testing.B) {
-	addr, stop := startServeGRPCB(b)
+	addr, stop := startGRPCBenchmark(b)
 	defer stop()
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -186,8 +180,7 @@ func BenchmarkGRPCUnary(b *testing.B) {
 	}
 }
 
-// startServeGRPCB is the benchmark-friendly equivalent of startServeGRPC (uses *testing.B).
-func startServeGRPCB(b *testing.B) (string, func()) {
+func startGRPCBenchmark(b *testing.B) (string, func()) {
 	b.Helper()
 	srv, err := ServerFromDescriptor(descriptorPath())
 	if err != nil {

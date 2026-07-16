@@ -8,8 +8,8 @@
 //! Streaming tools collect each emitted chunk into the response `content`
 //! array — same opinionated cut as Go/Python (no progress notifications).
 
-use crate::errors::Status;
-use crate::server::Server;
+use crate::errors::error_payload;
+use crate::server::{ProjectionContext, Server};
 use parking_lot::Mutex;
 use prost_reflect::{DynamicMessage, SerializeOptions};
 use serde_json::{Value, json};
@@ -18,8 +18,10 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
+use tonic::metadata::MetadataMap;
+use tonic::{Request, Status};
 
-pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Run the stdio MCP transport. Blocks until stdin closes.
 ///
@@ -28,6 +30,7 @@ pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 /// methods (`initialize`, `tools/list`, `ping`) run inline to keep response
 /// order deterministic. Mirrors Go's `mcpSession.run` and Python's `_StdioMCP`.
 pub async fn serve_mcp_stdio(server: Arc<Server>) -> std::io::Result<()> {
+    server.freeze();
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
     let stdout = Arc::new(AsyncMutex::new(tokio::io::stdout()));
@@ -135,6 +138,16 @@ fn id_type(id: &Value) -> &'static str {
 /// Dispatch a single MCP JSON-RPC message. Returns `None` for notifications
 /// (no `id` field); otherwise a fully-formed JSON-RPC response.
 pub async fn mcp_dispatch(server: &Arc<Server>, msg: &Value) -> Option<Value> {
+    mcp_dispatch_with_context(server, msg, MetadataMap::new(), None).await
+}
+
+pub(crate) async fn mcp_dispatch_with_context(
+    server: &Arc<Server>,
+    msg: &Value,
+    metadata: MetadataMap,
+    projection: Option<ProjectionContext>,
+) -> Option<Value> {
+    server.freeze();
     let method = msg.get("method")?.as_str()?;
     let id = msg.get("id").cloned();
     if id.is_none() || id.as_ref() == Some(&Value::Null) {
@@ -158,7 +171,7 @@ pub async fn mcp_dispatch(server: &Arc<Server>, msg: &Value) -> Option<Value> {
             "id": id,
             "result": {"tools": server.tool_catalog()},
         })),
-        "tools/call" => Some(tools_call(server, id, &params).await),
+        "tools/call" => Some(tools_call(server, id, &params, metadata, projection).await),
         "ping" => Some(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
         _ => Some(json!({
             "jsonrpc": "2.0",
@@ -168,7 +181,13 @@ pub async fn mcp_dispatch(server: &Arc<Server>, msg: &Value) -> Option<Value> {
     }
 }
 
-async fn tools_call(server: &Arc<Server>, id: Value, params: &Value) -> Value {
+async fn tools_call(
+    server: &Arc<Server>,
+    id: Value,
+    params: &Value,
+    metadata: MetadataMap,
+    projection: Option<ProjectionContext>,
+) -> Value {
     let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
     let Some(tool) = server.tool(tool_name) else {
@@ -185,12 +204,20 @@ async fn tools_call(server: &Arc<Server>, id: Value, params: &Value) -> Value {
     };
 
     if tool.server_streaming {
-        return stream_tools_call(server, id, &tool.name, request).await;
+        return stream_tools_call(server, id, &tool.name, request, metadata, projection).await;
     }
 
+    let mut request = Request::new(request);
+    *request.metadata_mut() = metadata;
+    if let Some(projection) = projection {
+        if let Some(remaining) = projection.remaining() {
+            request.set_timeout(remaining);
+        }
+        request.extensions_mut().insert(projection);
+    }
     match server.invoke(tool_name, request).await {
         Ok(resp) => {
-            let text = serialize_message(&resp);
+            let text = serialize_message(resp.get_ref());
             json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -206,9 +233,22 @@ async fn stream_tools_call(
     id: Value,
     tool_name: &str,
     request: DynamicMessage,
+    metadata: MetadataMap,
+    projection: Option<ProjectionContext>,
 ) -> Value {
     use futures::StreamExt;
-    let mut stream = server.invoke_stream(tool_name, request);
+    let mut request = Request::new(request);
+    *request.metadata_mut() = metadata;
+    if let Some(projection) = projection {
+        if let Some(remaining) = projection.remaining() {
+            request.set_timeout(remaining);
+        }
+        request.extensions_mut().insert(projection);
+    }
+    let mut stream = match server.invoke_stream(tool_name, request).await {
+        Ok(response) => response.into_inner(),
+        Err(status) => return error_result(id, &status),
+    };
     let mut content: Vec<Value> = Vec::new();
     while let Some(item) = stream.next().await {
         match item {
@@ -217,14 +257,14 @@ async fn stream_tools_call(
                 content.push(json!({"type": "text", "text": text}));
             }
             Err(s) => {
-                content.push(json!({"type": "text", "text": s.message.clone()}));
+                content.push(json!({"type": "text", "text": s.message()}));
                 return json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
                         "content": content,
                         "isError": true,
-                        "error": s.to_payload(),
+                        "error": error_payload(&s),
                     },
                 });
             }
@@ -264,9 +304,9 @@ fn error_result(id: Value, err: &Status) -> Value {
         "jsonrpc": "2.0",
         "id": id,
         "result": {
-            "content": [{"type": "text", "text": err.message.clone()}],
+            "content": [{"type": "text", "text": err.message()}],
             "isError": true,
-            "error": err.to_payload(),
+            "error": error_payload(err),
         },
     })
 }

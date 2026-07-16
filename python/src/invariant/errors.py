@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import re
 from collections.abc import Iterable, Sequence
@@ -44,13 +45,15 @@ class InvariantError(Exception):
     Connect-style payload: lowercase code, optional details, no wrapper.
     """
 
-    __slots__ = ("_detail_anys", "code", "details", "message")
+    __slots__ = ("_detail_anys", "_trailing_metadata", "code", "details", "message")
 
     def __init__(
         self,
         code: grpc.StatusCode,
         message: str,
         details: Iterable[dict[str, Any] | message.Message] | None = None,
+        *,
+        trailing_metadata: Iterable[tuple[str, str | bytes]] = (),
     ):
         super().__init__(message)
         self.code = code
@@ -58,17 +61,34 @@ class InvariantError(Exception):
         details = list(details) if details is not None else None
         self.details = _details_to_payload(details)
         self._detail_anys = _details_to_anys(details)
+        self._trailing_metadata = tuple(trailing_metadata)
 
     def __str__(self) -> str:
         return self.message
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "code": self.code.name.lower(),
+            "code": "canceled" if self.code == grpc.StatusCode.CANCELLED else self.code.name.lower(),
             "message": self.message,
         }
         if self.details:
             payload["details"] = self.details
+        return payload
+
+    def to_connect_payload(self) -> dict[str, Any]:
+        """Encode this error using Connect's canonical rich-detail wire shape."""
+        payload: dict[str, Any] = {
+            "code": "canceled" if self.code == grpc.StatusCode.CANCELLED else self.code.name.lower(),
+            "message": self.message,
+        }
+        if self._detail_anys:
+            payload["details"] = [
+                {
+                    "type": detail.type_url.rsplit("/", 1)[-1],
+                    "value": base64.b64encode(detail.value).decode().rstrip("="),
+                }
+                for detail in self._detail_anys
+            ]
         return payload
 
     def to_status_proto(self) -> status_pb2.Status:
@@ -79,15 +99,36 @@ class InvariantError(Exception):
         status.details.extend(self._detail_anys)
         return status
 
-    def grpc_trailing_metadata(self) -> tuple[tuple[str, bytes], ...]:
-        if not self._detail_anys:
-            return ()
-        return (("grpc-status-details-bin", self.to_status_proto().SerializeToString()),)
+    def grpc_trailing_metadata(self) -> tuple[tuple[str, str | bytes], ...]:
+        metadata: list[tuple[str, str | bytes]] = [
+            (key, value) for key, value in self._trailing_metadata if key != "grpc-status-details-bin"
+        ]
+        if self._detail_anys:
+            metadata.append(("grpc-status-details-bin", self.to_status_proto().SerializeToString()))
+        return tuple(metadata)
 
 
 def as_invariant_error(err: Exception) -> InvariantError:
     if isinstance(err, InvariantError):
         return err
+    if isinstance(err, grpc.RpcError):
+        code_fn = getattr(err, "code", None)
+        details_fn = getattr(err, "details", None)
+        code = code_fn() if callable(code_fn) else grpc.StatusCode.UNKNOWN
+        message_text = details_fn() if callable(details_fn) else str(err)
+        rich_details: list[message.Message] = []
+        trailing_fn = getattr(err, "trailing_metadata", None)
+        trailing = trailing_fn() if callable(trailing_fn) else ()
+        for key, value in trailing or ():
+            if key != "grpc-status-details-bin" or not isinstance(value, bytes):
+                continue
+            status = status_pb2.Status()
+            with contextlib.suppress(Exception):
+                status.ParseFromString(value)
+                if status.message:
+                    message_text = status.message
+                rich_details.extend(status.details)
+        return InvariantError(code, message_text, rich_details, trailing_metadata=trailing or ())
     return InvariantError(grpc.StatusCode.UNKNOWN, str(err))
 
 
@@ -174,7 +215,13 @@ def _details_to_anys(
 
 
 def _any_to_payload(detail: any_pb2.Any) -> dict[str, Any]:
-    return dict(json_format.MessageToDict(detail))
+    try:
+        return dict(json_format.MessageToDict(detail))
+    except TypeError, ValueError:
+        return {
+            "@type": detail.type_url,
+            "value": base64.b64encode(detail.value).decode(),
+        }
 
 
 def _details_to_payload(

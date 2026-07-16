@@ -25,7 +25,7 @@ func (s *grpcServerServicer) GreetGroup(_ context.Context, _ *greetpb.GreetGroup
 	return &greetpb.GreetGroupResponse{Messages: []string{"Group hello"}, Count: 1}, nil
 }
 
-func startServeGRPC(t *testing.T) (addr string, stop func()) {
+func startNativeGRPC(t *testing.T) (addr string, stop func()) {
 	t.Helper()
 	srv, err := ServerFromDescriptor(descriptorPath())
 	require.NoError(t, err)
@@ -39,79 +39,50 @@ func startServeGRPC(t *testing.T) (addr string, stop func()) {
 	return addr, srv.Stop
 }
 
-func TestServeGRPCGreet(t *testing.T) {
-	addr, stop := startServeGRPC(t)
+func TestNativeGRPCGreet(t *testing.T) {
+	addr, stop := startNativeGRPC(t)
 	defer stop()
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	defer conn.Close()
 
-	// Use the same dynamic approach as grpc_client_test.go
-	srv, err := ServerFromDescriptor(descriptorPath())
+	result, err := greetpb.NewGreetServiceClient(conn).Greet(
+		t.Context(),
+		&greetpb.GreetRequest{Name: "native"},
+	)
 	require.NoError(t, err)
-	files, err := srv.buildProtoFiles()
-	require.NoError(t, err)
-
-	reqDesc, err := findMessageDescriptor(files, "greet.v1.GreetRequest")
-	require.NoError(t, err)
-	respDesc, err := findMessageDescriptor(files, "greet.v1.GreetResponse")
-	require.NoError(t, err)
-
-	handler := &grpcDynamicHandler{
-		conn:       conn,
-		methodPath: "/greet.v1.GreetService/Greet",
-		reqDesc:    reqDesc,
-		respDesc:   respDesc,
-	}
-
-	result, err := callDynamicJSON(t.Context(), handler, []byte(`{"name":"ServeGRPC"}`))
-	require.NoError(t, err)
-	assert.Contains(t, result, "Hello, ServeGRPC")
+	assert.Equal(t, "Hello, native", result.GetMessage())
 }
 
-func TestServeGRPCGreetGroup(t *testing.T) {
-	addr, stop := startServeGRPC(t)
+func TestNativeGRPCGreetGroup(t *testing.T) {
+	addr, stop := startNativeGRPC(t)
 	defer stop()
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	defer conn.Close()
 
-	srv, err := ServerFromDescriptor(descriptorPath())
+	result, err := greetpb.NewGreetServiceClient(conn).GreetGroup(
+		t.Context(),
+		&greetpb.GreetGroupRequest{},
+	)
 	require.NoError(t, err)
-	files, err := srv.buildProtoFiles()
-	require.NoError(t, err)
-
-	reqDesc, err := findMessageDescriptor(files, "greet.v1.GreetGroupRequest")
-	require.NoError(t, err)
-	respDesc, err := findMessageDescriptor(files, "greet.v1.GreetGroupResponse")
-	require.NoError(t, err)
-
-	handler := &grpcDynamicHandler{
-		conn:       conn,
-		methodPath: "/greet.v1.GreetService/GreetGroup",
-		reqDesc:    reqDesc,
-		respDesc:   respDesc,
-	}
-
-	result, err := callDynamicJSON(t.Context(), handler, []byte(`{}`))
-	require.NoError(t, err)
-	assert.Contains(t, result, "Group hello")
-	assert.Contains(t, result, "count")
+	assert.Equal(t, []string{"Group hello"}, result.GetMessages())
+	assert.Equal(t, int32(1), result.GetCount())
 }
 
-func TestServeGRPCRejectsNilListener(t *testing.T) {
-	srv := newServer(mustParse(t))
-	err := srv.ServeGRPC(nil)
+func TestServeRejectsNilListener(t *testing.T) {
+	srv, createErr := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, createErr)
+	err := srv.Serve(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "requires a listener")
 }
 
-// TestServeGRPCViaConnect uses Connect() to proxy through our served gRPC server,
-// proving end-to-end: client -> Connect() -> ServeGRPC -> local handler.
-func TestServeGRPCViaConnect(t *testing.T) {
-	addr, stop := startServeGRPC(t)
+// TestNativeGRPCViaConnectGRPC proves the remote projection end to end.
+func TestNativeGRPCViaConnectGRPC(t *testing.T) {
+	addr, stop := startNativeGRPC(t)
 	defer stop()
 
 	client := connectServer(t, addr)

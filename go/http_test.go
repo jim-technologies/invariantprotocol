@@ -18,7 +18,9 @@ import (
 )
 
 // slowGreetServicer is used to exercise Connect-Timeout-Ms handling.
-type slowGreetServicer struct{}
+type slowGreetServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func (s *slowGreetServicer) Greet(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	select {
@@ -34,7 +36,9 @@ func (s *slowGreetServicer) GreetGroup(_ context.Context, _ *greetpb.GreetGroupR
 }
 
 // httpTestServicer implements GreetService RPCs using generated proto types.
-type httpTestServicer struct{}
+type httpTestServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func (s *httpTestServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	resp := &greetpb.GreetResponse{
@@ -62,10 +66,9 @@ func startHTTPServer(t *testing.T) (port int, cancel context.CancelFunc) {
 	t.Helper()
 	srv, err := ServerFromDescriptor(descriptorPath())
 	require.NoError(t, err)
-	require.NoError(t, srv.Register(&httpTestServicer{}))
+	greetpb.RegisterGreetServiceServer(srv, &httpTestServicer{})
 
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 
 	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
@@ -256,10 +259,9 @@ func TestHTTPConnectTimeoutMsHonored(t *testing.T) {
 	// Servicer that sleeps longer than the requested timeout.
 	srv, err := ServerFromDescriptor(descriptorPath())
 	require.NoError(t, err)
-	require.NoError(t, srv.Register(&slowGreetServicer{}))
+	greetpb.RegisterGreetServiceServer(srv, &slowGreetServicer{})
 
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	lis, err := net.Listen("tcp", "localhost:0")
 	require.NoError(t, err)
 	httpServer := &http.Server{Handler: handler}

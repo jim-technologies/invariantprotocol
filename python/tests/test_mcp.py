@@ -1,9 +1,14 @@
 """Test MCP projection."""
 
+import asyncio
 import json
 import os
 import subprocess
 import sys
+
+from conftest import DESCRIPTOR_PATH, register_greet
+
+from invariant import Server
 
 
 def _mcp_request(msg_id, method, params=None):
@@ -28,6 +33,7 @@ import sys
 sys.path.insert(0, {src_dir!r})
 sys.path.insert(0, {gen_dir!r})
 import greet_pb2
+import greet_pb2_grpc
 from invariant import Server
 
 class GreetServicer:
@@ -40,11 +46,15 @@ class GreetServicer:
     async def GreetGroup(self, request, context):
         messages = [f"Hi {{p.name}}" for p in request.people]
         return greet_pb2.GreetGroupResponse(messages=messages, count=len(request.people))
+    async def StreamGreet(self, request, context):
+        if False:
+            yield greet_pb2.GreetResponse()
 
 async def main():
     server = Server.from_descriptor({descriptor!r})
-    server.register(GreetServicer())
-    await server.serve(mcp=True)
+    server.exclude("*StreamGreet")
+    greet_pb2_grpc.add_GreetServiceServicer_to_server(GreetServicer(), server)
+    await server.serve_projections(mcp=True)
 
 asyncio.run(main())
 """
@@ -70,7 +80,7 @@ def test_mcp_initialize():
                 0,
                 "initialize",
                 {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": "2025-11-25",
                     "capabilities": {},
                     "clientInfo": {"name": "test", "version": "1.0"},
                 },
@@ -78,7 +88,7 @@ def test_mcp_initialize():
         ]
     )
     assert len(responses) == 1
-    assert responses[0]["result"]["protocolVersion"] == "2024-11-05"
+    assert responses[0]["result"]["protocolVersion"] == "2025-11-25"
     assert responses[0]["result"]["serverInfo"]["name"] == "invariant-protocol"
 
 
@@ -221,3 +231,60 @@ def test_mcp_unknown_method():
     )
     assert "error" in responses[1]
     assert responses[1]["error"]["code"] == -32601
+
+
+async def test_mcp_stdio_cancel_notification_cancels_inflight_tool(monkeypatch):
+    from invariant.projections import mcp
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    context_was_cancelled: list[bool] = []
+
+    class BlockingServicer:
+        async def Greet(self, request, context):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                context_was_cancelled.append(context.cancelled())
+                cancelled.set()
+
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    register_greet(server, BlockingServicer())
+    reader = asyncio.StreamReader()
+    responses: list[dict] = []
+
+    async def stdin_reader():
+        return reader
+
+    monkeypatch.setattr(mcp, "_stdin_reader", stdin_reader)
+    monkeypatch.setattr(mcp, "_write_response", responses.append)
+
+    runner = asyncio.create_task(mcp.serve_mcp(server))
+    try:
+        call = {
+            "jsonrpc": "2.0",
+            "id": "call-1",
+            "method": "tools/call",
+            "params": {"name": "GreetService.Greet", "arguments": {"name": "blocked"}},
+        }
+        reader.feed_data((json.dumps(call) + "\n").encode())
+        await asyncio.wait_for(started.wait(), timeout=2)
+
+        cancellation = {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": "call-1", "reason": "client no longer needs it"},
+        }
+        reader.feed_data((json.dumps(cancellation) + "\n").encode())
+        reader.feed_eof()
+
+        await asyncio.wait_for(runner, timeout=2)
+        await asyncio.wait_for(cancelled.wait(), timeout=2)
+        assert context_was_cancelled == [True]
+        assert responses == []
+    finally:
+        if not runner.done():
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+        await server.stop(grace=0)

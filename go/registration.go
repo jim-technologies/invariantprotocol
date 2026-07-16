@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 
 	invpb "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1"
 	"google.golang.org/grpc"
@@ -13,9 +14,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
-	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 type registeredService struct {
@@ -23,17 +24,7 @@ type registeredService struct {
 	service any
 }
 
-type registeredUnaryHandler struct {
-	method  *grpc.MethodDesc
-	service any
-}
-
-type registeredStreamHandler struct {
-	method  *grpc.StreamDesc
-	service any
-}
-
-type legacyGRPCService any
+type projectedGRPCService any
 
 var _ grpc.ServiceRegistrar = (*Server)(nil)
 
@@ -118,11 +109,15 @@ func (s *Server) registerServices(services []registeredService, subject string) 
 			return fmt.Errorf("invariant: duplicate native gRPC service registration for %q", name)
 		}
 
-		stagedTools[i] = s.toolsForService(service.desc, service.service)
+		var err error
+		stagedTools[i], err = s.toolsForService(service.desc, service.service)
+		if err != nil {
+			return err
+		}
 		for _, tool := range stagedTools[i] {
 			if owner, exists := toolOwners[tool.Name]; exists {
 				return fmt.Errorf(
-					"tool name collision: %q is registered by both %q and %q; use Server.Include() to scope to one",
+					"tool name collision: %q is registered by both %q and %q; configure Server.Include() before registration to scope to one",
 					tool.Name, owner, tool.ServiceFullName,
 				)
 			}
@@ -144,15 +139,20 @@ func (s *Server) registerServices(services []registeredService, subject string) 
 	return nil
 }
 
-func (s *Server) toolsForService(desc *grpc.ServiceDesc, impl any) []*Tool {
+func (s *Server) toolsForService(desc *grpc.ServiceDesc, impl any) ([]*Tool, error) {
 	if s.parsed == nil {
-		return nil
+		return nil, nil
 	}
 	svcInfo, ok := s.parsed.Services[desc.ServiceName]
 	if !ok {
 		// Infrastructure services (for example grpc.health.v1.Health) can be
 		// registered normally even when they are not part of the projected FDS.
-		return nil
+		return nil, nil
+	}
+	if reflect.TypeOf(desc.HandlerType) != reflect.TypeFor[*projectedGRPCService]() {
+		if err := s.validateDescriptorAgreement(desc, svcInfo); err != nil {
+			return nil, err
+		}
 	}
 
 	var tools []*Tool
@@ -163,8 +163,7 @@ func (s *Server) toolsForService(desc *grpc.ServiceDesc, impl any) []*Tool {
 			!s.shouldIncludeLocked(desc.ServiceName, method.MethodName) {
 			continue
 		}
-		tools = append(tools, s.registeredTool(svcInfo, methodInfo, method.MethodName,
-			&registeredUnaryHandler{method: method, service: impl}))
+		tools = append(tools, s.registeredTool(svcInfo, methodInfo, method.MethodName, impl, method, nil))
 	}
 	for i := range desc.Streams {
 		method := &desc.Streams[i]
@@ -173,13 +172,219 @@ func (s *Server) toolsForService(desc *grpc.ServiceDesc, impl any) []*Tool {
 			!s.shouldIncludeLocked(desc.ServiceName, method.StreamName) {
 			continue
 		}
-		tools = append(tools, s.registeredTool(svcInfo, methodInfo, method.StreamName,
-			&registeredStreamHandler{method: method, service: impl}))
+		tools = append(tools, s.registeredTool(svcInfo, methodInfo, method.StreamName, impl, nil, method))
 	}
-	return tools
+	return tools, nil
 }
 
-func (s *Server) registeredTool(svcInfo *invpb.ServiceInfo, methodInfo *invpb.MethodInfo, methodName string, handler any) *Tool {
+// validateDescriptorAgreement prevents generated code and descriptor.binpb
+// from describing different revisions of the same service. Projection
+// metadata comes from the descriptor image while native dispatch comes from
+// grpc.ServiceDesc, so silently accepting disagreement would split the
+// canonical contract by transport.
+func (s *Server) validateDescriptorAgreement(desc *grpc.ServiceDesc, svcInfo *invpb.ServiceInfo) error {
+	seen := make(map[string]struct{}, len(desc.Methods)+len(desc.Streams))
+	for i := range desc.Methods {
+		method := &desc.Methods[i]
+		if method.MethodName == "" || method.Handler == nil {
+			return fmt.Errorf("invariant: service %q has an invalid unary method descriptor", desc.ServiceName)
+		}
+		if _, duplicate := seen[method.MethodName]; duplicate {
+			return fmt.Errorf("invariant: service %q has duplicate method %q", desc.ServiceName, method.MethodName)
+		}
+		seen[method.MethodName] = struct{}{}
+		methodInfo, ok := svcInfo.Methods[method.MethodName]
+		if !ok {
+			return fmt.Errorf(
+				"invariant: generated service %q method %q is absent from descriptor.binpb",
+				desc.ServiceName, method.MethodName,
+			)
+		}
+		if methodInfo.ClientStreaming || methodInfo.ServerStreaming {
+			return fmt.Errorf(
+				"invariant: generated service %q method %q is unary but descriptor.binpb declares streaming",
+				desc.ServiceName, method.MethodName,
+			)
+		}
+	}
+	for i := range desc.Streams {
+		method := &desc.Streams[i]
+		if method.StreamName == "" || method.Handler == nil {
+			return fmt.Errorf("invariant: service %q has an invalid stream method descriptor", desc.ServiceName)
+		}
+		if _, duplicate := seen[method.StreamName]; duplicate {
+			return fmt.Errorf("invariant: service %q has duplicate method %q", desc.ServiceName, method.StreamName)
+		}
+		seen[method.StreamName] = struct{}{}
+		methodInfo, ok := svcInfo.Methods[method.StreamName]
+		if !ok {
+			return fmt.Errorf(
+				"invariant: generated service %q method %q is absent from descriptor.binpb",
+				desc.ServiceName, method.StreamName,
+			)
+		}
+		if methodInfo.ClientStreaming != method.ClientStreams || methodInfo.ServerStreaming != method.ServerStreams {
+			return fmt.Errorf(
+				"invariant: generated service %q method %q streaming cardinality disagrees with descriptor.binpb",
+				desc.ServiceName, method.StreamName,
+			)
+		}
+	}
+
+	missing := make([]string, 0)
+	for name := range svcInfo.Methods {
+		if _, ok := seen[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) != 0 {
+		slices.Sort(missing)
+		return fmt.Errorf(
+			"invariant: generated service %q is missing descriptor.binpb methods: %s",
+			desc.ServiceName, strings.Join(missing, ", "),
+		)
+	}
+
+	// Generated registration links the protobuf service descriptor into the
+	// binary. Require it so input/output identities can be checked against the
+	// runtime image instead of trusting only method names and cardinalities.
+	linked, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(desc.ServiceName))
+	if err != nil {
+		return fmt.Errorf(
+			"invariant: generated service %q has no linked protobuf descriptor: %w",
+			desc.ServiceName, err,
+		)
+	}
+	linkedService, ok := linked.(protoreflect.ServiceDescriptor)
+	if !ok {
+		return fmt.Errorf("invariant: linked descriptor %q is not a protobuf service", desc.ServiceName)
+	}
+	for name, methodInfo := range svcInfo.Methods {
+		method := linkedService.Methods().ByName(protoreflect.Name(name))
+		if method == nil {
+			return fmt.Errorf(
+				"invariant: linked generated service %q is missing descriptor.binpb method %q",
+				desc.ServiceName, name,
+			)
+		}
+		if string(method.Input().FullName()) != methodInfo.InputType ||
+			string(method.Output().FullName()) != methodInfo.OutputType {
+			return fmt.Errorf(
+				"invariant: generated service %q method %q message types disagree with descriptor.binpb",
+				desc.ServiceName, name,
+			)
+		}
+	}
+
+	runtimeFiles, err := s.buildProtoFiles()
+	if err != nil {
+		return err
+	}
+	runtimeDescriptor, err := runtimeFiles.FindDescriptorByName(protoreflect.FullName(desc.ServiceName))
+	if err != nil {
+		return fmt.Errorf("invariant: service %q is absent from the runtime descriptor graph: %w", desc.ServiceName, err)
+	}
+	runtimeService, ok := runtimeDescriptor.(protoreflect.ServiceDescriptor)
+	if !ok {
+		return fmt.Errorf("invariant: runtime descriptor %q is not a protobuf service", desc.ServiceName)
+	}
+	linkedFiles := reachableServiceFiles(linkedService)
+	runtimeGraph := reachableServiceFiles(runtimeService)
+	if mismatch := descriptorGraphMismatch(linkedFiles, runtimeGraph); mismatch != "" {
+		return fmt.Errorf(
+			"invariant: generated service %q protobuf file %q disagrees with descriptor.binpb",
+			desc.ServiceName, mismatch,
+		)
+	}
+	return nil
+}
+
+// reachableServiceFiles returns the defining file and every file reached by a
+// request/response message or enum field. Compiler-support imports that are not
+// part of the service's value graph are intentionally excluded: their bundled
+// descriptors can vary across protobuf runtimes without changing the service
+// contract.
+func reachableServiceFiles(service protoreflect.ServiceDescriptor) map[string]protoreflect.FileDescriptor {
+	files := map[string]protoreflect.FileDescriptor{
+		service.ParentFile().Path(): service.ParentFile(),
+	}
+	messages := make(map[protoreflect.FullName]struct{})
+	methods := service.Methods()
+	for i := range methods.Len() {
+		method := methods.Get(i)
+		addReachableMessageFiles(files, messages, method.Input())
+		addReachableMessageFiles(files, messages, method.Output())
+	}
+	return files
+}
+
+func reachableMessageFiles(message protoreflect.MessageDescriptor) map[string]protoreflect.FileDescriptor {
+	files := make(map[string]protoreflect.FileDescriptor)
+	addReachableMessageFiles(files, make(map[protoreflect.FullName]struct{}), message)
+	return files
+}
+
+func addReachableMessageFiles(
+	files map[string]protoreflect.FileDescriptor,
+	seen map[protoreflect.FullName]struct{},
+	message protoreflect.MessageDescriptor,
+) {
+	if _, exists := seen[message.FullName()]; exists {
+		return
+	}
+	seen[message.FullName()] = struct{}{}
+	files[message.ParentFile().Path()] = message.ParentFile()
+	fields := message.Fields()
+	for i := range fields.Len() {
+		field := fields.Get(i)
+		switch field.Kind() {
+		case protoreflect.MessageKind, protoreflect.GroupKind:
+			addReachableMessageFiles(files, seen, field.Message())
+		case protoreflect.EnumKind:
+			files[field.Enum().ParentFile().Path()] = field.Enum().ParentFile()
+		}
+	}
+}
+
+// descriptorGraphMismatch returns the first mismatched file path, or an empty
+// string when the reachable descriptor graphs are equal. SourceCodeInfo is
+// intentionally ignored because generated language descriptors omit comments.
+func descriptorGraphMismatch(
+	generated map[string]protoreflect.FileDescriptor,
+	runtime map[string]protoreflect.FileDescriptor,
+) string {
+	if len(generated) != len(runtime) {
+		return "<reachable graph>"
+	}
+	paths := make([]string, 0, len(generated))
+	for path := range generated {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	for _, path := range paths {
+		runtimeFile, exists := runtime[path]
+		if !exists {
+			return path
+		}
+		generatedProto := protodesc.ToFileDescriptorProto(generated[path])
+		runtimeProto := protodesc.ToFileDescriptorProto(runtimeFile)
+		generatedProto.SourceCodeInfo = nil
+		runtimeProto.SourceCodeInfo = nil
+		if !proto.Equal(generatedProto, runtimeProto) {
+			return path
+		}
+	}
+	return ""
+}
+
+func (s *Server) registeredTool(
+	svcInfo *invpb.ServiceInfo,
+	methodInfo *invpb.MethodInfo,
+	methodName string,
+	impl any,
+	unaryDesc *grpc.MethodDesc,
+	streamDesc *grpc.StreamDesc,
+) *Tool {
 	toolName := svcInfo.Name + "." + methodName
 	description := methodInfo.Comment
 	if description == "" {
@@ -189,20 +394,19 @@ func (s *Server) registeredTool(svcInfo *invpb.ServiceInfo, methodInfo *invpb.Me
 		Name:            toolName,
 		Description:     description,
 		InputSchema:     s.schemaGen.MessageToSchema(methodInfo.InputType),
-		Handler:         handler,
 		InputType:       methodInfo.InputType,
 		OutputType:      methodInfo.OutputType,
 		ServiceFullName: svcInfo.FullName,
 		MethodName:      methodName,
 		ServerStreaming: methodInfo.ServerStreaming,
+		serviceImpl:     impl,
+		unaryDesc:       unaryDesc,
+		streamDesc:      streamDesc,
 		newRequest:      s.messageFactory(methodInfo.InputType),
 	}
 }
 
 func (s *Server) messageFactory(fullName string) func() proto.Message {
-	if mt, err := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName(fullName)); err == nil {
-		return func() proto.Message { return mt.New().Interface() }
-	}
 	if s.fds == nil {
 		return nil
 	}
@@ -214,86 +418,36 @@ func (s *Server) messageFactory(fullName string) func() proto.Message {
 	if err != nil {
 		return nil
 	}
-	return func() proto.Message { return dynamicpb.NewMessage(md) }
+	factory, err := s.checkedMessageFactory(md)
+	if err != nil {
+		return nil
+	}
+	return factory
 }
 
-// legacyServiceDesc turns the reflection-based compatibility API into the
-// same grpc.ServiceDesc registration model used by generated code.
-func (s *Server) legacyServiceDesc(servicer any, serviceName string, svcInfo *invpb.ServiceInfo) (*grpc.ServiceDesc, error) {
-	servicerValue := reflect.ValueOf(servicer)
-	desc := &grpc.ServiceDesc{
-		ServiceName: serviceName,
-		HandlerType: (*legacyGRPCService)(nil),
+// checkedMessageFactory keeps descriptor-only proxies dynamic, but reuses a
+// linked generated type when its complete reachable schema matches the runtime
+// image. A same-name stale generated type is rejected instead of silently
+// splitting JSON/schema interpretation from protobuf dispatch.
+func (s *Server) checkedMessageFactory(descriptor protoreflect.MessageDescriptor) (func() proto.Message, error) {
+	messageType, err := protoregistry.GlobalTypes.FindMessageByName(descriptor.FullName())
+	if errors.Is(err, protoregistry.NotFound) {
+		return dynamicMessageFactory(descriptor), nil
 	}
-
-	for methodName, methodInfo := range svcInfo.Methods {
-		if methodInfo.ClientStreaming {
-			continue
-		}
-		method := servicerValue.MethodByName(methodName)
-		if !method.IsValid() {
-			continue
-		}
-		factory := buildRequestFactory(method.Interface())
-		if factory == nil {
-			factory = s.messageFactory(methodInfo.InputType)
-		}
-		if factory == nil {
-			return nil, fmt.Errorf("method %s has no usable protobuf request type", methodName)
-		}
-		fullMethod := "/" + serviceName + "/" + methodName
-
-		if methodInfo.ServerStreaming {
-			raw, err := buildStreamHandler(method.Interface())
-			if err != nil {
-				buildErr := err
-				raw = func(any, ServerStream) error { return buildErr }
-			}
-			desc.Streams = append(desc.Streams, grpc.StreamDesc{
-				StreamName:    methodName,
-				ServerStreams: true,
-				Handler: func(_ any, stream grpc.ServerStream) error {
-					req := factory()
-					if err := stream.RecvMsg(req); err != nil {
-						return err
-					}
-					return raw(req, legacyServerStream{ServerStream: stream})
-				},
-			})
-			continue
-		}
-
-		raw, err := buildInvokeHandler(method.Interface())
-		if err != nil {
-			buildErr := err
-			raw = func(context.Context, any) (any, error) { return nil, buildErr }
-		}
-		desc.Methods = append(desc.Methods, grpc.MethodDesc{
-			MethodName: methodName,
-			Handler: func(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
-				req := factory()
-				if err := dec(req); err != nil {
-					return nil, err
-				}
-				if interceptor == nil {
-					return raw(ctx, req)
-				}
-				info := &grpc.UnaryServerInfo{Server: srv, FullMethod: fullMethod}
-				return interceptor(ctx, req, info, raw)
-			},
-		})
+	if err != nil {
+		return nil, fmt.Errorf("invariant: resolve linked generated message %q: %w", descriptor.FullName(), err)
 	}
-	if len(desc.Methods) == 0 && len(desc.Streams) == 0 {
-		return nil, fmt.Errorf("no supported methods found for service %q", serviceName)
+	if mismatch := descriptorGraphMismatch(
+		reachableMessageFiles(messageType.Descriptor()),
+		reachableMessageFiles(descriptor),
+	); mismatch != "" {
+		return nil, fmt.Errorf(
+			"invariant: linked generated message %q protobuf file %q disagrees with descriptor.binpb",
+			descriptor.FullName(), mismatch,
+		)
 	}
-	return desc, nil
+	return func() proto.Message { return messageType.New().Interface() }, nil
 }
-
-type legacyServerStream struct {
-	grpc.ServerStream
-}
-
-func (s legacyServerStream) Send(msg proto.Message) error { return s.SendMsg(msg) }
 
 func copyProtoMessage(dst, src any) error {
 	dstMsg, ok := dst.(proto.Message)
@@ -305,7 +459,8 @@ func copyProtoMessage(dst, src any) error {
 		return fmt.Errorf("request does not implement proto.Message: %T", src)
 	}
 	proto.Reset(dstMsg)
-	if reflect.TypeOf(dstMsg) == reflect.TypeOf(srcMsg) {
+	if reflect.TypeOf(dstMsg) == reflect.TypeOf(srcMsg) &&
+		dstMsg.ProtoReflect().Descriptor() == srcMsg.ProtoReflect().Descriptor() {
 		proto.Merge(dstMsg, srcMsg)
 		return nil
 	}

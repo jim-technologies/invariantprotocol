@@ -4,7 +4,7 @@ import { extname } from "node:path";
 import { fromBinary, fromJsonString, toJsonString } from "@bufbuild/protobuf";
 
 import { invalidArgument } from "./errors.js";
-import { type Server, type Tool } from "./server.js";
+import { serverInternal, type Server, type Tool } from "./server.js";
 
 export async function runCli(server: Server, args: string[]): Promise<string> {
   if (args.length === 0 || args[0] === "--help" || args[0] === "-h") {
@@ -14,21 +14,29 @@ export async function runCli(server: Server, args: string[]): Promise<string> {
   const [serviceName, methodName, requestValue] = splitArgs(args);
   const tool = resolveTool(server, serviceName, methodName);
   const request = loadRequest(tool, requestValue, server);
-
-  if (tool.serverStreaming) {
-    const lines: string[] = [];
-    for await (const chunk of server.invokeStreamTool(tool, request, undefined)) {
-      lines.push(toJsonString(tool.outputDesc, chunk, { useProtoFieldName: true, registry: server.parsed.registry }));
-    }
-    return lines.join("\n");
-  }
-
-  const response = await server.invokeTool(tool, request, undefined);
-  return toJsonString(tool.outputDesc, response, {
-    prettySpaces: 2,
-    useProtoFieldName: true,
-    registry: server.parsed.registry,
+  const context = server[serverInternal].createContext(tool.methodDesc, {
+    protocolName: "cli",
+    url: `invariant-cli:///${tool.serviceFullName}/${tool.methodName}`,
   });
+
+  try {
+    if (tool.serverStreaming) {
+      const lines: string[] = [];
+      for await (const chunk of server.invokeStreamTool(tool, request, context)) {
+        lines.push(toJsonString(tool.outputDesc, chunk, { useProtoFieldName: true, registry: server.parsed.registry }));
+      }
+      return lines.join("\n");
+    }
+
+    const response = await server.invokeTool(tool, request, context);
+    return toJsonString(tool.outputDesc, response, {
+      prettySpaces: 2,
+      useProtoFieldName: true,
+      registry: server.parsed.registry,
+    });
+  } finally {
+    context.abort();
+  }
 }
 
 export function cliHelp(server: Server): string {

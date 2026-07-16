@@ -1,5 +1,7 @@
+import { Code as ConnectCode, ConnectError } from "@connectrpc/connect";
+
 export type Code =
-  | "cancelled"
+  | "canceled"
   | "unknown"
   | "invalid_argument"
   | "deadline_exceeded"
@@ -19,12 +21,14 @@ export type Code =
 export class InvariantError extends Error {
   readonly code: Code;
   readonly details: unknown[];
+  readonly metadata: Headers;
 
-  constructor(code: Code, message: string, details: unknown[] = []) {
+  constructor(code: Code, message: string, details: unknown[] = [], metadata: HeadersInit = {}) {
     super(message);
     this.name = "InvariantError";
     this.code = code;
     this.details = details;
+    this.metadata = new Headers(metadata);
   }
 
   toPayload(): { code: Code; message: string; details: unknown[] } {
@@ -36,10 +40,54 @@ export function asInvariantError(err: unknown): InvariantError {
   if (err instanceof InvariantError) {
     return err;
   }
+  if (err instanceof ConnectError) {
+    return new InvariantError(
+      codeFromConnectCode(err.code),
+      err.rawMessage,
+      connectDetailsForPayload(err),
+      err.metadata,
+    );
+  }
   if (err instanceof Error) {
     return new InvariantError("internal", err.message);
   }
   return new InvariantError("internal", String(err));
+}
+
+/** Convert an Invariant status to Connect's canonical status representation. */
+export function toConnectError(err: unknown): ConnectError {
+  if (err instanceof ConnectError) {
+    return err;
+  }
+  if (err instanceof InvariantError) {
+    const connect = new ConnectError(err.message, connectCodeFor(err.code), err.metadata);
+    connect.details = connectDetailsFromPayload(err.details);
+    return connect;
+  }
+  return ConnectError.from(err, ConnectCode.Internal);
+}
+
+/**
+ * Preserve intentional RPC statuses, but classify an unexpected handler
+ * failure as Internal and include the canonical gRPC method for triage.
+ */
+export function normalizeHandlerError(err: unknown, fullMethod: string): InvariantError | ConnectError {
+  if (err instanceof InvariantError || err instanceof ConnectError) {
+    return err;
+  }
+  if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+    return ConnectError.from(err);
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return new ConnectError(`${fullMethod}: ${message}`, ConnectCode.Internal, undefined, undefined, err);
+}
+
+export function connectCodeFor(code: Code): ConnectCode {
+  return grpcStatusFor(code) as ConnectCode;
+}
+
+export function codeFromConnectCode(code: ConnectCode): Code {
+  return codeFromGrpcStatus(code);
 }
 
 export function invalidArgument(message: string): InvariantError {
@@ -56,7 +104,7 @@ export function failedPrecondition(message: string): InvariantError {
 
 export function httpStatusFor(code: Code): number {
   switch (code) {
-    case "cancelled":
+    case "canceled":
       return 499;
     case "invalid_argument":
     case "out_of_range":
@@ -91,36 +139,26 @@ export function httpStatusFor(code: Code): number {
 export function codeFromHttpStatus(status: number): Code {
   switch (status) {
     case 400:
-      return "invalid_argument";
+      return "internal";
     case 401:
       return "unauthenticated";
     case 403:
       return "permission_denied";
     case 404:
-      return "not_found";
-    case 409:
-      return "aborted";
-    case 412:
-      return "failed_precondition";
-    case 413:
-    case 429:
-      return "resource_exhausted";
-    case 499:
-      return "cancelled";
-    case 501:
       return "unimplemented";
+    case 429:
+    case 502:
     case 503:
-      return "unavailable";
     case 504:
-      return "deadline_exceeded";
+      return "unavailable";
     default:
-      return status >= 500 ? "internal" : "unknown";
+      return "unknown";
   }
 }
 
 export function grpcStatusFor(code: Code): number {
   switch (code) {
-    case "cancelled":
+    case "canceled":
       return 1;
     case "unknown":
       return 2;
@@ -158,7 +196,7 @@ export function grpcStatusFor(code: Code): number {
 export function codeFromGrpcStatus(status: number | undefined): Code {
   switch (status) {
     case 1:
-      return "cancelled";
+      return "canceled";
     case 2:
       return "unknown";
     case 3:
@@ -192,4 +230,39 @@ export function codeFromGrpcStatus(status: number | undefined): Code {
     default:
       return "unknown";
   }
+}
+
+function connectDetailsForPayload(error: ConnectError): unknown[] {
+  return error.details.map((detail) => {
+    if ("desc" in detail) {
+      return { type: detail.desc.typeName };
+    }
+    return { type: detail.type, value: Buffer.from(detail.value).toString("base64") };
+  });
+}
+
+function connectDetailsFromPayload(details: readonly unknown[]): ConnectError["details"] {
+  const out: ConnectError["details"] = [];
+  for (const detail of details) {
+    if (typeof detail !== "object" || detail === null || Array.isArray(detail)) {
+      continue;
+    }
+    if ("desc" in detail && "value" in detail) {
+      out.push(detail as ConnectError["details"][number]);
+      continue;
+    }
+    const payload = detail as { type?: unknown; value?: unknown; debug?: unknown };
+    if (typeof payload.type !== "string" || typeof payload.value !== "string") {
+      continue;
+    }
+    const incoming: { type: string; value: Uint8Array; debug?: unknown } = {
+      type: payload.type,
+      value: Buffer.from(payload.value, "base64"),
+    };
+    if (payload.debug !== undefined) {
+      incoming.debug = payload.debug;
+    }
+    out.push(incoming as ConnectError["details"][number]);
+  }
+  return out;
 }

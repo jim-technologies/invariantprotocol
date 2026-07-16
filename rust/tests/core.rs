@@ -1,170 +1,180 @@
-//! Core dispatch tests — descriptor parsing, registration, invoke, catalog.
-//! Mirrors `go/descriptor_test.go` + `go/server_test.go` shape.
+//! Descriptor, generated registration, and in-process projection dispatch.
 
 mod common;
 
-use common::{DESCRIPTOR_PATH, greet};
-use invariant::{Code, Server, Status};
+use common::{DESCRIPTOR_PATH, TestGreetService, greet, registered_server};
+use invariant::{Code, ErasedRequest, Request, Response, Server, Status};
 use prost::Message;
 use prost_reflect::DynamicMessage;
-
-fn build_server() -> Server {
-    let srv = Server::from_descriptor(DESCRIPTOR_PATH).expect("load descriptor");
-    srv.register_unary("GreetService.Greet", greet);
-    srv
-}
-
-async fn greet(req: greet::GreetRequest) -> Result<greet::GreetResponse, Status> {
-    Ok(greet::GreetResponse {
-        message: format!("Hi {}", req.name),
-        ..Default::default()
-    })
-}
-
-async fn greet_group(req: greet::GreetGroupRequest) -> Result<greet::GreetGroupResponse, Status> {
-    let messages: Vec<String> = req
-        .people
-        .iter()
-        .map(|p| format!("Hi {}", p.name))
-        .collect();
-    let count = messages.len() as i32;
-    Ok(greet::GreetGroupResponse { messages, count })
-}
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
-fn parse_descriptor_extracts_services() {
-    let parsed = invariant::ParsedDescriptor::from_file(DESCRIPTOR_PATH).expect("load");
-    let svc = parsed
-        .services
-        .get("greet.v1.GreetService")
-        .expect("greet service");
-    assert_eq!(svc.name, "GreetService");
-    assert!(
-        svc.comment
-            .to_lowercase()
-            .contains("simple greeting service"),
-        "expected comment, got {:?}",
-        svc.comment
+fn descriptor_parsing_preserves_services_messages_comments_and_cardinality() {
+    let parsed = invariant::ParsedDescriptor::from_file(DESCRIPTOR_PATH).unwrap();
+    let service = &parsed.services["greet.v1.GreetService"];
+    assert_eq!(service.name, "GreetService");
+    assert!(service.comment.contains("simple greeting service"));
+    assert_eq!(
+        service
+            .methods
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["Greet", "GreetGroup", "StreamGreet"]
     );
-    assert!(svc.methods.contains_key("Greet"));
-    assert!(svc.methods.contains_key("GreetGroup"));
-    assert!(svc.methods.contains_key("StreamGreet"));
-
-    let stream = &svc.methods["StreamGreet"];
-    assert!(stream.server_streaming);
-    assert!(!stream.client_streaming);
-}
-
-#[test]
-fn parse_descriptor_extracts_messages_and_enums() {
-    let parsed = invariant::ParsedDescriptor::from_file(DESCRIPTOR_PATH).expect("load");
+    assert!(service.methods["StreamGreet"].server_streaming);
+    assert!(!service.methods["StreamGreet"].client_streaming);
     assert!(parsed.messages.contains_key("greet.v1.GreetRequest"));
-    assert!(parsed.messages.contains_key("greet.v1.GreetResponse"));
-    let mood = parsed.enums.get("greet.v1.Mood").expect("mood enum");
-    let names: Vec<&str> = mood.values.iter().map(|v| v.name.as_str()).collect();
-    assert_eq!(names, vec!["MOOD_UNSPECIFIED", "MOOD_HAPPY", "MOOD_SAD"]);
-}
-
-#[tokio::test]
-async fn invoke_unary_dispatches_to_handler() {
-    let srv = build_server();
-    let pool = &srv.parsed().pool;
-    let desc = pool.get_message_by_name("greet.v1.GreetRequest").unwrap();
-    let typed = greet::GreetRequest {
-        name: "World".into(),
-        ..Default::default()
-    };
-    let buf = typed.encode_to_vec();
-    let dyn_req = DynamicMessage::decode(desc, &buf[..]).unwrap();
-
-    let dyn_resp = srv
-        .invoke("GreetService.Greet", dyn_req)
-        .await
-        .expect("invoke");
-    let raw = dyn_resp.encode_to_vec();
-    let resp = greet::GreetResponse::decode(&raw[..]).unwrap();
-    assert_eq!(resp.message, "Hi World");
-}
-
-#[tokio::test]
-async fn invoke_unknown_tool_returns_not_found() {
-    let srv = build_server();
-    let pool = &srv.parsed().pool;
-    let desc = pool.get_message_by_name("greet.v1.GreetRequest").unwrap();
-    let dyn_req = DynamicMessage::new(desc);
-    let err = srv
-        .invoke("does.not.Exist", dyn_req)
-        .await
-        .expect_err("must fail");
-    assert_eq!(err.code, Code::NotFound);
+    assert_eq!(
+        parsed.enums["greet.v1.Mood"]
+            .values
+            .iter()
+            .map(|value| value.name.as_str())
+            .collect::<Vec<_>>(),
+        ["MOOD_UNSPECIFIED", "MOOD_HAPPY", "MOOD_SAD"]
+    );
 }
 
 #[test]
-fn tool_catalog_lists_registered_tools() {
-    let srv = build_server();
-    srv.register_unary("GreetService.GreetGroup", greet_group);
-    let catalog = srv.tool_catalog();
-    assert_eq!(catalog.len(), 2);
-
-    let names: Vec<&str> = catalog
-        .iter()
-        .map(|e| e["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(names, vec!["GreetService.Greet", "GreetService.GreetGroup"]);
-
-    // Description picked up from proto leading comments.
-    let greet_entry = catalog
-        .iter()
-        .find(|e| e["name"] == "GreetService.Greet")
-        .unwrap();
+fn generated_registration_populates_the_projection_catalog() {
+    let server = registered_server(TestGreetService::default());
+    let catalog = server.tool_catalog();
+    assert_eq!(catalog.len(), 3);
+    assert_eq!(catalog[0]["name"], "GreetService.Greet");
     assert!(
-        greet_entry["description"]
+        catalog[0]["description"]
             .as_str()
             .unwrap()
-            .to_lowercase()
-            .contains("greet a person")
+            .contains("Greet a person")
     );
-
-    // No `_meta.streaming` on unary tools.
-    assert!(greet_entry.get("_meta").is_none());
+    assert_eq!(catalog[2]["_meta"]["streaming"], true);
 }
 
 #[tokio::test]
-async fn interceptor_chain_runs_outer_then_inner() {
-    use std::sync::Arc as StdArc;
-    use std::sync::atomic::{AtomicU32, Ordering};
+async fn in_process_projection_uses_registered_typed_implementation_and_metadata() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handler_calls = calls.clone();
+    let service = TestGreetService::default().with_greet(move |request| {
+        let handler_calls = handler_calls.clone();
+        async move {
+            handler_calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(request.metadata().get("x-correlation-id").unwrap(), "abc");
+            let mut response = Response::new(greet::GreetResponse {
+                message: format!("Hello {}", request.get_ref().name),
+                ..Default::default()
+            });
+            response
+                .metadata_mut()
+                .insert("x-result-id", "result-1".parse().unwrap());
+            Ok(response)
+        }
+    });
+    let server = registered_server(service);
 
-    let srv = build_server();
-    let outer = StdArc::new(AtomicU32::new(0));
-    let inner = StdArc::new(AtomicU32::new(0));
-    let outer_clone = outer.clone();
-    let inner_clone = inner.clone();
+    let interceptor_calls = Arc::new(AtomicUsize::new(0));
+    let seen = interceptor_calls.clone();
+    server
+        .use_shared_unary(Arc::new(move |request: ErasedRequest, info, next| {
+            let seen = seen.clone();
+            Box::pin(async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(info.full_method, "/greet.v1.GreetService/Greet");
+                assert_eq!(
+                    request
+                        .downcast_ref::<greet::GreetRequest>()
+                        .unwrap()
+                        .get_ref()
+                        .name,
+                    "Projection"
+                );
+                next(request).await
+            })
+        }))
+        .unwrap();
 
-    srv.use_interceptor(StdArc::new(move |req, info, next| {
-        let outer = outer_clone.clone();
-        Box::pin(async move {
-            outer.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(info.full_method, "/greet.v1.GreetService/Greet");
-            next(req).await
-        })
-    }));
-    srv.use_interceptor(StdArc::new(move |req, _info, next| {
-        let inner = inner_clone.clone();
-        Box::pin(async move {
-            inner.fetch_add(1, Ordering::SeqCst);
-            next(req).await
-        })
-    }));
-
-    let pool = &srv.parsed().pool;
-    let desc = pool.get_message_by_name("greet.v1.GreetRequest").unwrap();
-    let typed = greet::GreetRequest {
-        name: "A".into(),
+    let descriptor = server
+        .parsed()
+        .pool
+        .get_message_by_name("greet.v1.GreetRequest")
+        .unwrap();
+    let request = greet::GreetRequest {
+        name: "Projection".into(),
         ..Default::default()
     };
-    let dyn_req = DynamicMessage::decode(desc, &typed.encode_to_vec()[..]).unwrap();
-    srv.invoke("GreetService.Greet", dyn_req).await.unwrap();
+    let dynamic = DynamicMessage::decode(descriptor, request.encode_to_vec().as_slice()).unwrap();
+    let mut request = Request::new(dynamic);
+    request
+        .metadata_mut()
+        .insert("x-correlation-id", "abc".parse().unwrap());
+    let response = server.invoke("GreetService.Greet", request).await.unwrap();
+    assert_eq!(response.metadata().get("x-result-id").unwrap(), "result-1");
+    let typed =
+        greet::GreetResponse::decode(response.into_inner().encode_to_vec().as_slice()).unwrap();
+    assert_eq!(typed.message, "Hello Projection");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(interceptor_calls.load(Ordering::SeqCst), 1);
+}
 
-    assert_eq!(outer.load(Ordering::SeqCst), 1);
-    assert_eq!(inner.load(Ordering::SeqCst), 1);
+#[tokio::test]
+async fn invocation_rejects_unknown_tools_and_wrong_cardinality() {
+    let server = registered_server(TestGreetService::default());
+    let request_descriptor = server
+        .parsed()
+        .pool
+        .get_message_by_name("greet.v1.GreetRequest")
+        .unwrap();
+    let request = DynamicMessage::new(request_descriptor);
+    assert_eq!(
+        server
+            .invoke("missing", Request::new(request.clone()))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
+    let status = match server
+        .invoke_stream("GreetService.Greet", Request::new(request))
+        .await
+    {
+        Ok(_) => panic!("unary method unexpectedly returned a stream"),
+        Err(status) => status,
+    };
+    assert_eq!(status.code(), Code::FailedPrecondition);
+}
+
+#[tokio::test]
+async fn invocation_freezes_configuration_deterministically() {
+    let server = registered_server(TestGreetService::default());
+    let descriptor = server
+        .parsed()
+        .pool
+        .get_message_by_name("greet.v1.GreetRequest")
+        .unwrap();
+    server
+        .invoke(
+            "GreetService.Greet",
+            Request::new(DynamicMessage::new(descriptor)),
+        )
+        .await
+        .unwrap();
+    let noop =
+        Arc::new(|request: ErasedRequest, _info, next: invariant::SharedHandler| next(request));
+    assert_eq!(
+        server.use_shared_unary(noop).unwrap_err().code(),
+        Code::FailedPrecondition
+    );
+    assert_eq!(
+        server.set_max_unary_request_bytes(1).unwrap_err().code(),
+        Code::FailedPrecondition
+    );
+}
+
+#[test]
+fn generated_service_trait_is_the_application_contract() {
+    fn assert_service<T: greet::greet_service_server::GreetService>() {}
+    assert_service::<TestGreetService>();
+
+    let _: fn(&Server, TestGreetService) -> Result<(), Status> =
+        greet::register_greet_service_server;
 }

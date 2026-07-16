@@ -1,7 +1,7 @@
 [project]
 name = "invariant-protocol"
-version = "0.6.1"
-description = "Project gRPC services into MCP, CLI, and HTTP interfaces from proto descriptors"
+version = "0.7.0"
+description = "Project protobuf/gRPC services into MCP, CLI, HTTP, and logical data schemas"
 requires-python = ">=3.14"
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
@@ -14,11 +14,15 @@ dependencies = [
     "protovalidate>=1.2.0",
 ]
 
+[project.optional-dependencies]
+data = ["pyarrow>=25.0.0"]
+
 [project.scripts]
 invariant-check-proto-comments = "invariant.proto_comments:main"
 
 [dependency-groups]
 dev = [
+    "pyarrow>=25.0.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ty>=0.0.59",
@@ -70,14 +74,24 @@ python-version = "3.14"
 include = ["src"]
 
 [tool.ty.rules]
-# This is a descriptor-driven protobuf library: it introspects dynamically
-# generated message/descriptor classes, which a pre-1.0 checker can't model, so
-# these categories are ~entirely false positives. Documented and scoped; the
-# rules that catch real bugs (undefined names, possibly-unbound, unresolved
-# imports — the one protobuf-stub gap is inline-ignored) stay on.
-unresolved-attribute = "ignore"   # dynamic protobuf descriptor introspection
-unsupported-operator = "ignore"   # bytes/int narrowing the checker misses
-invalid-argument-type = "ignore"  # incomplete stdlib stubs (e.g. asyncio.create_task)
+# The protobuf Python generator does not emit type stubs, so generated module
+# attributes need narrow file-level exceptions below. Keep general call,
+# operator, reference, and attribute checking enabled everywhere else.
+possibly-unresolved-reference = "error"
+
+[[tool.ty.overrides]]
+include = [
+    "src/invariant/data_arrow.py",
+    "src/invariant/descriptor.py",
+    "src/invariant/errors.py",
+    "src/invariant/http_client.py",
+    "src/invariant/proto_comments.py",
+    "src/invariant/schema.py",
+    "src/invariant/server.py",
+]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

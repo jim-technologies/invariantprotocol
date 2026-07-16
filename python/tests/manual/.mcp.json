@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "greeter": {
-      "command": "uv",
-      "args": ["run", "--project", "../..", "python", "mcp_server.py", "mcp"]
-    }
-  }
-}

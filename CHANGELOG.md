@@ -5,8 +5,135 @@ TypeScript share the version in `VERSION` and are released together from one
 repository tag named `vX.Y.Z`.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-the project is pre-1.0 so 0.x.y minor bumps may include additive API changes,
+the project is pre-1.0 so 0.x minor releases may include breaking API changes,
 but never silent behaviour regressions.
+
+## Unreleased
+
+## v0.7.0 — 2026-07-15
+
+### Added
+
+- **Generated gRPC services are the canonical application model in every
+  runtime.** Go uses `grpc.ServiceRegistrar`, Python accepts the normal grpcio
+  generated registration helper, Rust generates Tonic service bridges, and
+  TypeScript registers generated Protobuf-ES descriptors. Native gRPC retains
+  every RPC cardinality, normal client/server controls, reflection, typed
+  messages, status details, metadata, deadlines, cancellation, and graceful
+  shutdown without an in-memory proxy hop.
+- **For locally registered services, optional projections reuse the registered
+  implementation directly.** Connect HTTP, MCP, CLI, and in-process calls
+  share canonical method names, typed unary/server-streaming handlers,
+  validation, middleware, and bounded request/response messages. Shared
+  middleware uses each language's standard gRPC or Connect abstraction where
+  the host type system permits it and runs exactly once.
+- **Cross-language release parity contract.**
+  `conformance/feature-parity.json` records the idiomatic Go, Python, Rust, and
+  TypeScript surface and behavioral test evidence for every portable feature.
+  Tag builds run the strict parity gate and fail while any Core capability is
+  missing in one language; maintainers run `make parity-release` before
+  creating the shared root tag. Shared build tools and explicitly scoped
+  ecosystem adapters remain single implementations by design.
+
+- **Protobuf is now the authored logical data contract.** Explicit root
+  messages compile into the versioned `invariant.data.v1.SchemaBundle`, which
+  preserves exact scalar kinds, enum numbers and aliases, presence, declared
+  defaults, comments, JSON names, nested collection shapes, and numeric source
+  paths.
+- **Storage-safe schema evolution.** Generated bundles retain globally unique
+  field IDs across renames, allocate nested/list/map identities monotonically,
+  tombstone removed IDs permanently, and reject retired-number reuse or an
+  incompatible type/presence change on an active identity. Dataset root sets
+  are append-only, and lossy storage-name collisions or extension-bearing
+  messages fail compilation instead of producing incomplete schemas.
+- **Native data-schema renderers and CLI.** `invariant-schema` emits Arrow IPC,
+  an official Parquet schema, official Iceberg schema JSON, and PostgreSQL DDL
+  suitable for Atlas. Every mapped node reports lossless, widening, range or
+  precision reduction, representation change, or unsupported behavior.
+- **One artifact across all languages.** Go owns descriptor compilation;
+  Python, Rust, and TypeScript expose generated readers for the same protobuf
+  bundle instead of maintaining independent inference engines. Public readers
+  reject unsupported IR or mapping versions.
+- **Python Arrow and Parquet value projection.** The optional `data` dependency
+  maps a bundle dataset to `pyarrow.Schema` and matching generated protobuf
+  messages to `pyarrow.Table`, preserving presence, oneofs, enum numbers,
+  nanosecond temporal values, deterministic maps, and stable field IDs. Normal
+  `pyarrow.parquet.write_table` writes the resulting table. Conversion rejects
+  stale same-name message descriptors instead of allowing Arrow to coerce a
+  value from a different protobuf schema.
+- **One compiled service graph for codegen and runtime.** The build now creates
+  `descriptor.binpb` first and passes that image to pinned Buf plugins.
+  Generated registration in all four runtimes fails fast if service methods,
+  cardinalities, or reachable message/enum schemas disagree with the
+  descriptor used by projections. Descriptor-only proxies use isolated
+  registries and do not depend on generated-module import order.
+- **Python projection contexts follow grpcio.** Generated handlers receive a
+  `grpc.aio.ServicerContext`-compatible object on HTTP, MCP, CLI, and in-process
+  calls, including status/abort, deadlines, cancellation, transport peer
+  information, completion callbacks, and initial/trailing metadata. HTTP
+  request metadata is a reviewed tracing/request-ID allowlist; arbitrary
+  authorization headers remain outside the gRPC metadata boundary. Projection
+  peer information is not an authenticated caller identity.
+
+### Breaking
+
+- **Go now exposes only the canonical gRPC-native API.** Implement generated
+  server interfaces and register them with `Register<Service>Server`; use
+  `Serve(listener)` for native gRPC, `ConnectGRPC` for remote connections, and
+  grpc-go's unary and stream interceptor types directly. `Register`, `Connect`,
+  `ServeGRPC`, `GRPC`, the Invariant interceptor and stream aliases, and the
+  public `Tool.Handler` field have been removed. `HTTPHandler()` now returns a
+  single `http.Handler`.
+- **Registration is strict.** Every runtime rejects duplicate services/tools,
+  descriptor drift, wrong cardinality, and late registration deterministically
+  during setup. Projection filters must be configured before the first local
+  or remote registration.
+- **Python local services use generated gRPC registration.** Implement generated
+  servicer interfaces and call `add_<Service>Servicer_to_server`; the old
+  reflection-based `Server.register()` API has been removed. Native gRPC,
+  HTTP, MCP, CLI, and in-process invocation reuse the captured typed generated
+  handlers and codecs. Use `connect_grpc()` with a caller-owned
+  `grpc.aio.Channel`, configure and start the server returned by
+  `grpc_server()`, and use `serve_projections()` for HTTP, MCP, and CLI.
+  Shared middleware is one standard async `grpc.aio.ServerInterceptor`
+  registered through `use()`; the old `connect()`, `serve()`, and
+  `use_stream()` spellings have been removed.
+- **TypeScript registration and transport ownership now follow generated
+  service APIs.** Call `register(Service, implementation)`, pass a
+  caller-owned grpc-js client to `connectGrpc()`, and bind the server returned
+  by `grpcServer()`. Shared unary and streaming middleware uses one standard
+  Connect-ES `Interceptor` through `use()`. The old descriptor-only
+  `register(servicer)`, address-owning `connect()` / `serveGrpc()`, and custom
+  `useStream()` APIs have been removed.
+- **Connect clients accept only canonical errors.** Wrapped or uppercase error
+  bodies and the non-standard `cancelled` code are no longer accepted. Wire
+  errors use lowercase, unwrapped Connect envelopes and the canonical
+  `canceled` spelling in every language.
+- **Internal package surfaces were removed.** Python no longer re-exports
+  generated descriptor message aliases, Rust no longer exports the empty
+  `validation` module, and TypeScript no longer exports internal gRPC binding,
+  HTTP proxy, or MCP dispatch helpers from the package root.
+
+### Changed
+
+- **HTTP behavior is narrower and deterministic.** TypeScript serves Connect
+  only (not gRPC or gRPC-Web on the HTTP projection), all clients use Connect's
+  exact malformed-body HTTP status fallback, and query parameters follow the
+  protobuf/HTTP field model without a top-level `query` wrapper shim.
+- **Dead code and unused dependencies were deleted** across Go, Python, Rust,
+  and TypeScript, including obsolete manual Python examples and generated empty
+  stubs.
+- **CI no longer archives `/nix/store`.** Flox resolves its environment without
+  a multi-gigabyte generic Actions cache, avoiding corrupt or partial restores
+  across parallel branch and tag jobs. Jobs now declare read-only repository
+  permissions and explicit timeouts.
+- **Dependency upgrades are intentional and review-driven.** Scheduled
+  Dependabot automation has been removed. Maintainers run `make deps`, review
+  the lockfile diff, and then run the normal quality, security, and clean
+  Git-install checks.
+- **Go now requires 1.26.5.** The patched toolchain closes GO-2026-5856 in
+  `crypto/tls`; Flox explicitly selects that exact checksum-verified Go
+  toolchain while its package catalog catches up to the security release.
 
 ## v0.6.1 — 2026-07-15
 
@@ -345,8 +472,8 @@ Migration mapping:
 
 ### Added
 
-- **Rust implementation** (new). Descriptor-driven dispatch via prost-reflect,
-  no per-service codegen. Same shape-mirror philosophy as Go and Python.
+- **Rust implementation** (new). Descriptor-driven dispatch via prost-reflect
+  with explicit per-method registration.
 - **All four projections in Rust**: unary + server-streaming RPCs over
   Connect (`application/json`, `application/proto`, `application/connect+json`,
   `application/connect+proto`), gRPC (descriptor-driven via tonic 0.12's

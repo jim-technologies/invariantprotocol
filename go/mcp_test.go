@@ -6,16 +6,33 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/status"
 )
 
 // mcpTestServicer implements GreetService RPCs using generated proto types.
-type mcpTestServicer struct{}
+type mcpTestServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
+
+type mcpCancellationServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+	started  chan struct{}
+	canceled chan struct{}
+}
+
+func (s *mcpCancellationServicer) Greet(ctx context.Context, _ *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	close(s.started)
+	<-ctx.Done()
+	close(s.canceled)
+	return nil, status.FromContextError(ctx.Err()).Err()
+}
 
 func (s *mcpTestServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	resp := &greetpb.GreetResponse{
@@ -41,8 +58,9 @@ func (s *mcpTestServicer) GreetGroup(_ context.Context, req *greetpb.GreetGroupR
 
 func mcpServer(t *testing.T) *Server {
 	t.Helper()
-	srv := newServer(mustParse(t))
-	require.NoError(t, srv.Register(&mcpTestServicer{}))
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	greetpb.RegisterGreetServiceServer(srv, &mcpTestServicer{})
 	return srv
 }
 
@@ -113,6 +131,35 @@ func TestMCPSessionCancellationInterruptsIdleRead(t *testing.T) {
 	}
 }
 
+func TestMCPProtocolCancellationNotification(t *testing.T) {
+	service := &mcpCancellationServicer{started: make(chan struct{}), canceled: make(chan struct{})}
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	greetpb.RegisterGreetServiceServer(srv, service)
+
+	call := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"GreetService.Greet","arguments":{"name":"waiting"}}}`
+	cancel := `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}` //nolint:misspell // Method name defined by MCP.
+	var output bytes.Buffer
+	require.NoError(t, srv.newMCPSession(strings.NewReader(call+"\n"+cancel+"\n"), &output).run(t.Context()))
+
+	requireClosed(t, service.started, "MCP handler did not start")
+	requireClosed(t, service.canceled, "MCP cancellation did not reach the handler")
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(output.Bytes()), &response))
+	result := response["result"].(map[string]any)
+	assert.Equal(t, true, result["isError"])
+	assert.Equal(t, "canceled", result["error"].(map[string]any)["code"])
+}
+
+func requireClosed(t *testing.T, ch <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal(message)
+	}
+}
+
 func TestMCPInitialize(t *testing.T) {
 	resp := sendMCP(t, mcpServer(t), map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -121,7 +168,7 @@ func TestMCPInitialize(t *testing.T) {
 	assert.InEpsilon(t, float64(1), resp["id"], 0)
 
 	result := resp["result"].(map[string]any)
-	assert.Equal(t, "2024-11-05", result["protocolVersion"])
+	assert.Equal(t, mcpProtocolVersion, result["protocolVersion"])
 
 	caps := result["capabilities"].(map[string]any)
 	assert.Contains(t, caps, "tools")
@@ -136,7 +183,7 @@ func TestMCPToolsList(t *testing.T) {
 	})
 	result := resp["result"].(map[string]any)
 	tools := result["tools"].([]any)
-	assert.Len(t, tools, 2)
+	assert.Len(t, tools, 3)
 
 	var names []string
 	for _, raw := range tools {
@@ -145,7 +192,7 @@ func TestMCPToolsList(t *testing.T) {
 		assert.NotEmpty(t, tool["description"])
 		assert.NotNil(t, tool["inputSchema"])
 	}
-	assert.Equal(t, []string{"GreetService.Greet", "GreetService.GreetGroup"}, names)
+	assert.Equal(t, []string{"GreetService.Greet", "GreetService.GreetGroup", "GreetService.StreamGreet"}, names)
 }
 
 func TestMCPToolCall(t *testing.T) {

@@ -1,25 +1,17 @@
-## Flox Environment Manifest -----------------------------------------
-##
-##   _Everything_ you need to know about the _manifest_ is here:
-##
-##   https://flox.dev/docs/reference/command-reference/manifest.toml/
-##
-## -------------------------------------------------------------------
-# Flox manifest version managed by Flox CLI
 schema-version = "1.12.0"
 
-
-## Install Packages --------------------------------------------------
-##  $ flox install gum  <- puts a package in [install] section below
-##  $ flox search gum   <- search for a package
-##  $ flox show gum     <- show all versions of a package
-## -------------------------------------------------------------------
 [install]
 python3.pkg-path = "python314"
+python3.version = "python3-3.14.6"
 buf.pkg-path = "buf"
 uv.pkg-path = "uv"
+uv.version = ">=0.11.26"
 go.pkg-path = "go"
-nodejs.pkg-path = "nodejs_26"
+# Flox currently supplies the bootstrap command. GOTOOLCHAIN below selects the
+# exact patched Go release through Go's checksum-verified toolchain mechanism.
+go.version = "1.26.4"
+nodejs.pkg-path = "nodejs_24"
+nodejs.version = ">=24.18.0"
 # Native Python wheels such as grpcio link libstdc++ on Linux. GCC supplies the
 # runtime library and also covers source-build fallbacks for native extensions.
 gcc.pkg-path = "gcc16"
@@ -33,28 +25,32 @@ protoc.version = ">=34.1"
 # nothing pulls a different toolchain at build time. clippy + rustfmt mirror
 # the lint/format role of golangci-lint + ruff in the other two languages.
 rustc.pkg-path = "rustc"
+rustc.version = "1.95.0"
+rustc.pkg-group = "rust-toolchain"
 cargo.pkg-path = "cargo"
+cargo.version = "1.95.0"
+cargo.pkg-group = "rust-toolchain"
 clippy.pkg-path = "clippy"
+clippy.version = "1.95.0"
+clippy.pkg-group = "rust-toolchain"
 rustfmt.pkg-path = "rustfmt"
+rustfmt.version = "1.95.0"
+rustfmt.pkg-group = "rust-toolchain"
 # rust-analyzer for editor integration; not used by CI but harmless.
 rust-analyzer.pkg-path = "rust-analyzer"
-# gum.pkg-path = "gum"
-# gum.version = "^0.14.5"
+gitleaks.pkg-path = "gitleaks"
+cargo-audit.pkg-path = "cargo-audit"
+govulncheck.pkg-path = "govulncheck"
+actionlint.pkg-path = "actionlint"
 
-
-## Environment Variables ---------------------------------------------
-##  ... available for use in the activated environment
-##      as well as [hook], [profile] scripts and [services] below.
-## -------------------------------------------------------------------
 [vars]
 # Keep uv on the same Python 3.14 interpreter as the reproducible Flox
 # environment instead of downloading a separate interpreter.
 UV_PYTHON_DOWNLOADS = "never"
+# Flox's catalog can lag a Go security patch. Select the exact release
+# explicitly instead of letting `auto` choose an unreviewed newer toolchain.
+GOTOOLCHAIN = "go1.26.5+auto"
 
-
-## Activation Hook ---------------------------------------------------
-##  ... run by _bash_ shell when you run 'flox activate'.
-## -------------------------------------------------------------------
 [hook]
 on-activate = '''
   export UV_PYTHON="$(command -v python3.14)"
@@ -66,64 +62,12 @@ on-activate = '''
   fi
 '''
 
-
-## Profile script ----------------------------------------------------
-## ... sourced by _your shell_ when you run 'flox activate'.
-## -------------------------------------------------------------------
-[profile]
-# common = '''
-#   gum style \
-#   --foreground 212 --border-foreground 212 --border double \
-#   --align center --width 50 --margin "1 2" --padding "2 4" \
-#     $INTRO_MESSAGE
-# '''
-## Shell-specific customizations such as setting aliases go here:
-# bash = ...
-# zsh  = ...
-# fish = ...
-
-
-## Services ---------------------------------------------------------
-##  $ flox services start             <- Starts all services
-##  $ flox services status            <- Status of running services
-##  $ flox activate --start-services  <- Activates & starts all
-## ------------------------------------------------------------------
-[services]
-# myservice.command = "python3 -m http.server"
-
-
-## Include ----------------------------------------------------------
-## ... environments to create a composed environment
-## ------------------------------------------------------------------
-[include]
-# environments = [
-#     { dir = "../common" }
-# ]
-
-
-## Build and publish your own packages ------------------------------
-##  $ flox build
-##  $ flox publish
-## ------------------------------------------------------------------
-[build]
-# [build.myproject]
-# description = "The coolest project ever"
-# version = "0.0.1"
-# command = """
-#   mkdir -p $out/bin
-#   cargo build --release
-#   cp target/release/myproject $out/bin/myproject
-# """
-
-
-## Other Environment Options -----------------------------------------
 [options]
-# Systems that environment is compatible with
-# systems = [
-#   "aarch64-darwin",
-#   "aarch64-linux",
-#   "x86_64-darwin",
-#   "x86_64-linux",
-# ]
-# Uncomment to disable CUDA detection.
-# cuda-detection = false
+# Keep one current lock across the supported development platforms. Intel macOS
+# consumers can still use their language-native toolchains; the Flox catalog no
+# longer publishes every current toolchain for that platform.
+systems = [
+  "aarch64-darwin",
+  "aarch64-linux",
+  "x86_64-linux",
+]

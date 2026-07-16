@@ -102,7 +102,7 @@ func (s *Server) cliWrite(ctx context.Context, args []string, w io.Writer) error
 func (s *Server) cliStream(ctx context.Context, tool *Tool, req proto.Message, w io.Writer) error {
 	flusher := newAutoFlushWriter(w)
 	marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
-	stream := newCallbackStream(ctx, func(msg proto.Message) error {
+	return s.invokeStream(ctx, tool, req, func(msg proto.Message) error {
 		raw, err := marshalOpts.Marshal(msg)
 		if err != nil {
 			return fmt.Errorf("marshal stream chunk: %w", err)
@@ -115,8 +115,6 @@ func (s *Server) cliStream(ctx context.Context, tool *Tool, req proto.Message, w
 		}
 		return flusher.Flush()
 	})
-	defer stream.close()
-	return s.invokeStream(tool, req, stream)
 }
 
 // autoFlushWriter writes through to an underlying writer, flushing to either

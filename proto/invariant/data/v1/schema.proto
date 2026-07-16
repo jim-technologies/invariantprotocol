@@ -1,0 +1,369 @@
+syntax = "proto3";
+
+package invariant.data.v1;
+
+option go_package = "github.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1;datav1";
+
+// SchemaBundle is the generated, language-neutral data contract for one
+// FileDescriptorSet. It is derived state: applications continue to author
+// protobuf, while this bundle preserves storage field identities over time.
+message SchemaBundle {
+  // Version of the SchemaBundle protobuf model.
+  uint32 ir_version = 1;
+
+  // Version of the protobuf-to-logical-type mapping rules.
+  uint32 mapping_version = 2;
+
+  // SHA-256 digest of the serialized source FileDescriptorSet.
+  bytes source_descriptor_sha256 = 3;
+
+  // Data schemas compiled from non-map protobuf messages.
+  repeated DatasetSchema datasets = 4;
+}
+
+// DatasetSchema is the canonical logical row schema derived from one message.
+message DatasetSchema {
+  // Fully-qualified protobuf message name.
+  string source_message = 1;
+
+  // Deterministic storage-friendly name derived from the message name.
+  string name = 2;
+
+  // Source comment attached to the protobuf message.
+  string description = 3;
+
+  // Top-level fields in protobuf field-number order.
+  repeated Field fields = 4;
+
+  // Highest storage field identity allocated for this dataset.
+  int32 last_field_id = 5;
+
+  // Permanently retired identities. They prevent protobuf number reuse from
+  // silently attaching old Iceberg columns to new meanings.
+  repeated RetiredField retired_fields = 6;
+}
+
+// RetiredField preserves a removed field identity permanently.
+message RetiredField {
+  // Canonical compiler identity made from protobuf number and container paths.
+  string identity = 1;
+
+  // Storage field identity that must never be assigned again.
+  int32 stable_id = 2;
+}
+
+// Field is a protobuf field or a synthetic list/map child in the logical tree.
+message Field {
+  // Fully-qualified protobuf field name, or a synthetic name ending in
+  // "[]", ".key", or ".value".
+  string proto_full_name = 1;
+
+  // Numeric protobuf field path from the dataset root. Numeric paths survive
+  // source renames and are used to retain stable storage identities.
+  repeated uint32 proto_number_path = 2;
+
+  // Column name derived from the protobuf field name.
+  string name = 3;
+
+  // Globally unique field identity within this dataset, including nested,
+  // list-element, and map key/value fields.
+  int32 stable_id = 4;
+
+  // Protobuf presence/cardinality semantics.
+  Presence presence = 5;
+
+  // Whether the protobuf value can be absent and therefore represented as
+  // null. Collection members are never nullable in valid protobuf data.
+  bool nullable = 6;
+
+  // Real oneof name for a oneof member; empty for ordinary and synthetic
+  // proto3-optional oneofs.
+  string oneof = 7;
+
+  // Source comment attached to the protobuf field.
+  string description = 8;
+
+  // Logical value type, independent of any storage engine.
+  DataType type = 9;
+
+  // Role for compiler-created list/map children.
+  SyntheticRole synthetic_role = 10;
+
+  // Whether protobuf declares an explicit source default for this field.
+  bool has_default = 11;
+
+  // Canonical descriptor spelling of the declared protobuf default. This is
+  // metadata, not a request for storage renderers to erase field presence.
+  string protobuf_default = 12;
+
+  // Protobuf JSON field name. Empty for compiler-created collection children.
+  string json_name = 13;
+}
+
+// Presence records protobuf semantics that nullability alone cannot express.
+enum Presence {
+  // Invalid or unspecified presence.
+  PRESENCE_UNSPECIFIED = 0;
+
+  // Proto3 or Editions implicit scalar/enum presence.
+  PRESENCE_IMPLICIT = 1;
+
+  // Explicit singular presence, including messages and optional fields.
+  PRESENCE_EXPLICIT = 2;
+
+  // Proto2 or Editions required presence.
+  PRESENCE_REQUIRED = 3;
+
+  // A member of a real oneof.
+  PRESENCE_ONEOF = 4;
+
+  // A repeated/list field.
+  PRESENCE_REPEATED = 5;
+
+  // A protobuf map field.
+  PRESENCE_MAP = 6;
+
+  // Presence does not apply to a synthetic list element or map key/value;
+  // collection members are always non-null in valid protobuf values.
+  PRESENCE_NOT_APPLICABLE = 7;
+}
+
+// SyntheticRole distinguishes compiler-created collection children.
+enum SyntheticRole {
+  // Invalid or unspecified role.
+  SYNTHETIC_ROLE_UNSPECIFIED = 0;
+
+  // A real protobuf field.
+  SYNTHETIC_ROLE_PROTO_FIELD = 1;
+
+  // The element child of a protobuf repeated field.
+  SYNTHETIC_ROLE_LIST_ELEMENT = 2;
+
+  // The key child of a protobuf map field.
+  SYNTHETIC_ROLE_MAP_KEY = 3;
+
+  // The value child of a protobuf map field.
+  SYNTHETIC_ROLE_MAP_VALUE = 4;
+}
+
+// DataType preserves protobuf semantics without embedding Arrow, Parquet,
+// Iceberg, or SQL type strings.
+message DataType {
+  // Fully-qualified protobuf message/enum name where one exists.
+  string protobuf_type = 1;
+
+  oneof kind {
+    // A protobuf scalar value.
+    PrimitiveType primitive = 2;
+
+    // A protobuf enum represented by its numeric domain and symbol metadata.
+    EnumType enum = 3;
+
+    // A nested protobuf message.
+    StructType struct = 4;
+
+    // A protobuf repeated field.
+    ListType list = 5;
+
+    // A protobuf map field.
+    MapType map = 6;
+
+    // google.protobuf.Timestamp.
+    TimestampType timestamp = 7;
+
+    // google.protobuf.Duration.
+    DurationType duration = 8;
+
+    // A protobuf dynamic JSON well-known type.
+    JsonType json = 9;
+  }
+}
+
+// PrimitiveType retains the exact protobuf scalar kind. Wire encodings that
+// share a value domain therefore remain distinguishable in the derived IR.
+message PrimitiveType {
+  // Exact protobuf scalar kind.
+  PrimitiveKind kind = 1;
+}
+
+// PrimitiveKind mirrors protobuf scalar domains and wire-level spellings.
+enum PrimitiveKind {
+  // Invalid or unspecified primitive kind.
+  PRIMITIVE_KIND_UNSPECIFIED = 0;
+
+  // protobuf double.
+  PRIMITIVE_KIND_DOUBLE = 1;
+
+  // protobuf float.
+  PRIMITIVE_KIND_FLOAT = 2;
+
+  // protobuf int64.
+  PRIMITIVE_KIND_INT64 = 3;
+
+  // protobuf uint64.
+  PRIMITIVE_KIND_UINT64 = 4;
+
+  // protobuf int32.
+  PRIMITIVE_KIND_INT32 = 5;
+
+  // protobuf fixed64.
+  PRIMITIVE_KIND_FIXED64 = 6;
+
+  // protobuf fixed32.
+  PRIMITIVE_KIND_FIXED32 = 7;
+
+  // protobuf bool.
+  PRIMITIVE_KIND_BOOL = 8;
+
+  // protobuf string.
+  PRIMITIVE_KIND_STRING = 9;
+
+  // protobuf bytes.
+  PRIMITIVE_KIND_BYTES = 10;
+
+  // protobuf uint32.
+  PRIMITIVE_KIND_UINT32 = 11;
+
+  // protobuf sfixed32.
+  PRIMITIVE_KIND_SFIXED32 = 12;
+
+  // protobuf sfixed64.
+  PRIMITIVE_KIND_SFIXED64 = 13;
+
+  // protobuf sint32.
+  PRIMITIVE_KIND_SINT32 = 14;
+
+  // protobuf sint64.
+  PRIMITIVE_KIND_SINT64 = 15;
+}
+
+// EnumType preserves enum numbers, names, aliases, and openness.
+message EnumType {
+  // Fully-qualified protobuf enum name.
+  string full_name = 1;
+
+  // Declared values in source order, including aliases.
+  repeated EnumValue values = 2;
+
+  // Whether unknown numeric values are rejected by protobuf semantics.
+  bool closed = 3;
+}
+
+// EnumValue is one declared protobuf enum symbol.
+message EnumValue {
+  // Symbol name.
+  string name = 1;
+
+  // Numeric enum value.
+  int32 number = 2;
+
+  // Source comment attached to the symbol.
+  string description = 3;
+}
+
+// StructType is an ordered collection of nested protobuf fields.
+message StructType {
+  // Nested fields in protobuf field-number order.
+  repeated Field fields = 1;
+}
+
+// ListType represents a protobuf repeated field.
+message ListType {
+  // Synthetic, non-null list element with its own stable storage identity.
+  Field element = 1;
+}
+
+// MapType represents a protobuf map while retaining key and value types.
+message MapType {
+  // Synthetic, non-null map key with its own stable storage identity.
+  Field key = 1;
+
+  // Synthetic, non-null map value with its own stable storage identity.
+  Field value = 2;
+}
+
+// TimestampType preserves protobuf nanosecond precision and UTC semantics.
+message TimestampType {
+  // Canonical precision of the protobuf source value.
+  TimeUnit unit = 1;
+
+  // Canonical timezone. google.protobuf.Timestamp is always UTC.
+  string timezone = 2;
+}
+
+// DurationType preserves protobuf signed nanosecond duration semantics.
+message DurationType {
+  // Canonical precision of the protobuf source value.
+  TimeUnit unit = 1;
+}
+
+// TimeUnit is the precision of a logical temporal value.
+enum TimeUnit {
+  // Invalid or unspecified time unit.
+  TIME_UNIT_UNSPECIFIED = 0;
+
+  // Nanosecond precision.
+  TIME_UNIT_NANOSECOND = 1;
+}
+
+// JsonType identifies protobuf well-known values whose dynamic structure is
+// preserved as JSON rather than guessed into static columns.
+message JsonType {
+  // Dynamic protobuf JSON source type.
+  JsonKind kind = 1;
+}
+
+// JsonKind distinguishes the supported dynamic protobuf JSON types.
+enum JsonKind {
+  // Invalid or unspecified JSON kind.
+  JSON_KIND_UNSPECIFIED = 0;
+
+  // google.protobuf.Any, retaining its type URL in encoded JSON.
+  JSON_KIND_ANY = 1;
+
+  // google.protobuf.Struct.
+  JSON_KIND_STRUCT = 2;
+
+  // google.protobuf.Value.
+  JSON_KIND_VALUE = 3;
+
+  // google.protobuf.ListValue.
+  JSON_KIND_LIST_VALUE = 4;
+}
+
+// MappingDiagnostic makes target-specific widening or representation changes
+// explicit. A renderer emits one diagnostic for each mapped leaf/container.
+message MappingDiagnostic {
+  // Protobuf field path rendered with source names.
+  string field_path = 1;
+
+  // Compatibility of the target representation.
+  MappingCompatibility compatibility = 2;
+
+  // Human-readable mapping explanation.
+  string message = 3;
+}
+
+// MappingCompatibility classifies a target mapping without hiding loss.
+enum MappingCompatibility {
+  // Invalid or unspecified compatibility.
+  MAPPING_COMPATIBILITY_UNSPECIFIED = 0;
+
+  // The target preserves the protobuf value domain and precision.
+  MAPPING_COMPATIBILITY_LOSSLESS = 1;
+
+  // The target widens the protobuf domain without losing values.
+  MAPPING_COMPATIBILITY_RANGE_WIDENED = 2;
+
+  // The target cannot retain the full protobuf temporal precision.
+  MAPPING_COMPATIBILITY_PRECISION_REDUCED = 3;
+
+  // Values remain representable but use a materially different shape.
+  MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED = 4;
+
+  // The target cannot represent the protobuf type under the selected rules.
+  MAPPING_COMPATIBILITY_UNSUPPORTED = 5;
+
+  // The target retains precision but supports a smaller value range.
+  MAPPING_COMPATIBILITY_RANGE_REDUCED = 6;
+}

@@ -15,7 +15,7 @@ import (
 )
 
 func TestGRPCReflection(t *testing.T) {
-	addr, stop := startServeGRPC(t)
+	addr, stop := startNativeGRPC(t)
 	defer stop()
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))

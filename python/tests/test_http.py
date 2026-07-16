@@ -1,6 +1,14 @@
 """Test HTTP projection (ASGI, Connect-only)."""
 
+import base64
+
+import greet_pb2
 import httpx
+import pytest
+from conftest import DESCRIPTOR_PATH, register_greet
+from google.rpc import error_details_pb2
+
+from invariant import Server
 
 
 async def test_greet_http(server):
@@ -136,7 +144,12 @@ async def test_greet_http_unknown_field_rejected(server):
         body = resp.json()
         assert body["code"] == "invalid_argument"
         assert 'field named "extra"' in body["message"]
-        assert body["details"][0]["fieldViolations"][0]["field"] == "extra"
+        detail = body["details"][0]
+        assert set(detail) == {"type", "value"}
+        assert detail["type"] == "google.rpc.BadRequest"
+        value = base64.b64decode(detail["value"] + "=" * (-len(detail["value"]) % 4))
+        bad_request = error_details_pb2.BadRequest.FromString(value)
+        assert bad_request.field_violations[0].field == "extra"
     finally:
         await server._stop_http()
 
@@ -185,6 +198,7 @@ async def test_connect_timeout_ms_honored():
     import os
 
     import greet_pb2
+    from conftest import register_greet
 
     from invariant import Server
 
@@ -199,7 +213,7 @@ async def test_connect_timeout_ms_honored():
             return greet_pb2.GreetGroupResponse()
 
     srv = Server.from_descriptor(descriptor_path)
-    srv.register(SlowServicer())
+    register_greet(srv, SlowServicer())
     port = await srv._start_http(port=0)
     try:
         async with httpx.AsyncClient() as client:
@@ -211,6 +225,107 @@ async def test_connect_timeout_ms_honored():
         assert resp.status_code == 504  # DEADLINE_EXCEEDED → HTTP 504
         body = resp.json()
         assert body["code"] == "deadline_exceeded"
+    finally:
+        await srv._stop_http()
+        await srv.stop()
+
+
+async def test_http_projection_supplies_grpc_context_metadata_and_status():
+    import os
+
+    import grpc
+    from conftest import register_greet
+
+    from invariant import Server
+
+    descriptor_path = os.path.join(os.path.dirname(__file__), "proto", "descriptor.binpb")
+    observed = {}
+
+    class ContextServicer:
+        async def Greet(self, request, context):
+            observed["metadata"] = dict(context.invocation_metadata())
+            observed["peer"] = context.peer()
+            observed["time_remaining"] = context.time_remaining()
+            await context.send_initial_metadata(
+                (
+                    ("x-projection-header", "leading"),
+                    ("content-type", "must-not-override-connect"),
+                )
+            )
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                "bad request",
+                (("x-projection-trailer", "trailing"),),
+            )
+
+    srv = Server.from_descriptor(descriptor_path)
+    register_greet(srv, ContextServicer())
+    port = await srv._start_http(port=0)
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"http://localhost:{port}/greet.v1.GreetService/Greet",
+                json={"name": "World"},
+                headers={
+                    "Authorization": "Bearer untrusted",
+                    "Connect-Timeout-Ms": "1000",
+                    "X-Request-Id": "request-123",
+                },
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "invalid_argument"
+        assert resp.json()["message"] == "bad request"
+        assert observed["metadata"] == {"x-request-id": "request-123"}
+        assert observed["peer"].startswith("invariant:http:")
+        assert 0 < observed["time_remaining"] <= 1
+        assert resp.headers["content-type"] == "application/json"
+        assert resp.headers["x-projection-header"] == "leading"
+        assert resp.headers["trailer-x-projection-trailer"] == "trailing"
+    finally:
+        await srv._stop_http()
+        await srv.stop()
+
+
+async def test_custom_http_metadata_mapper_remains_safe_and_freezes_with_server():
+    observed = {}
+
+    class ContextServicer:
+        async def Greet(self, request, context):
+            observed.update(dict(context.invocation_metadata()))
+            return greet_pb2.GreetResponse(message=request.name)
+
+    def mapper(headers):
+        return (
+            ("x-custom", headers["x-custom"]),
+            ("trace-bin", headers["x-trace-bin"]),
+            ("authorization", headers["authorization"]),
+            ("x-tenant-id", headers["x-tenant-id"]),
+            ("invalid key", "ignored"),
+        )
+
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.use_http_metadata_mapper(mapper)
+    register_greet(srv, ContextServicer())
+    port = await srv._start_http(port=0)
+    try:
+        binary_value = base64.b64encode(b"\x01\x02").decode().rstrip("=")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"http://localhost:{port}/greet.v1.GreetService/Greet",
+                json={"name": "mapped"},
+                headers={
+                    "X-Custom": "forwarded",
+                    "X-Trace-Bin": binary_value,
+                    "Authorization": "Bearer untrusted",
+                    "X-Tenant-Id": "untrusted-tenant",
+                },
+            )
+
+        assert response.status_code == 200
+        assert observed == {"x-custom": "forwarded", "trace-bin": b"\x01\x02"}
+        with pytest.raises(RuntimeError, match="cannot be changed"):
+            srv.use_http_metadata_mapper(None)
     finally:
         await srv._stop_http()
         await srv.stop()

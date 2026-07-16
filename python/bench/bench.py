@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tests", "proto", "gen"))
 
 import greet_pb2
+import greet_pb2_grpc
 import grpc
 import httpx
 
@@ -34,10 +35,14 @@ class GreetServicer:
         msgs = [f"Hi {p.name}" for p in request.people]
         return greet_pb2.GreetGroupResponse(messages=msgs, count=len(request.people))
 
+    async def StreamGreet(self, request, context):
+        for i in range(request.count or 1):
+            yield greet_pb2.GreetResponse(message=f"Hi {request.name} #{i}")
+
 
 def build_server() -> Server:
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(GreetServicer())
+    greet_pb2_grpc.add_GreetServiceServicer_to_server(GreetServicer(), srv)
     return srv
 
 
@@ -51,7 +56,7 @@ async def bench(label: str, fn, iters: int) -> None:
         await fn()
     elapsed = time.perf_counter_ns() - start
     ns_per_op = elapsed / iters
-    print(f"{label:<32}  {iters:>9} ops  {ns_per_op:>10,.0f} ns/op  ({elapsed/1e6:.1f} ms total)")
+    print(f"{label:<32}  {iters:>9} ops  {ns_per_op:>10,.0f} ns/op  ({elapsed / 1e6:.1f} ms total)")
 
 
 async def bench_invoke_direct():
@@ -67,10 +72,11 @@ async def bench_invoke_direct():
 async def bench_invoke_with_interceptor():
     srv = build_server()
 
-    async def interceptor(request, context, info, handler):
-        return await handler(request, context)
+    class Passthrough(grpc.aio.ServerInterceptor):
+        async def intercept_service(self, continuation, handler_call_details):
+            return await continuation(handler_call_details)
 
-    srv.use(interceptor)
+    srv.use(Passthrough())
     req = greet_pb2.GreetRequest(name="World")
 
     async def call():

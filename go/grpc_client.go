@@ -2,12 +2,10 @@ package invariant
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -19,14 +17,13 @@ import (
 type grpcDynamicHandler struct {
 	conn               grpc.ClientConnInterface
 	methodPath         string
-	reqDesc            protoreflect.MessageDescriptor
 	respDesc           protoreflect.MessageDescriptor
 	newResponse        func() proto.Message
 	defaultCallOptions []grpc.CallOption
 }
 
-func (h *grpcDynamicHandler) requestDescriptor() protoreflect.MessageDescriptor {
-	return h.reqDesc
+func dynamicMessageFactory(descriptor protoreflect.MessageDescriptor) func() proto.Message {
+	return func() proto.Message { return dynamicpb.NewMessage(descriptor) }
 }
 
 func (h *grpcDynamicHandler) callProto(ctx context.Context, req proto.Message) (proto.Message, error) {
@@ -50,33 +47,6 @@ func (h *grpcDynamicHandler) callProto(ctx context.Context, req proto.Message) (
 		return nil, err
 	}
 	return resp, nil
-}
-
-// dynamicJSONCaller is the shared protocol for proxy handlers that accept JSON
-// input and return JSON output via dynamicpb. Used by tests.
-type dynamicJSONCaller interface {
-	requestDescriptor() protoreflect.MessageDescriptor
-	callProto(context.Context, proto.Message) (proto.Message, error)
-}
-
-// callDynamicJSON deserializes JSON args into a dynamic proto, calls the
-// handler, and re-serializes the response as JSON.
-func callDynamicJSON(ctx context.Context, h dynamicJSONCaller, argsJSON json.RawMessage) (string, error) {
-	req := dynamicpb.NewMessage(h.requestDescriptor())
-	if len(argsJSON) > 0 && string(argsJSON) != "null" {
-		if err := protojson.Unmarshal(argsJSON, req); err != nil {
-			return "", invalidArgumentFromJSONError(err)
-		}
-	}
-	resp, err := h.callProto(ctx, req)
-	if err != nil {
-		return "", err
-	}
-	out, err := (protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}).Marshal(resp)
-	if err != nil {
-		return "", fmt.Errorf("marshal response: %w", err)
-	}
-	return string(out), nil
 }
 
 // findMessageDescriptor looks up a message descriptor by full name from a Files registry.

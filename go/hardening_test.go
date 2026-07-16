@@ -15,6 +15,7 @@ import (
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -24,8 +25,7 @@ import (
 
 func TestHTTPUnaryRejectsOversizedBody(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -56,8 +56,7 @@ func TestHTTPUnaryRespectsRaisedBodyCap(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
 	srv.SetMaxUnaryRequestBytes(int64(httpMaxUnaryRequest) * 4) // 64 MiB
 	srv.SetMaxUnaryResponseBytes(int64(httpMaxUnaryRequest) * 4)
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -85,8 +84,7 @@ func TestHTTPUnaryConfigureMethodPerMethodCap(t *testing.T) {
 		MaxUnaryRequestBytes:  int64(httpMaxUnaryRequest) * 4,
 		MaxUnaryResponseBytes: int64(httpMaxUnaryRequest) * 4,
 	})
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -107,8 +105,7 @@ func TestHTTPUnaryConfigureMethodPerMethodCap(t *testing.T) {
 
 func TestStreamingHTTPConnectProto(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -186,21 +183,22 @@ func TestServeContextCancelStopsGracefully(t *testing.T) {
 
 // -- Stream edge cases. --
 
-type emptyStreamServicer struct{}
+type emptyStreamServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func (emptyStreamServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	return &greetpb.GreetResponse{Message: "hi " + req.GetName()}, nil
 }
 
-func (emptyStreamServicer) StreamGreet(_ *greetpb.StreamGreetRequest, _ ServerStream) error {
+func (emptyStreamServicer) StreamGreet(_ *greetpb.StreamGreetRequest, _ grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 	// No Send calls — clean empty stream.
 	return nil
 }
 
 func TestEmptyStreamProducesOnlyEndEnvelope(t *testing.T) {
 	srv := streamServer(t, emptyStreamServicer{})
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -235,20 +233,21 @@ func TestEmptyStreamOverMCP(t *testing.T) {
 	assert.Empty(t, content, "no messages = empty content array")
 }
 
-type immediateErrServicer struct{}
+type immediateErrServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func (immediateErrServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	return &greetpb.GreetResponse{Message: "hi " + req.GetName()}, nil
 }
 
-func (immediateErrServicer) StreamGreet(_ *greetpb.StreamGreetRequest, _ ServerStream) error {
+func (immediateErrServicer) StreamGreet(_ *greetpb.StreamGreetRequest, _ grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 	return errors.New("nope")
 }
 
 func TestStreamErrorBeforeAnyChunk(t *testing.T) {
 	srv := streamServer(t, immediateErrServicer{})
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -323,13 +322,15 @@ func TestInvokeStreamUnknownTool(t *testing.T) {
 
 // -- Connect-Timeout-Ms on streaming endpoints. --
 
-type slowEmittingServicer struct{}
+type slowEmittingServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+}
 
 func (slowEmittingServicer) Greet(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	return &greetpb.GreetResponse{Message: "hi " + req.GetName()}, nil
 }
 
-func (slowEmittingServicer) StreamGreet(_ *greetpb.StreamGreetRequest, stream ServerStream) error {
+func (slowEmittingServicer) StreamGreet(_ *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 	if err := stream.Send(&greetpb.GreetResponse{Message: "hi"}); err != nil {
 		return err
 	}
@@ -339,8 +340,7 @@ func (slowEmittingServicer) StreamGreet(_ *greetpb.StreamGreetRequest, stream Se
 
 func TestStreamingHTTPConnectTimeoutDeadlineExceeded(t *testing.T) {
 	srv := streamServer(t, slowEmittingServicer{})
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
@@ -402,8 +402,7 @@ func TestConnectHTTPRejectsOversizedUpstreamResponse(t *testing.T) {
 
 func TestStreamRejectsOversizedRequestEnvelope(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	ts := httptest.NewServer(handler)
 	defer ts.Close()
 

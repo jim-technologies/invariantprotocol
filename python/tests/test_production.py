@@ -11,7 +11,7 @@ import grpc
 import httpx
 import pytest
 import pytest_asyncio
-from conftest import DESCRIPTOR_PATH
+from conftest import DESCRIPTOR_PATH, register_greet
 
 from invariant import InvariantError, Server
 
@@ -30,7 +30,7 @@ class RaisingServicer:
 @pytest_asyncio.fixture
 async def raising_server():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(RaisingServicer())
+    register_greet(srv, RaisingServicer())
     yield srv
     await srv.stop()
 
@@ -38,8 +38,10 @@ async def raising_server():
 async def test_unary_handler_exception_propagates_as_invariant_error(raising_server):
     tool = raising_server.tools["GreetService.Greet"]
     request = greet_pb2.GreetRequest(name="x")
-    with pytest.raises(RuntimeError, match="kaboom"):
+    with pytest.raises(InvariantError, match="kaboom") as exc:
         await raising_server._invoke(tool, request, None)
+    assert exc.value.code == grpc.StatusCode.INTERNAL
+    assert "/greet.v1.GreetService/Greet" in exc.value.message
 
 
 async def test_unary_exception_over_http_becomes_500(raising_server):
@@ -49,7 +51,8 @@ async def test_unary_exception_over_http_becomes_500(raising_server):
             r = await client.post("/greet.v1.GreetService/Greet", json={"name": "x"})
         assert r.status_code == 500
         body = r.json()
-        assert body["code"] == "unknown"
+        assert body["code"] == "internal"
+        assert "/greet.v1.GreetService/Greet" in body["message"]
         assert "kaboom" in body["message"]
     finally:
         await raising_server._stop_http()
@@ -101,7 +104,7 @@ async def basic_server():
         async def Greet(self, request, context):
             return greet_pb2.GreetResponse(message=f"hi {request.name}")
 
-    srv.register(S())
+    register_greet(srv, S())
     yield srv
     await srv.stop()
 
@@ -129,22 +132,32 @@ async def test_stream_interceptor_ordering():
             yield greet_pb2.GreetResponse(message="x")
 
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(S())
+    register_greet(srv, S())
 
-    async def outer(request, context, info, handler):
-        order.append("outer-before")
-        async for msg in handler(request, context):
-            yield msg
-        order.append("outer-after")
+    class StreamInterceptor(grpc.aio.ServerInterceptor):
+        def __init__(self, label):
+            self.label = label
 
-    async def inner(request, context, info, handler):
-        order.append("inner-before")
-        async for msg in handler(request, context):
-            yield msg
-        order.append("inner-after")
+        async def intercept_service(self, continuation, handler_call_details):
+            handler = await continuation(handler_call_details)
+            assert handler is not None
+            terminal = handler.unary_stream
+            assert terminal is not None
 
-    srv.use_stream(outer)
-    srv.use_stream(inner)
+            async def wrapped(request, context):
+                order.append(f"{self.label}-before")
+                async for msg in terminal(request, context):
+                    yield msg
+                order.append(f"{self.label}-after")
+
+            return grpc.unary_stream_rpc_method_handler(
+                wrapped,
+                request_deserializer=handler.request_deserializer,
+                response_serializer=handler.response_serializer,
+            )
+
+    srv.use(StreamInterceptor("outer"))
+    srv.use(StreamInterceptor("inner"))
 
     tool = srv.tools["GreetService.StreamGreet"]
     msgs = [m async for m in srv._invoke_stream(tool, greet_pb2.StreamGreetRequest(name="x"), None)]
@@ -175,7 +188,7 @@ async def test_stream_cancellation_stops_producer():
                 finished.set()
 
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(S())
+    register_greet(srv, S())
 
     tool = srv.tools["GreetService.StreamGreet"]
     received = []
@@ -195,19 +208,6 @@ async def test_stream_cancellation_stops_producer():
     await srv.stop()
 
 
-# -- Sync handler is still rejected by use_stream (regression guard). --
-
-
-def test_use_stream_rejects_sync():
-    srv = Server.from_descriptor(DESCRIPTOR_PATH)
-
-    def sync_interceptor(request, context, info, handler):
-        return handler(request, context)
-
-    with pytest.raises(TypeError, match="async generator"):
-        srv.use_stream(sync_interceptor)
-
-
 # -- Mid-stream InvariantError surfaces with its declared code. --
 
 
@@ -218,7 +218,7 @@ async def test_stream_invariant_error_preserves_code():
             raise InvariantError(grpc.StatusCode.RESOURCE_EXHAUSTED, "too many")
 
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(S())
+    register_greet(srv, S())
     tool = srv.tools["GreetService.StreamGreet"]
 
     async def drain():

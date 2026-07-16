@@ -17,9 +17,10 @@ import json
 import os
 from typing import TYPE_CHECKING, Any
 
-from google.protobuf import descriptor_pool, json_format, message_factory
+from google.protobuf import json_format
 
 from invariant.errors import invalid_argument, invalid_argument_from_json_error
+from invariant.projection_context import ProjectionContext
 
 if TYPE_CHECKING:
     from google.protobuf.message import Message
@@ -33,19 +34,23 @@ async def run_cli(server: Server, args: list[str]) -> Message | str:
     Buffers stream output into a newline-delimited string. Useful for tests and
     in-process use. For real-time piped output, use ``stream_cli`` with a writer.
     """
+    server._freeze()
     if not args or args[0] in ("--help", "-h"):
         return _cli_help(server)
 
     service_name, method_name, request_value = _split_args(args)
     tool, request = _prepare(server, service_name, method_name, request_value)
+    context = ProjectionContext(peer="invariant:cli")
+    try:
+        if tool.server_streaming:
+            lines: list[str] = []
+            async for msg in server._invoke_stream(tool, request, context):
+                lines.append(json_format.MessageToJson(msg, preserving_proto_field_name=True, indent=None))
+            return "\n".join(lines)
 
-    if tool.server_streaming:
-        lines: list[str] = []
-        async for msg in server._invoke_stream(tool, request, None):
-            lines.append(json_format.MessageToJson(msg, preserving_proto_field_name=True, indent=None))
-        return "\n".join(lines)
-
-    return await server._invoke(tool, request, None)
+        return await server._invoke(tool, request, context)
+    finally:
+        context.finish(cancelled=context.cancelled())
 
 
 async def stream_cli(server: Server, args: list[str], write) -> None:
@@ -61,45 +66,41 @@ async def stream_cli(server: Server, args: list[str], write) -> None:
 
     ``write`` should be a sync callable like ``print``; we do not await it.
     """
+    server._freeze()
     if not args or args[0] in ("--help", "-h"):
         write(_cli_help(server))
         return
 
     service_name, method_name, request_value = _split_args(args)
     tool, request = _prepare(server, service_name, method_name, request_value)
+    context = ProjectionContext(peer="invariant:cli")
+    try:
+        if tool.server_streaming:
+            async for msg in server._invoke_stream(tool, request, context):
+                write(json_format.MessageToJson(msg, preserving_proto_field_name=True, indent=None))
+            return
 
-    if tool.server_streaming:
-        async for msg in server._invoke_stream(tool, request, None):
-            write(json_format.MessageToJson(msg, preserving_proto_field_name=True, indent=None))
-        return
-
-    response = await server._invoke(tool, request, None)
-    if response is None:
-        write("{}")
-        return
-    write(json_format.MessageToJson(response, preserving_proto_field_name=True, indent=2))
+        response = await server._invoke(tool, request, context)
+        if response is None:
+            write("{}")
+            return
+        write(json_format.MessageToJson(response, preserving_proto_field_name=True, indent=2))
+    finally:
+        context.finish(cancelled=context.cancelled())
 
 
 def _prepare(server: Server, service_name: str, method_name: str, request_value):
     """Resolve the target tool and build its proto request."""
     tool_name = _resolve_tool(server, service_name, method_name)
-    tool = server.tools.get(tool_name)
+    tool = server._tools.get(tool_name)
     if tool is None:
-        available = list(server.tools.keys())
+        available = list(server._tools)
         raise ValueError(f"Unknown tool '{tool_name}'. Available: {available}")
 
-    request = _new_request(tool.input_type)
+    request = tool.new_request()
     if request_value is not None:
         _load_into_proto(request, request_value)
     return tool, request
-
-
-def _new_request(input_type: str) -> Message:
-    """Create an empty proto message for the given type name."""
-    pool = descriptor_pool.Default()
-    req_desc = pool.FindMessageTypeByName(input_type)
-    req_class = message_factory.GetMessageClass(req_desc)
-    return req_class()
 
 
 def _load_into_proto(msg: Any, value: str) -> None:
@@ -181,28 +182,28 @@ def _split_args(
 
 def _resolve_tool(server: Server, service_name: str, method_name: str) -> str:
     """Resolve ServiceName + Method to a tool name."""
-    for tool in server.tools.values():
+    for tool in server._tools.values():
         svc_name = tool.service_full_name.rsplit(".", 1)[-1]
         if svc_name == service_name and tool.method_name == method_name:
             return tool.name
-    available = list(server.tools.keys())
+    available = list(server._tools)
     raise ValueError(f"Unknown service/method: {service_name} {method_name}. Available: {available}")
 
 
 def _cli_help(server: Server) -> str:
     """Generate help text listing all registered tools and their fields."""
     lines = [
-        'Usage: <binary> <ServiceName> <Method> [-r request.yaml|request.json|request.binpb|\'{"inline":"json"}\']',
+        'Usage: <binary> <ServiceName> <Method> [-r request.json|request.binpb|\'{"inline":"json"}\']',
         "",
     ]
 
-    if not server.tools:
+    if not server._tools:
         lines.append("No tools registered.")
         return "\n".join(lines)
 
     # Sort tools by service name then method name.
     entries = []
-    for tool in server.tools.values():
+    for tool in server._tools.values():
         svc_name = tool.service_full_name.rsplit(".", 1)[-1]
         entries.append((svc_name, tool))
     entries.sort(key=lambda e: (e[0], e[1].method_name))

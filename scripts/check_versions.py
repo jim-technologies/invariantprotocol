@@ -42,11 +42,15 @@ def main() -> int:
     pyproject = read_toml("python/pyproject.toml")
     uv_lock = read_toml("python/uv.lock")
     cargo = read_toml("rust/Cargo.toml")
+    codegen_cargo = read_toml("rust/codegen/Cargo.toml")
+    flox = read_toml(".flox/env/manifest.toml")
 
     if package.get("private") is not True:
         errors.append("package.json must set private=true for Git-only distribution")
     if cargo["package"].get("publish") is not False:
         errors.append("rust/Cargo.toml must set publish=false for Git-only distribution")
+    if codegen_cargo["package"].get("publish") is not False:
+        errors.append("rust/codegen/Cargo.toml must set publish=false for Git-only distribution")
     if "Private :: Do Not Upload" not in pyproject["project"].get("classifiers", []):
         errors.append("python/pyproject.toml must prohibit PyPI uploads")
 
@@ -69,6 +73,7 @@ def main() -> int:
         "python/uv.lock": uv_version,
         "python source fallback": captured("python/src/invariant/version.py", r'^\s*return "([^"]+)"$'),
         "rust/Cargo.toml": cargo["package"]["version"],
+        "rust/codegen/Cargo.toml": codegen_cargo["package"]["version"],
         "Go server version": captured("go/server.go", r'^\s*serverVersion\s*=\s*"([^"]+)"$'),
         "TypeScript server version": captured(
             "typescript/src/server.ts", r'^export const SERVER_VERSION = "([^"]+)";$'
@@ -82,6 +87,15 @@ def main() -> int:
     module_path = captured("go.mod", r"^module\s+(\S+)$")
     if module_path != "github.com/jim-technologies/invariantprotocol":
         errors.append(f"go.mod declares {module_path!r}; expected the repository root module")
+
+    go_version = captured("go.mod", r"^go\s+(\S+)$")
+    expected_go_toolchain = f"go{go_version}+auto"
+    actual_go_toolchain = flox["vars"].get("GOTOOLCHAIN")
+    if actual_go_toolchain != expected_go_toolchain:
+        errors.append(
+            ".flox/env/manifest.toml must select the go.mod toolchain explicitly: "
+            f"got {actual_go_toolchain!r}; expected {expected_go_toolchain!r}"
+        )
 
     nested_go_mods: list[Path] = []
     ignored_dirs = {".flox", ".git", ".venv", "node_modules", "target"}

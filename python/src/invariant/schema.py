@@ -6,7 +6,8 @@ from google.protobuf.descriptor_pb2 import (
     FieldDescriptorProto,  # ty: ignore[unresolved-import] — real; stubs omit it
 )
 
-from invariant.descriptor import FieldInfo, MessageInfo, ParsedDescriptor
+from invariant.descriptor import ParsedDescriptor
+from invariant.gen.invariant.v1 import types_pb2 as invpb
 
 # Proto field type constants
 TYPE_DOUBLE = FieldDescriptorProto.TYPE_DOUBLE
@@ -64,7 +65,7 @@ class SchemaGenerator:
             return {"type": "object"}
         return self._message_schema(msg)
 
-    def _message_schema(self, msg: MessageInfo) -> dict:
+    def _message_schema(self, msg: invpb.MessageInfo) -> dict:
         properties: dict[str, dict] = {}
         required: list[str] = []
 
@@ -104,7 +105,7 @@ class SchemaGenerator:
             schema["required"] = required
         return schema
 
-    def _field_type_schema(self, field: FieldInfo) -> dict:
+    def _field_type_schema(self, field: invpb.FieldInfo) -> dict:
         t = field.type
 
         if t in (TYPE_DOUBLE, TYPE_FLOAT):
@@ -140,13 +141,13 @@ class SchemaGenerator:
             return {"type": "string"}
         return {"type": "string", "enum": [v.name for v in enum.values]}
 
-    def _is_map_field(self, field: FieldInfo) -> bool:
+    def _is_map_field(self, field: invpb.FieldInfo) -> bool:
         if field.label != LABEL_REPEATED or field.type != TYPE_MESSAGE:
             return False
         msg = self.parsed.messages.get(field.type_name)
         return msg is not None and msg.is_map_entry
 
-    def _map_schema(self, map_entry_msg: MessageInfo) -> dict:
+    def _map_schema(self, map_entry_msg: invpb.MessageInfo) -> dict:
         value_field = None
         for f in map_entry_msg.fields:
             if f.name == "value":

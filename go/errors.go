@@ -55,8 +55,8 @@ func errorPayload(err error) map[string]any {
 	return payload
 }
 
-// connectErrorPayload encodes rich details in Connect's wire shape. Keep
-// errorPayload's expanded debug shape for MCP/CLI compatibility.
+// connectErrorPayload encodes rich details in Connect's wire shape.
+// errorPayload keeps the expanded debug shape used by MCP and CLI.
 func connectErrorPayload(err error) map[string]any {
 	st := statusFromError(err)
 	payload := map[string]any{

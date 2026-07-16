@@ -30,36 +30,36 @@ import (
 
 var _ grpc.ServiceRegistrar = (*Server)(nil)
 
-type nativeRefactorTestService struct {
+type nativeTestService struct {
 	greetpb.UnimplementedGreetServiceServer
 	greetHook  func(context.Context, *greetpb.GreetRequest) (*greetpb.GreetResponse, error)
 	streamHook func(*greetpb.StreamGreetRequest, grpc.ServerStreamingServer[greetpb.GreetResponse]) error
 }
 
-type nativeRefactorClientConnWrapper struct {
+type nativeTestClientConnWrapper struct {
 	grpc.ClientConnInterface
 }
 
-type nativeRefactorCallCredentials struct{}
+type nativeTestCallCredentials struct{}
 
-func (nativeRefactorCallCredentials) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
+func (nativeTestCallCredentials) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
 	return map[string]string{"x-default-call-option": "applied"}, nil
 }
 
-func (nativeRefactorCallCredentials) RequireTransportSecurity() bool { return false }
+func (nativeTestCallCredentials) RequireTransportSecurity() bool { return false }
 
-func (s *nativeRefactorTestService) Greet(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+func (s *nativeTestService) Greet(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	if s.greetHook != nil {
 		return s.greetHook(ctx, req)
 	}
 	return &greetpb.GreetResponse{Message: "Hello, " + req.GetName()}, nil
 }
 
-func (*nativeRefactorTestService) GreetGroup(_ context.Context, req *greetpb.GreetGroupRequest) (*greetpb.GreetGroupResponse, error) {
+func (*nativeTestService) GreetGroup(_ context.Context, req *greetpb.GreetGroupRequest) (*greetpb.GreetGroupResponse, error) {
 	return &greetpb.GreetGroupResponse{Count: int32(len(req.GetPeople()))}, nil
 }
 
-func (s *nativeRefactorTestService) StreamGreet(req *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
+func (s *nativeTestService) StreamGreet(req *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 	if s.streamHook != nil {
 		return s.streamHook(req, stream)
 	}
@@ -75,20 +75,20 @@ func (s *nativeRefactorTestService) StreamGreet(req *greetpb.StreamGreetRequest,
 	return nil
 }
 
-func nativeRefactorServer(t *testing.T, options ...grpc.ServerOption) *Server {
+func nativeTestServer(t *testing.T, options ...grpc.ServerOption) *Server {
 	t.Helper()
 	server, err := ServerFromDescriptor(descriptorPath(), options...)
 	require.NoError(t, err)
 	return server
 }
 
-func nativeRefactorStartConnection(t *testing.T, server *Server) *grpc.ClientConn {
+func nativeTestStartConnection(t *testing.T, server *Server) *grpc.ClientConn {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- server.ServeGRPC(listener) }()
+	go func() { serveErr <- server.Serve(listener) }()
 
 	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
@@ -98,23 +98,23 @@ func nativeRefactorStartConnection(t *testing.T, server *Server) *grpc.ClientCon
 		select {
 		case err := <-serveErr:
 			if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
-				t.Errorf("ServeGRPC: %v", err)
+				t.Errorf("Serve: %v", err)
 			}
 		case <-time.After(2 * time.Second):
-			t.Error("ServeGRPC did not return after Stop")
+			t.Error("Serve did not return after Stop")
 		}
 	})
 	return conn
 }
 
-func nativeRefactorStart(t *testing.T, server *Server) greetpb.GreetServiceClient {
+func nativeTestStart(t *testing.T, server *Server) greetpb.GreetServiceClient {
 	t.Helper()
-	return greetpb.NewGreetServiceClient(nativeRefactorStartConnection(t, server))
+	return greetpb.NewGreetServiceClient(nativeTestStartConnection(t, server))
 }
 
-func TestNativeRefactorGeneratedRegistrationAndClients(t *testing.T) {
-	server := nativeRefactorServer(t)
-	service := &nativeRefactorTestService{}
+func TestNativeGeneratedRegistrationAndClients(t *testing.T) {
+	server := nativeTestServer(t)
+	service := &nativeTestService{}
 	greetpb.RegisterGreetServiceServer(server, service)
 
 	serviceInfo := server.GetServiceInfo()
@@ -122,7 +122,7 @@ func TestNativeRefactorGeneratedRegistrationAndClients(t *testing.T) {
 	assert.Contains(t, server.Tools(), "GreetService.Greet")
 	assert.Contains(t, server.Tools(), "GreetService.StreamGreet")
 
-	client := nativeRefactorStart(t, server)
+	client := nativeTestStart(t, server)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 
@@ -144,14 +144,14 @@ func TestNativeRefactorGeneratedRegistrationAndClients(t *testing.T) {
 	assert.Equal(t, []string{"Hello, stream #0", "Hello, stream #1", "Hello, stream #2"}, messages)
 }
 
-func TestNativeRefactorFiltersOnlyOptionalProjections(t *testing.T) {
-	server := nativeRefactorServer(t)
+func TestNativeFiltersOnlyOptionalProjections(t *testing.T) {
+	server := nativeTestServer(t)
 	server.Include("greet.v1.GreetService.Greet")
-	greetpb.RegisterGreetServiceServer(server, &nativeRefactorTestService{})
+	greetpb.RegisterGreetServiceServer(server, &nativeTestService{})
 
 	assert.Contains(t, server.Tools(), "GreetService.Greet")
 	assert.NotContains(t, server.Tools(), "GreetService.GreetGroup")
-	client := nativeRefactorStart(t, server)
+	client := nativeTestStart(t, server)
 	response, err := client.GreetGroup(t.Context(), &greetpb.GreetGroupRequest{
 		People: []*greetpb.Person{{Name: "one"}, {Name: "two"}},
 	})
@@ -159,28 +159,28 @@ func TestNativeRefactorFiltersOnlyOptionalProjections(t *testing.T) {
 	assert.Equal(t, int32(2), response.GetCount(), "native generated gRPC retains the full service")
 }
 
-func TestNativeRefactorConventionalHealthRegistration(t *testing.T) {
-	server := nativeRefactorServer(t)
+func TestNativeConventionalHealthRegistration(t *testing.T) {
+	server := nativeTestServer(t)
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	healthpb.RegisterHealthServer(server, healthServer)
 
 	assert.Contains(t, server.GetServiceInfo(), "grpc.health.v1.Health")
-	conn := nativeRefactorStartConnection(t, server)
+	conn := nativeTestStartConnection(t, server)
 	response, err := healthpb.NewHealthClient(conn).Check(t.Context(), &healthpb.HealthCheckRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, healthpb.HealthCheckResponse_SERVING, response.GetStatus())
 	assert.Empty(t, server.Tools(), "infrastructure services outside the descriptor must not become tools")
 }
 
-func TestNativeRefactorConnectGRPCNativeProxyPreservesSemantics(t *testing.T) {
+func TestNativeConnectGRPCNativeProxyPreservesSemantics(t *testing.T) {
 	incoming := make(chan metadata.MD, 1)
 	detail := &errdetails.BadRequest{FieldViolations: []*errdetails.BadRequest_FieldViolation{{
 		Field: "name", Description: "remote rejection",
 	}}}
 	richStatus, err := status.New(codes.FailedPrecondition, "remote status").WithDetails(detail)
 	require.NoError(t, err)
-	remoteService := &nativeRefactorTestService{greetHook: func(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	remoteService := &nativeTestService{greetHook: func(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 		if req.GetName() == "status" {
 			return nil, richStatus.Err()
 		}
@@ -194,11 +194,11 @@ func TestNativeRefactorConnectGRPCNativeProxyPreservesSemantics(t *testing.T) {
 		}
 		return &greetpb.GreetResponse{Message: "remote:" + req.GetName()}, nil
 	}}
-	remoteServer := nativeRefactorServer(t)
+	remoteServer := nativeTestServer(t)
 	greetpb.RegisterGreetServiceServer(remoteServer, remoteService)
-	remoteConn := nativeRefactorStartConnection(t, remoteServer)
+	remoteConn := nativeTestStartConnection(t, remoteServer)
 
-	proxyServer := nativeRefactorServer(t)
+	proxyServer := nativeTestServer(t)
 	var typedRequest, typedResponse atomic.Bool
 	proxyServer.Use(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		_, requestOK := req.(*greetpb.GreetRequest)
@@ -212,10 +212,10 @@ func TestNativeRefactorConnectGRPCNativeProxyPreservesSemantics(t *testing.T) {
 		return response, err
 	})
 	require.NoError(t, proxyServer.ConnectGRPC(
-		nativeRefactorClientConnWrapper{ClientConnInterface: remoteConn},
-		grpc.PerRPCCredentials(nativeRefactorCallCredentials{}),
+		nativeTestClientConnWrapper{ClientConnInterface: remoteConn},
+		grpc.PerRPCCredentials(nativeTestCallCredentials{}),
 	))
-	proxyClient := nativeRefactorStart(t, proxyServer)
+	proxyClient := nativeTestStart(t, proxyServer)
 
 	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("x-client-metadata", "forwarded"))
 	var header, trailer metadata.MD
@@ -242,11 +242,11 @@ func TestNativeRefactorConnectGRPCNativeProxyPreservesSemantics(t *testing.T) {
 	assert.Equal(t, "remote rejection", gotDetail.GetFieldViolations()[0].GetDescription())
 }
 
-func TestNativeRefactorConnectGRPCPropagatesDeadlineAndCancellation(t *testing.T) {
+func TestNativeConnectGRPCPropagatesDeadlineAndCancellation(t *testing.T) {
 	deadlineSeen := make(chan bool, 1)
 	cancelStarted := make(chan struct{})
 	cancelSeen := make(chan error, 1)
-	remoteService := &nativeRefactorTestService{greetHook: func(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	remoteService := &nativeTestService{greetHook: func(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 		switch req.GetName() {
 		case "deadline":
 			_, ok := ctx.Deadline()
@@ -262,13 +262,13 @@ func TestNativeRefactorConnectGRPCPropagatesDeadlineAndCancellation(t *testing.T
 			return &greetpb.GreetResponse{Message: req.GetName()}, nil
 		}
 	}}
-	remoteServer := nativeRefactorServer(t)
+	remoteServer := nativeTestServer(t)
 	greetpb.RegisterGreetServiceServer(remoteServer, remoteService)
-	remoteConn := nativeRefactorStartConnection(t, remoteServer)
+	remoteConn := nativeTestStartConnection(t, remoteServer)
 
-	proxyServer := nativeRefactorServer(t)
+	proxyServer := nativeTestServer(t)
 	require.NoError(t, proxyServer.ConnectGRPC(remoteConn))
-	client := nativeRefactorStart(t, proxyServer)
+	client := nativeTestStart(t, proxyServer)
 
 	deadlineCtx, deadlineCancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
 	defer deadlineCancel()
@@ -309,25 +309,25 @@ func TestNativeRefactorConnectGRPCPropagatesDeadlineAndCancellation(t *testing.T
 	}
 }
 
-func TestNativeRefactorRejectsSplitLocalAndProxyRegistration(t *testing.T) {
-	remoteServer := nativeRefactorServer(t)
-	greetpb.RegisterGreetServiceServer(remoteServer, &nativeRefactorTestService{})
-	remoteConn := nativeRefactorStartConnection(t, remoteServer)
+func TestNativeRejectsSplitLocalAndProxyRegistration(t *testing.T) {
+	remoteServer := nativeTestServer(t)
+	greetpb.RegisterGreetServiceServer(remoteServer, &nativeTestService{})
+	remoteConn := nativeTestStartConnection(t, remoteServer)
 
-	server := nativeRefactorServer(t)
-	greetpb.RegisterGreetServiceServer(server, &nativeRefactorTestService{})
+	server := nativeTestServer(t)
+	greetpb.RegisterGreetServiceServer(server, &nativeTestService{})
 	err := server.ConnectGRPC(remoteConn)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `duplicate service registration for "greet.v1.GreetService"`)
 	assert.Len(t, server.Tools(), 3, "the failed proxy registration must not replace local projections")
 }
 
-type nativeRefactorObservingStream struct {
+type nativeTestObservingStream struct {
 	grpc.ServerStream
 	received *atomic.Int32
 }
 
-func (s *nativeRefactorObservingStream) RecvMsg(message any) error {
+func (s *nativeTestObservingStream) RecvMsg(message any) error {
 	if _, ok := message.(*greetpb.StreamGreetRequest); !ok {
 		return status.Errorf(codes.Internal, "stream interceptor received %T, want *greetpb.StreamGreetRequest", message)
 	}
@@ -335,14 +335,24 @@ func (s *nativeRefactorObservingStream) RecvMsg(message any) error {
 	return s.ServerStream.RecvMsg(message)
 }
 
-func TestNativeRefactorStandardAndSharedInterceptorsRunOnce(t *testing.T) {
-	service := &nativeRefactorTestService{}
-	var nativeUnary, nativeStream atomic.Int32
+func TestNativeStandardAndSharedInterceptorsRunOnce(t *testing.T) {
+	service := &nativeTestService{}
+	var nativeUnaryOption, nativeUnaryChain, nativeStream atomic.Int32
 	var nativeStreamRecv atomic.Int32
 
-	server := nativeRefactorServer(t,
+	server := nativeTestServer(t,
+		grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+			nativeUnaryOption.Add(1)
+			if _, ok := req.(*greetpb.GreetRequest); !ok {
+				return nil, status.Errorf(codes.Internal, "native unary interceptor received %T", req)
+			}
+			if info.Server != service || info.FullMethod != greetpb.GreetService_Greet_FullMethodName {
+				return nil, status.Errorf(codes.Internal, "bad native unary info: server=%T method=%q", info.Server, info.FullMethod)
+			}
+			return handler(ctx, req)
+		}),
 		grpc.ChainUnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-			nativeUnary.Add(1)
+			nativeUnaryChain.Add(1)
 			if _, ok := req.(*greetpb.GreetRequest); !ok {
 				return nil, status.Errorf(codes.Internal, "native unary interceptor received %T", req)
 			}
@@ -356,7 +366,7 @@ func TestNativeRefactorStandardAndSharedInterceptorsRunOnce(t *testing.T) {
 			if srv != service || info.FullMethod != greetpb.GreetService_StreamGreet_FullMethodName {
 				return status.Errorf(codes.Internal, "bad native stream info: server=%T method=%q", srv, info.FullMethod)
 			}
-			return handler(srv, &nativeRefactorObservingStream{ServerStream: stream, received: &nativeStreamRecv})
+			return handler(srv, &nativeTestObservingStream{ServerStream: stream, received: &nativeStreamRecv})
 		}),
 	)
 
@@ -377,11 +387,11 @@ func TestNativeRefactorStandardAndSharedInterceptorsRunOnce(t *testing.T) {
 		if srv != service || info.FullMethod != greetpb.GreetService_StreamGreet_FullMethodName {
 			return status.Errorf(codes.Internal, "bad shared stream info: server=%T method=%q", srv, info.FullMethod)
 		}
-		return handler(srv, &nativeRefactorObservingStream{ServerStream: stream, received: &sharedStreamRecv})
+		return handler(srv, &nativeTestObservingStream{ServerStream: stream, received: &sharedStreamRecv})
 	})
 	greetpb.RegisterGreetServiceServer(server, service)
 
-	client := nativeRefactorStart(t, server)
+	client := nativeTestStart(t, server)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 
@@ -394,7 +404,8 @@ func TestNativeRefactorStandardAndSharedInterceptorsRunOnce(t *testing.T) {
 	_, err = stream.Recv()
 	require.ErrorIs(t, err, io.EOF)
 
-	assert.Equal(t, int32(1), nativeUnary.Load())
+	assert.Equal(t, int32(1), nativeUnaryOption.Load())
+	assert.Equal(t, int32(1), nativeUnaryChain.Load())
 	assert.Equal(t, int32(1), sharedUnary.Load())
 	assert.Equal(t, int32(1), nativeStream.Load())
 	assert.Equal(t, int32(1), sharedStream.Load())
@@ -402,14 +413,14 @@ func TestNativeRefactorStandardAndSharedInterceptorsRunOnce(t *testing.T) {
 	assert.Equal(t, int32(1), sharedStreamRecv.Load())
 }
 
-func TestNativeRefactorMetadataAndRichStatus(t *testing.T) {
+func TestNativeMetadataAndRichStatus(t *testing.T) {
 	incoming := make(chan metadata.MD, 1)
 	detail := &errdetails.BadRequest{FieldViolations: []*errdetails.BadRequest_FieldViolation{{
 		Field: "name", Description: "reserved",
 	}}}
 	richStatus, err := status.New(codes.FailedPrecondition, "cannot greet").WithDetails(detail)
 	require.NoError(t, err)
-	service := &nativeRefactorTestService{greetHook: func(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	service := &nativeTestService{greetHook: func(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 		if req.GetName() == "status" {
 			return nil, richStatus.Err()
 		}
@@ -423,9 +434,9 @@ func TestNativeRefactorMetadataAndRichStatus(t *testing.T) {
 		}
 		return &greetpb.GreetResponse{Message: req.GetName()}, nil
 	}}
-	server := nativeRefactorServer(t)
+	server := nativeTestServer(t)
 	greetpb.RegisterGreetServiceServer(server, service)
-	client := nativeRefactorStart(t, server)
+	client := nativeTestStart(t, server)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
@@ -451,11 +462,11 @@ func TestNativeRefactorMetadataAndRichStatus(t *testing.T) {
 	assert.Equal(t, "reserved", gotDetail.GetFieldViolations()[0].GetDescription())
 }
 
-func TestNativeRefactorDeadlineAndCancellationPropagate(t *testing.T) {
+func TestNativeDeadlineAndCancellationPropagate(t *testing.T) {
 	deadlineSeen := make(chan bool, 1)
 	cancelStarted := make(chan struct{})
 	cancelObserved := make(chan error, 1)
-	service := &nativeRefactorTestService{greetHook: func(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	service := &nativeTestService{greetHook: func(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 		switch req.GetName() {
 		case "deadline":
 			_, ok := ctx.Deadline()
@@ -471,9 +482,9 @@ func TestNativeRefactorDeadlineAndCancellationPropagate(t *testing.T) {
 			return &greetpb.GreetResponse{Message: req.GetName()}, nil
 		}
 	}}
-	server := nativeRefactorServer(t)
+	server := nativeTestServer(t)
 	greetpb.RegisterGreetServiceServer(server, service)
-	client := nativeRefactorStart(t, server)
+	client := nativeTestStart(t, server)
 
 	deadlineCtx, deadlineCancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
 	defer deadlineCancel()
@@ -514,16 +525,16 @@ func TestNativeRefactorDeadlineAndCancellationPropagate(t *testing.T) {
 	}
 }
 
-func TestNativeRefactorGRPCMessageLimits(t *testing.T) {
+func TestNativeGRPCMessageLimits(t *testing.T) {
 	t.Run("receive", func(t *testing.T) {
 		var calls atomic.Int32
-		service := &nativeRefactorTestService{greetHook: func(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+		service := &nativeTestService{greetHook: func(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 			calls.Add(1)
 			return &greetpb.GreetResponse{Message: req.GetName()}, nil
 		}}
-		server := nativeRefactorServer(t, grpc.MaxRecvMsgSize(64))
+		server := nativeTestServer(t, grpc.MaxRecvMsgSize(64))
 		greetpb.RegisterGreetServiceServer(server, service)
-		client := nativeRefactorStart(t, server)
+		client := nativeTestStart(t, server)
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
 
@@ -534,12 +545,12 @@ func TestNativeRefactorGRPCMessageLimits(t *testing.T) {
 	})
 
 	t.Run("send", func(t *testing.T) {
-		service := &nativeRefactorTestService{greetHook: func(_ context.Context, _ *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+		service := &nativeTestService{greetHook: func(_ context.Context, _ *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 			return &greetpb.GreetResponse{Message: strings.Repeat("s", 1024)}, nil
 		}}
-		server := nativeRefactorServer(t, grpc.MaxSendMsgSize(64))
+		server := nativeTestServer(t, grpc.MaxSendMsgSize(64))
 		greetpb.RegisterGreetServiceServer(server, service)
-		client := nativeRefactorStart(t, server)
+		client := nativeTestStart(t, server)
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		defer cancel()
 
@@ -549,17 +560,17 @@ func TestNativeRefactorGRPCMessageLimits(t *testing.T) {
 	})
 }
 
-func TestNativeRefactorLateRegistrationPanicsDeterministically(t *testing.T) {
-	server := nativeRefactorServer(t)
-	greetpb.RegisterGreetServiceServer(server, &nativeRefactorTestService{})
-	_ = nativeRefactorStart(t, server)
+func TestNativeLateRegistrationPanicsDeterministically(t *testing.T) {
+	server := nativeTestServer(t)
+	greetpb.RegisterGreetServiceServer(server, &nativeTestService{})
+	_ = nativeTestStart(t, server)
 	require.Eventually(t, server.frozenFast.Load, 2*time.Second, time.Millisecond,
-		"ServeGRPC did not cross the registration freeze boundary")
+		"Serve did not cross the registration freeze boundary")
 
 	var recovered any
 	func() {
 		defer func() { recovered = recover() }()
-		greetpb.RegisterGreetServiceServer(server, &nativeRefactorTestService{})
+		greetpb.RegisterGreetServiceServer(server, &nativeTestService{})
 	}()
 	require.NotNil(t, recovered)
 	assert.Equal(t,
@@ -568,11 +579,10 @@ func TestNativeRefactorLateRegistrationPanicsDeterministically(t *testing.T) {
 	)
 }
 
-func TestNativeRefactorHTTPHandlerFreezesDistinctServiceRegistration(t *testing.T) {
-	server := nativeRefactorServer(t)
-	greetpb.RegisterGreetServiceServer(server, &nativeRefactorTestService{})
-	_, err := server.HTTPHandler()
-	require.NoError(t, err)
+func TestNativeHTTPHandlerFreezesDistinctServiceRegistration(t *testing.T) {
+	server := nativeTestServer(t)
+	greetpb.RegisterGreetServiceServer(server, &nativeTestService{})
+	server.HTTPHandler()
 
 	var recovered any
 	func() {
@@ -586,14 +596,14 @@ func TestNativeRefactorHTTPHandlerFreezesDistinctServiceRegistration(t *testing.
 	)
 }
 
-func TestNativeRefactorHTTPUsesGeneratedImplementation(t *testing.T) {
+func TestNativeHTTPUsesGeneratedImplementation(t *testing.T) {
 	var calls atomic.Int32
 	var sharedCalls atomic.Int32
-	service := &nativeRefactorTestService{greetHook: func(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	service := &nativeTestService{greetHook: func(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 		calls.Add(1)
 		return &greetpb.GreetResponse{Message: "shared:" + req.GetName()}, nil
 	}}
-	server := nativeRefactorServer(t)
+	server := nativeTestServer(t)
 	server.Use(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		sharedCalls.Add(1)
 		if _, ok := req.(*greetpb.GreetRequest); !ok {
@@ -606,8 +616,7 @@ func TestNativeRefactorHTTPUsesGeneratedImplementation(t *testing.T) {
 	})
 	greetpb.RegisterGreetServiceServer(server, service)
 
-	handler, err := server.HTTPHandler()
-	require.NoError(t, err)
+	handler := server.HTTPHandler()
 	httpServer := httptest.NewServer(handler)
 	defer httpServer.Close()
 
@@ -624,7 +633,7 @@ func TestNativeRefactorHTTPUsesGeneratedImplementation(t *testing.T) {
 	require.NoError(t, json.NewDecoder(response.Body).Decode(&httpResponse))
 	assert.Equal(t, "shared:http", httpResponse.GetMessage())
 
-	client := nativeRefactorStart(t, server)
+	client := nativeTestStart(t, server)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	nativeResponse, err := client.Greet(ctx, &greetpb.GreetRequest{Name: "grpc"})
@@ -634,17 +643,17 @@ func TestNativeRefactorHTTPUsesGeneratedImplementation(t *testing.T) {
 	assert.Equal(t, int32(2), sharedCalls.Load())
 }
 
-func TestNativeRefactorGracefulStopDrainsInFlightUnary(t *testing.T) {
+func TestNativeGracefulStopDrainsInFlightUnary(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	service := &nativeRefactorTestService{greetHook: func(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	service := &nativeTestService{greetHook: func(_ context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 		close(started)
 		<-release
 		return &greetpb.GreetResponse{Message: "drained:" + req.GetName()}, nil
 	}}
-	server := nativeRefactorServer(t)
+	server := nativeTestServer(t)
 	greetpb.RegisterGreetServiceServer(server, service)
-	client := nativeRefactorStart(t, server)
+	client := nativeTestStart(t, server)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()

@@ -101,6 +101,7 @@ PUBLIC_PACKAGE_PATTERNS = (
 
 PRIVATE_TERMS = (
     "med" + "allion",
+    "temporal" + "ess",
     "gh" + "drive",
     "jim" + "tech",
     "jim-technologies",

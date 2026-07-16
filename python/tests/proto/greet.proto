@@ -21,9 +21,7 @@ enum Mood {
 service GreetService {
   // Greet a person by name.
   rpc Greet(GreetRequest) returns (GreetResponse) {
-    option (google.api.http) = {
-      get: "/v1/greet/{name}"
-    };
+    option (google.api.http) = {get: "/v1/greet/{name}"};
   }
 
   // Greet multiple people at once.

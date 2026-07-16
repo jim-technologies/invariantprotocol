@@ -13,7 +13,7 @@ def test_proto_comment_check_passes_fixture():
     result = check_descriptor(fds)
 
     assert result.ok
-    assert result.selected_files == ("greet.proto",)
+    assert result.selected_files == ("data.proto", "data_proto2.proto", "greet.proto")
 
 
 def test_proto_comment_check_reports_missing_projected_comment():

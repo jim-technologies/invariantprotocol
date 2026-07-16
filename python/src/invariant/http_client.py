@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import os
@@ -11,12 +13,12 @@ import time
 import urllib.parse
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, cast
 
 import grpc
 import httpx
 from google.api import annotations_pb2
-from google.protobuf import descriptor_pool, duration_pb2, json_format, message_factory
+from google.protobuf import any_pb2, descriptor_pool, duration_pb2, json_format, message_factory
 from google.rpc import error_details_pb2
 
 from invariant.errors import InvariantError, invalid_argument
@@ -51,6 +53,25 @@ _GRPC_CODES_BY_NUMBER = {
     14: grpc.StatusCode.UNAVAILABLE,
     15: grpc.StatusCode.DATA_LOSS,
     16: grpc.StatusCode.UNAUTHENTICATED,
+}
+
+_GRPC_CODES_BY_CONNECT_NAME = {
+    "canceled": grpc.StatusCode.CANCELLED,
+    "unknown": grpc.StatusCode.UNKNOWN,
+    "invalid_argument": grpc.StatusCode.INVALID_ARGUMENT,
+    "deadline_exceeded": grpc.StatusCode.DEADLINE_EXCEEDED,
+    "not_found": grpc.StatusCode.NOT_FOUND,
+    "already_exists": grpc.StatusCode.ALREADY_EXISTS,
+    "permission_denied": grpc.StatusCode.PERMISSION_DENIED,
+    "resource_exhausted": grpc.StatusCode.RESOURCE_EXHAUSTED,
+    "failed_precondition": grpc.StatusCode.FAILED_PRECONDITION,
+    "aborted": grpc.StatusCode.ABORTED,
+    "out_of_range": grpc.StatusCode.OUT_OF_RANGE,
+    "unimplemented": grpc.StatusCode.UNIMPLEMENTED,
+    "internal": grpc.StatusCode.INTERNAL,
+    "unavailable": grpc.StatusCode.UNAVAILABLE,
+    "data_loss": grpc.StatusCode.DATA_LOSS,
+    "unauthenticated": grpc.StatusCode.UNAUTHENTICATED,
 }
 
 
@@ -194,9 +215,6 @@ class HTTPClientBinding:
 
         query = ""
         if self.body != "*":
-            # Compatibility shim for descriptors that model query params inside a
-            # top-level `query` struct/map instead of flattened scalar fields.
-            working = _flatten_query_wrapper(working)
             params: list[tuple[str, str]] = []
             _encode_query_fields("", working, params)
             if params:
@@ -255,12 +273,13 @@ class HTTPDynamicHandler:
         output_type: str,
         method_path: str,
         input_type: str | None = None,
+        pool: descriptor_pool.DescriptorPool | None = None,
     ) -> None:
         self._connection = connection
         self._binding = binding
         self._method_path = method_path
         self._retry_policy = connection.retry_policy_for(method_path)
-        pool = descriptor_pool.Default()
+        pool = pool or descriptor_pool.Default()
         resp_desc = pool.FindMessageTypeByName(output_type)
         self._resp_class = message_factory.GetMessageClass(resp_desc)
         self._httpbody_response = output_type == _HTTPBODY_TYPE
@@ -313,8 +332,15 @@ class HTTPDynamicHandler:
                 raise _request_error(self._method_path, target, e) from None
 
             if response.status_code >= 400:
-                code = _grpc_code_from_http_status(response.status_code)
-                if self._should_retry(attempt, code):
+                error = _http_error(
+                    response.status_code,
+                    read_result.body,
+                    response.headers,
+                    method_path=self._method_path,
+                    url=target,
+                    truncated=read_result.exceeded,
+                )
+                if self._should_retry(attempt, error.code):
                     retry_delay = _retry_delay_seconds(
                         self._retry_policy,
                         retry_backoff,
@@ -322,27 +348,13 @@ class HTTPDynamicHandler:
                     )
                     self._observe_response(response, read_result.body, duration_ms, target, body_bytes, success=False)
                     if retry_delay is None:
-                        raise _http_error(
-                            response.status_code,
-                            read_result.body,
-                            response.headers,
-                            method_path=self._method_path,
-                            url=target,
-                            truncated=read_result.exceeded,
-                        ) from None
+                        raise error from None
                     delay, retry_backoff = retry_delay
                     attempt += 1
                     await _retry_sleep(delay)
                     continue
                 self._observe_response(response, read_result.body, duration_ms, target, body_bytes, success=False)
-                raise _http_error(
-                    response.status_code,
-                    read_result.body,
-                    response.headers,
-                    method_path=self._method_path,
-                    url=target,
-                    truncated=read_result.exceeded,
-                ) from None
+                raise error from None
 
             success = not read_result.exceeded
             self._observe_response(response, read_result.body, duration_ms, target, body_bytes, success=success)
@@ -390,9 +402,6 @@ class HTTPDynamicHandler:
         ) as response:
             read_result = await _read_response_body(response, self._connection.options.max_receive_message_size)
             return response, read_result, (time.perf_counter() - start) * 1000
-
-    async def aclose(self) -> None:
-        return None
 
     def _apply_query_provider(self, target: str, body_bytes: bytes | None) -> str:
         """Let an optional query_provider add auth query params (API key, HMAC
@@ -569,9 +578,10 @@ def _parse_method_configs(service_config: Any) -> list[_MethodConfig]:
     for i, raw in enumerate(raw_configs):
         if not isinstance(raw, dict):
             raise ValueError(f"service_config.method_config[{i}] must be a dict")
-        if "name" not in raw:
+        method_config = cast(dict[str, Any], raw)
+        if "name" not in method_config:
             raise ValueError(f"service_config.method_config[{i}].name is required")
-        raw_names = raw["name"]
+        raw_names = method_config["name"]
         if not isinstance(raw_names, list) or not raw_names:
             raise ValueError(f"service_config.method_config[{i}].name must be a non-empty list")
         names: list[dict[str, str]] = []
@@ -583,8 +593,8 @@ def _parse_method_configs(service_config: Any) -> list[_MethodConfig]:
                 raise ValueError(f"{path} duplicates {seen_names[key]}")
             seen_names[key] = path
             names.append(parsed_name)
-        _retry_unsafe_methods_value(raw, f"service_config.method_config[{i}].retry_unsafe_methods")
-        retry_policy = _parse_retry_policy(raw, f"service_config.method_config[{i}].retry_policy")
+        _retry_unsafe_methods_value(method_config, f"service_config.method_config[{i}].retry_unsafe_methods")
+        retry_policy = _parse_retry_policy(method_config, f"service_config.method_config[{i}].retry_policy")
         out.append(_MethodConfig(names=names, retry_policy=retry_policy))
     return out
 
@@ -869,19 +879,6 @@ def _clone_list(data: list[Any]) -> list[Any]:
     return out
 
 
-def _flatten_query_wrapper(args: dict[str, Any]) -> dict[str, Any]:
-    query = args.get("query")
-    if not isinstance(query, dict):
-        return args
-
-    merged = _clone_map(args)
-    merged.pop("query", None)
-    for key, value in query.items():
-        if key not in merged:
-            merged[key] = value
-    return merged
-
-
 def _wrap_response_body(payload: Any, field_path: str) -> dict[str, Any]:
     parts = [p for p in field_path.split(".") if p]
     if not parts:
@@ -1015,8 +1012,7 @@ def _http_error(
     url: str,
     truncated: bool,
 ) -> InvariantError:
-    """Parse a remote error envelope. Accepts both Connect-style (unwrapped,
-    lowercase code) and the legacy wrapped format ({"error": {...}}, uppercase)."""
+    """Parse a canonical Connect error envelope."""
     code = _grpc_code_from_http_status(status_code)
     message = f"HTTP {status_code}"
     details: list[Any] = []
@@ -1027,21 +1023,19 @@ def _http_error(
         payload = {}
 
     if isinstance(payload, dict):
-        # Connect-style: {"code": "...", "message": "...", "details": [...]}
-        # Legacy wrapped: {"error": {"code": "...", ...}}
-        envelope = payload
-        if "code" not in envelope and isinstance(payload.get("error"), dict):
-            envelope = payload["error"]
-
-        msg = envelope.get("message")
-        if isinstance(msg, str) and msg:
-            message = msg
-        name = envelope.get("code")
-        if isinstance(name, str):
-            code = _grpc_code_from_name(name) or grpc.StatusCode.UNKNOWN
-        maybe_details = envelope.get("details")
-        if isinstance(maybe_details, list):
-            details.extend(d for d in maybe_details if isinstance(d, dict))
+        parsed_code = _grpc_code_from_connect_name(payload.get("code"))
+        if parsed_code is not None:
+            code = parsed_code
+            msg = payload.get("message")
+            if isinstance(msg, str) and msg:
+                message = msg
+            maybe_details = payload.get("details")
+            if isinstance(maybe_details, list):
+                for detail in maybe_details:
+                    if not isinstance(detail, dict):
+                        continue
+                    decoded = _decode_connect_detail(detail)
+                    details.append(decoded if decoded is not None else detail)
 
     retry_after = _parse_retry_after_seconds(headers.get("Retry-After"))
     if retry_after is not None and not _has_retry_info(details):
@@ -1110,41 +1104,57 @@ def _has_retry_info(details: list[Any]) -> bool:
     for detail in details:
         if isinstance(detail, error_details_pb2.RetryInfo):
             return True
+        if isinstance(detail, any_pb2.Any) and detail.type_url.endswith("/google.rpc.RetryInfo"):
+            return True
         if isinstance(detail, dict) and detail.get("@type") == "type.googleapis.com/google.rpc.RetryInfo":
             return True
     return False
 
 
+def _decode_connect_detail(detail: dict[str, Any]) -> any_pb2.Any | None:
+    type_name = detail.get("type")
+    encoded = detail.get("value")
+    if not isinstance(type_name, str) or not type_name or not isinstance(encoded, str):
+        return None
+    try:
+        padding = "=" * (-len(encoded) % 4)
+        value = base64.b64decode(encoded + padding, validate=True)
+    except ValueError, TypeError, binascii.Error:
+        return None
+    return any_pb2.Any(type_url=f"type.googleapis.com/{type_name}", value=value)
+
+
 def _grpc_code_from_http_status(status_code: int) -> grpc.StatusCode:
     mapping = {
-        200: grpc.StatusCode.OK,
-        499: grpc.StatusCode.CANCELLED,
-        400: grpc.StatusCode.INVALID_ARGUMENT,
-        504: grpc.StatusCode.DEADLINE_EXCEEDED,
-        404: grpc.StatusCode.NOT_FOUND,
-        409: grpc.StatusCode.ALREADY_EXISTS,
+        400: grpc.StatusCode.INTERNAL,
+        401: grpc.StatusCode.UNAUTHENTICATED,
         403: grpc.StatusCode.PERMISSION_DENIED,
-        429: grpc.StatusCode.RESOURCE_EXHAUSTED,
-        501: grpc.StatusCode.UNIMPLEMENTED,
-        500: grpc.StatusCode.INTERNAL,
+        404: grpc.StatusCode.UNIMPLEMENTED,
+        429: grpc.StatusCode.UNAVAILABLE,
         502: grpc.StatusCode.UNAVAILABLE,
         503: grpc.StatusCode.UNAVAILABLE,
-        401: grpc.StatusCode.UNAUTHENTICATED,
+        504: grpc.StatusCode.UNAVAILABLE,
     }
     return mapping.get(status_code, grpc.StatusCode.UNKNOWN)
 
 
 def _grpc_code_from_name(name: Any) -> grpc.StatusCode | None:
-    """Match either uppercase ('INVALID_ARGUMENT') or Connect lowercase ('invalid_argument')."""
+    """Match a standard uppercase gRPC status name."""
     if isinstance(name, grpc.StatusCode):
         return name
     if not isinstance(name, str):
         return None
-    upper = name.upper()
     for code in grpc.StatusCode:
-        if code.name == upper:
+        if code.name == name:
             return code
     return None
+
+
+def _grpc_code_from_connect_name(name: Any) -> grpc.StatusCode | None:
+    """Match a canonical lowercase Connect status name."""
+    if not isinstance(name, str):
+        return None
+    return _GRPC_CODES_BY_CONNECT_NAME.get(name)
 
 
 _OUTBOUND_HTTP_HEADER_ENV_PREFIX = "INVARIANT_HTTP_HEADER_"

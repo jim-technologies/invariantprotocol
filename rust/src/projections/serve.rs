@@ -1,11 +1,12 @@
-//! Multi-projection runner — mirrors Go's `Server.Serve(ctx, projections...)`
-//! and Python's `await server.serve(http=..., grpc=..., mcp=True)`.
+//! Optional-projection runner for HTTP/Connect and MCP stdio. Native gRPC
+//! listener ownership and graceful shutdown stay with the caller through
+//! `Server::grpc_routes()` and normal Tonic transport APIs.
 //!
 //! Cancellation propagates: when any projection returns (error or stdin EOF
 //! for MCP) or the supplied cancellation token fires, all projections are
 //! signalled to shut down gracefully. Same semantics as Go's `errc <- ...`.
 
-use crate::projections::{grpc, http, mcp};
+use crate::projections::{http, mcp};
 use crate::server::Server;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -18,8 +19,6 @@ pub enum Projection {
     /// Streamable HTTP transport), `/healthz`, `/readyz`, the tool catalog,
     /// and the raw descriptor.
     Http(u16),
-    /// gRPC server on the given port. Reflection auto-registered.
-    Grpc(u16),
     /// MCP stdio transport. Blocks until stdin closes.
     McpStdio,
 }
@@ -29,8 +28,6 @@ pub enum Projection {
 pub enum ServeError {
     #[error("http: {0}")]
     Http(#[from] std::io::Error),
-    #[error("grpc: {0}")]
-    Grpc(#[from] tonic::transport::Error),
 }
 
 /// Serve one or more projections in parallel. Returns when the first
@@ -102,9 +99,6 @@ async fn run_projection(server: Arc<Server>, projection: Projection) -> Result<(
         Projection::Http(port) => http::serve_http(server, port)
             .await
             .map_err(ServeError::Http),
-        Projection::Grpc(port) => grpc::serve_grpc(server, port)
-            .await
-            .map_err(ServeError::Grpc),
         Projection::McpStdio => mcp::serve_mcp_stdio(server).await.map_err(ServeError::Http),
     }
 }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import urllib.parse
@@ -30,12 +31,16 @@ def _start_annotated_http_backend() -> tuple[ThreadingHTTPServer, int]:
                 self._write_json(
                     400,
                     {
-                        "error": {
-                            "code": "INVALID_ARGUMENT",
-                            "message": "bad name",
-                        }
+                        "code": "invalid_argument",
+                        "message": "bad name",
                     },
                 )
+                return
+            if name == "cancel":
+                self._write_json(499, {"code": "canceled", "message": "request canceled"})
+                return
+            if name == "wrapped":
+                self._write_json(400, {"error": {"code": "INVALID_ARGUMENT", "message": "old shape"}})
                 return
 
             self._write_json(200, {"message": f"Hello, {name}"})
@@ -78,6 +83,41 @@ def _connect_http_server(base_url: str) -> Server:
     return srv
 
 
+async def test_shared_standard_interceptor_wraps_connect_http_projection():
+    seen: list[tuple[str, str]] = []
+
+    class SharedInterceptor(grpc.aio.ServerInterceptor):
+        async def intercept_service(self, continuation, handler_call_details):
+            handler = await continuation(handler_call_details)
+            assert handler is not None
+            terminal = handler.unary_unary
+            assert terminal is not None
+
+            async def wrapped(request, context):
+                # Remote descriptor-only proxies intentionally use their
+                # isolated pool's dynamic class while retaining proto identity.
+                seen.append((request.DESCRIPTOR.full_name, handler_call_details.method))
+                return await terminal(request, context)
+
+            return grpc.unary_unary_rpc_method_handler(
+                wrapped,
+                request_deserializer=handler.request_deserializer,
+                response_serializer=handler.response_serializer,
+            )
+
+    backend, port = _start_annotated_http_backend()
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    server.use(SharedInterceptor())
+    try:
+        server.connect_http(f"http://localhost:{port}")
+        result = await server._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+        assert result["message"] == "Hello, World"
+        assert seen == [("greet.v1.GreetRequest", "/greet.v1.GreetService/Greet")]
+    finally:
+        await server.stop()
+        backend.shutdown()
+
+
 def _retry_service_config(
     *,
     max_attempts: int = 3,
@@ -105,8 +145,7 @@ def _retry_service_config(
 
 
 def _descriptor_with_raw_httpbody() -> bytes:
-    import google.api.httpbody_pb2  # noqa: F401  (registers HttpBody)
-    from google.api import annotations_pb2
+    from google.api import annotations_pb2, httpbody_pb2
     from google.protobuf import descriptor_pb2
 
     fds = descriptor_pb2.FileDescriptorSet()
@@ -116,6 +155,9 @@ def _descriptor_with_raw_httpbody() -> bytes:
     file_proto = next(f for f in fds.file if f.name == "greet.proto")
     if "google/api/httpbody.proto" not in file_proto.dependency:
         file_proto.dependency.append("google/api/httpbody.proto")
+    if not any(file.name == "google/api/httpbody.proto" for file in fds.file):
+        httpbody_file = fds.file.add()
+        httpbody_pb2.DESCRIPTOR.CopyToProto(httpbody_file)
     svc = next(s for s in file_proto.service if s.name == "GreetService")
     method = svc.method.add(
         name="RawBody",
@@ -124,39 +166,6 @@ def _descriptor_with_raw_httpbody() -> bytes:
     )
     method.options.Extensions[annotations_pb2.http].get = "/raw/{name}"
     return fds.SerializeToString()
-
-
-def test_http_client_binding_flattens_query_wrapper():
-    binding = HTTPClientBinding.new("GET", "/v1/item/{id}", "")
-    body, url = binding.build(
-        {
-            "id": 42,
-            "query": {"limit": 5, "filters": {"hero_id": 1}},
-        },
-        "https://api.example.com",
-    )
-    parsed = urllib.parse.urlsplit(url)
-    params = urllib.parse.parse_qs(parsed.query)
-
-    assert body is None
-    assert params["limit"] == ["5"]
-    assert params["filters.hero_id"] == ["1"]
-    assert "query.limit" not in params
-
-
-def test_http_client_binding_query_wrapper_does_not_override_explicit_fields():
-    binding = HTTPClientBinding.new("GET", "/v1/item/{id}", "")
-    _body, url = binding.build(
-        {
-            "id": 42,
-            "limit": 3,
-            "query": {"limit": 5},
-        },
-        "https://api.example.com",
-    )
-    parsed = urllib.parse.urlsplit(url)
-    params = urllib.parse.parse_qs(parsed.query)
-    assert params["limit"] == ["3"]
 
 
 def test_http_client_binding_preserves_trailing_slash():
@@ -514,6 +523,62 @@ async def test_connect_http_maps_remote_error():
                 await srv._cli(["GreetService", "Greet", "-r", '{"name":"bad"}'])
             assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
             assert exc.value.to_payload()["code"] == "invalid_argument"
+
+            with pytest.raises(InvariantError, match="request canceled") as canceled:
+                await srv._cli(["GreetService", "Greet", "-r", '{"name":"cancel"}'])
+            assert canceled.value.code == grpc.StatusCode.CANCELLED
+            assert canceled.value.to_payload()["code"] == "canceled"
+
+            with pytest.raises(InvariantError, match="HTTP 400") as wrapped:
+                await srv._cli(["GreetService", "Greet", "-r", '{"name":"wrapped"}'])
+            assert wrapped.value.code == grpc.StatusCode.INTERNAL
+        finally:
+            await srv.stop()
+    finally:
+        httpd.shutdown()
+
+
+async def test_connect_http_uses_connect_http_status_fallbacks_for_malformed_errors():
+    expected = {
+        400: grpc.StatusCode.INTERNAL,
+        401: grpc.StatusCode.UNAUTHENTICATED,
+        403: grpc.StatusCode.PERMISSION_DENIED,
+        404: grpc.StatusCode.UNIMPLEMENTED,
+        429: grpc.StatusCode.UNAVAILABLE,
+        502: grpc.StatusCode.UNAVAILABLE,
+        503: grpc.StatusCode.UNAVAILABLE,
+        504: grpc.StatusCode.UNAVAILABLE,
+        418: grpc.StatusCode.UNKNOWN,
+        409: grpc.StatusCode.UNKNOWN,
+        499: grpc.StatusCode.UNKNOWN,
+        500: grpc.StatusCode.UNKNOWN,
+        501: grpc.StatusCode.UNKNOWN,
+    }
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parsed = urllib.parse.urlsplit(self.path)
+            status = int(parsed.path.removeprefix("/v1/greet/"))
+            body = b"not a Connect error"
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):  # noqa: A002
+            pass
+
+    httpd = ThreadingHTTPServer(("localhost", 0), Handler)
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        srv = _connect_http_server(f"http://localhost:{port}")
+        try:
+            for status, code in expected.items():
+                with pytest.raises(InvariantError) as exc:
+                    await srv._cli(["GreetService", "Greet", "-r", f'{{"name":"{status}"}}'])
+                assert exc.value.code == code
         finally:
             await srv.stop()
     finally:
@@ -539,7 +604,7 @@ async def test_connect_http_injects_headers_from_env(monkeypatch):
                 self.end_headers()
                 return
             if self.headers.get("Authorization") != "Bearer test-token":
-                self._write_json(401, {"error": {"code": "UNAUTHENTICATED", "message": "missing auth"}})
+                self._write_json(401, {"code": "unauthenticated", "message": "missing auth"})
                 return
             self._write_json(200, {"message": "Hello, World"})
 
@@ -651,7 +716,7 @@ async def test_connect_http_user_agent_override_from_env(monkeypatch):
         httpd.shutdown()
 
 
-async def test_connect_http_retries_transient_get():
+async def test_connect_http_retries_using_canonical_error_code_before_http_fallback():
     class Handler(BaseHTTPRequestHandler):
         attempts = 0
 
@@ -664,12 +729,10 @@ async def test_connect_http_retries_transient_get():
             type(self).attempts += 1
             if type(self).attempts <= 2:
                 self._write_json(
-                    503,
+                    400,
                     {
-                        "error": {
-                            "code": "UNAVAILABLE",
-                            "message": "temporary outage",
-                        }
+                        "code": "unavailable",
+                        "message": "temporary outage",
                     },
                     extra_headers={"Retry-After": "0"},
                 )
@@ -721,10 +784,8 @@ async def test_connect_http_does_not_retry_post():
             self._write_json(
                 503,
                 {
-                    "error": {
-                        "code": "UNAVAILABLE",
-                        "message": "temporary outage",
-                    }
+                    "code": "unavailable",
+                    "message": "temporary outage",
                 },
             )
 
@@ -767,7 +828,7 @@ async def test_connect_http_uses_dynamic_header_provider():
                 self.end_headers()
                 return
             if self.headers.get("X-Signature") != "sig-value":
-                self._write_json(401, {"error": {"code": "UNAUTHENTICATED", "message": "missing signature"}})
+                self._write_json(401, {"code": "unauthenticated", "message": "missing signature"})
                 return
             self._write_json(200, {"message": "Hello, World"})
 
@@ -1427,9 +1488,14 @@ async def test_connect_http_method_config_override_can_disable_service_retry():
 async def test_connect_http_error_details_are_standard_google_rpc_types():
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            raw = b"rate limit exceeded for account 123"
+            raw = json.dumps(
+                {
+                    "code": "resource_exhausted",
+                    "message": "rate limit exceeded for account 123",
+                }
+            ).encode()
             self.send_response(429)
-            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Type", "application/json")
             self.send_header("Retry-After", "2")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
@@ -1462,9 +1528,15 @@ async def test_connect_http_error_details_are_standard_google_rpc_types():
 
 
 async def test_connect_http_remote_retry_info_wins_over_retry_after_header():
+    from google.protobuf import duration_pb2
     from google.rpc import error_details_pb2
 
+    retry_message = error_details_pb2.RetryInfo(retry_delay=duration_pb2.Duration(seconds=7))
     remote_retry = {
+        "type": "google.rpc.RetryInfo",
+        "value": base64.b64encode(retry_message.SerializeToString()).decode().rstrip("="),
+    }
+    expanded_retry = {
         "@type": "type.googleapis.com/google.rpc.RetryInfo",
         "retryDelay": "7s",
     }
@@ -1502,7 +1574,7 @@ async def test_connect_http_remote_retry_info_wins_over_retry_after_header():
                 for detail in exc.value.to_payload()["details"]
                 if detail["@type"] == "type.googleapis.com/google.rpc.RetryInfo"
             ]
-            assert retry_payloads == [remote_retry]
+            assert retry_payloads == [expanded_retry]
 
             retry_trailers = []
             for detail in exc.value.to_status_proto().details:
@@ -1622,7 +1694,12 @@ async def test_connect_http_preserves_unparseable_details_in_payloads_but_not_gr
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{http_port}") as client:
             response = await client.post("/greet.v1.GreetService/Greet", json={"name": "World"})
         assert response.status_code == 503
-        assert response.json()["details"][:3] == details
+        connect_details = response.json()["details"]
+        assert all(set(detail) == {"type", "value"} for detail in connect_details)
+        connect_types = {detail["type"] for detail in connect_details}
+        assert "google.rpc.RetryInfo" in connect_types
+        assert "google.rpc.ErrorInfo" in connect_types
+        assert "example.CustomDetail" not in connect_types
 
         grpc_port = await srv._start_grpc(port=0)
         async with grpc.aio.insecure_channel(f"localhost:{grpc_port}") as channel:
@@ -1708,17 +1785,12 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
         httpd.shutdown()
 
 
-async def test_connect_http_uses_one_shared_client_per_connection_and_deletes_global_hooks():
+async def test_connect_http_uses_one_shared_client_per_connection():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
     srv.connect_http("http://localhost:1")
     try:
         handlers = [tool.handler for tool in srv.tools.values() if isinstance(tool.handler, HTTPDynamicHandler)]
         assert len({id(handler._connection.client) for handler in handlers}) == 1
-        await handlers[0].aclose()
-        assert not handlers[1]._connection.client.is_closed
-        assert not hasattr(srv, "use_http_header_provider")
-        assert not hasattr(srv, "use_http_query_provider")
-        assert not hasattr(srv, "use_http_response_observer")
     finally:
         await srv.stop()
 
@@ -1795,9 +1867,9 @@ async def test_connect_http_google_rpc_details_propagate_through_grpc_projection
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            raw = b"quota exhausted"
+            raw = json.dumps({"code": "resource_exhausted", "message": "quota exhausted"}).encode()
             self.send_response(429)
-            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Type", "application/json")
             self.send_header("Retry-After", "1")
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()

@@ -1,12 +1,8 @@
 export { ParsedDescriptor, type MethodInfo, type ServiceInfo } from "./descriptor.js";
+export * from "./data_schema.js";
 export { InvariantError, type Code } from "./errors.js";
-export { buildGrpcServer, grpcClientForService, grpcServiceDefinition, serveGrpc, type GrpcConnectOptions } from "./grpc.js";
+export type { Interceptor, StreamRequest, StreamResponse, UnaryRequest, UnaryResponse } from "@connectrpc/connect";
 export {
-  HTTPClientBinding,
-  HTTPConnection,
-  clientBindingForMethod,
-  httpProxyHandler,
-  httpRulesByMethodPath,
   type ChannelOptions,
   type ConnectHttpOptions,
   type HTTPAuth,
@@ -17,19 +13,28 @@ export {
   type OutboundHTTPResponse,
 } from "./http_client.js";
 export { SchemaGenerator, type JsonSchema } from "./schema.js";
+export { validation } from "./validation.js";
 export {
+  defaultHttpMetadataMapper,
   SERVER_NAME,
   SERVER_VERSION,
   Server,
   type HandlerContext,
-  type ServerCallInfo,
+  type HttpMetadataMapper,
+  type ManagedHandlerContext,
+  type MethodConfig,
   type StreamHandler,
-  type StreamInterceptor,
   type Tool,
   type ToolCatalogEntry,
   type UnaryHandler,
-  type UnaryInterceptor,
 } from "./server.js";
 export { cliHelp, runCli } from "./cli.js";
+export {
+  MCP_PROTOCOL_VERSION,
+  serveMcpStdio,
+  type JsonRpcRequest,
+  type McpContextOptions,
+  type McpStdioInput,
+  type McpStdioOutput,
+} from "./mcp.js";
 export { CONNECT_STREAM_JSON, CONNECT_STREAM_PROTO, PROTO_CONTENT_TYPE, httpHandler, serveHttp } from "./http.js";
-export { mcpCallTool, mcpDispatch, type JsonRpcRequest } from "./mcp.js";

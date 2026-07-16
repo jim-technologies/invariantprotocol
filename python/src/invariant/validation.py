@@ -3,59 +3,65 @@
 Usage::
 
     server.use(invariant.validation())
-    server.use_stream(invariant.validation_stream())  # for server-streaming RPCs
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+import grpc
 import protovalidate
 
 from invariant.errors import InvariantError, invalid_argument
 
-if TYPE_CHECKING:
-    from invariant.server import Interceptor, StreamInterceptor
+
+def validation() -> grpc.aio.ServerInterceptor:
+    """Return one standard aio interceptor for unary and server-streaming RPCs."""
+    return _ValidationInterceptor()
 
 
-def validation() -> Interceptor:
-    """Return a unary interceptor that runs protovalidate on each request.
+class _ValidationInterceptor(grpc.aio.ServerInterceptor):
+    def __init__(self) -> None:
+        self._validator = protovalidate.Validator()
 
-    Validation failures raise INVALID_ARGUMENT with field-level details.
-    Requests of types without protovalidate constraints pass through unchanged.
-
-    Streaming RPCs are not covered — pair with ``validation_stream`` and
-    ``server.use_stream(vs)`` when you have streaming methods with
-    protovalidate constraints.
-    """
-    validator = protovalidate.Validator()
-
-    async def interceptor(request, context, info, handler):
+    def _validate(self, request) -> None:
         try:
-            validator.validate(request)
-        except protovalidate.ValidationError as e:
-            raise _to_invariant_error(e) from None
-        return await handler(request, context)
+            self._validator.validate(request)
+        except protovalidate.ValidationError as error:
+            raise _to_invariant_error(error) from None
 
-    return interceptor
+    async def intercept_service(self, continuation, handler_call_details):
+        handler = await continuation(handler_call_details)
+        if handler is None or handler.request_streaming:
+            return handler
 
+        if handler.response_streaming:
+            terminal = handler.unary_stream
+            if terminal is None:
+                return handler
 
-def validation_stream() -> StreamInterceptor:
-    """Return a stream interceptor that runs protovalidate on the request
-    before opening the response stream. Failures short-circuit with
-    INVALID_ARGUMENT and never produce any response messages.
-    """
-    validator = protovalidate.Validator()
+            async def validated_stream(request, context):
+                self._validate(request)
+                async for response in terminal(request, context):
+                    yield response
 
-    async def interceptor(request, context, info, handler):
-        try:
-            validator.validate(request)
-        except protovalidate.ValidationError as e:
-            raise _to_invariant_error(e) from None
-        async for msg in handler(request, context):
-            yield msg
+            return grpc.unary_stream_rpc_method_handler(
+                validated_stream,
+                request_deserializer=handler.request_deserializer,
+                response_serializer=handler.response_serializer,
+            )
 
-    return interceptor
+        terminal = handler.unary_unary
+        if terminal is None:
+            return handler
+
+        async def validated_unary(request, context):
+            self._validate(request)
+            return await terminal(request, context)
+
+        return grpc.unary_unary_rpc_method_handler(
+            validated_unary,
+            request_deserializer=handler.request_deserializer,
+            response_serializer=handler.response_serializer,
+        )
 
 
 def _to_invariant_error(err: protovalidate.ValidationError) -> InvariantError:

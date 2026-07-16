@@ -118,7 +118,7 @@ func connectServer(t *testing.T, target string) *Server {
 	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { conn.Close() })
-	require.NoError(t, srv.Connect(conn))
+	require.NoError(t, srv.ConnectGRPC(conn))
 	return srv
 }
 
@@ -274,7 +274,7 @@ func TestConnectIncludeExclude(t *testing.T) {
 	conn, err := grpc.NewClient("localhost:1", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { conn.Close() })
-	require.NoError(t, srv.Connect(conn))
+	require.NoError(t, srv.ConnectGRPC(conn))
 	assert.Len(t, srv.Tools(), 1)
 	assert.Contains(t, srv.Tools(), "GreetService.Greet")
 }
@@ -338,16 +338,6 @@ func TestServerFromBytesStoresFDS(t *testing.T) {
 	srv, err := ServerFromBytes(data)
 	require.NoError(t, err)
 	assert.NotNil(t, srv.fds, "ServerFromBytes should store the FileDescriptorSet")
-}
-
-func TestNewServerNoFDS(t *testing.T) {
-	srv := newServer(mustParse(t))
-	conn, err := grpc.NewClient("localhost:1", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	require.NoError(t, err)
-	t.Cleanup(func() { conn.Close() })
-	err = srv.Connect(conn)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerFromDescriptor or ServerFromBytes")
 }
 
 func TestConnectBuildProtoFiles(t *testing.T) {

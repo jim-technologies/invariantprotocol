@@ -12,9 +12,14 @@ import grpc
 import httpx
 import pytest
 import pytest_asyncio
-from conftest import DESCRIPTOR_PATH
+from conftest import DESCRIPTOR_PATH, register_greet
 
-from invariant import ChannelOptions, InvariantError, Server
+from invariant import ChannelOptions, InvariantError, MethodConfig, Server
+
+_MCP_HEADERS = {
+    "Accept": "application/json, text/event-stream",
+    "MCP-Protocol-Version": "2025-11-25",
+}
 
 # -- HTTP unary body-size limit. --
 
@@ -39,6 +44,12 @@ def test_invariant_error_materializes_detail_generators_for_payload_and_trailers
     assert status.details[0].Is(error_details_pb2.RetryInfo.DESCRIPTOR)
 
 
+def test_invariant_error_uses_connect_canceled_spelling():
+    err = InvariantError(grpc.StatusCode.CANCELLED, "stopped")
+
+    assert err.to_payload()["code"] == "canceled"
+
+
 @pytest_asyncio.fixture
 async def basic_server():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
@@ -47,7 +58,7 @@ async def basic_server():
         async def Greet(self, request, context):
             return greet_pb2.GreetResponse(message=f"hi {request.name}")
 
-    srv.register(S())
+    register_greet(srv, S())
     yield srv
     await srv.stop()
 
@@ -66,6 +77,67 @@ async def test_http_unary_rejects_oversized_body(basic_server):
         assert "limit" in body["message"]
     finally:
         await basic_server._stop_http()
+
+
+async def test_per_method_http_limits_cover_unary_and_each_stream_message():
+    class LimitedServicer:
+        async def Greet(self, request, context):
+            return greet_pb2.GreetResponse(message="r" * 1024)
+
+        async def StreamGreet(self, request, context):
+            yield greet_pb2.GreetResponse(message="small")
+            yield greet_pb2.GreetResponse(message="r" * 1024)
+
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.configure_method(
+        "/greet.v1.GreetService/Greet",
+        MethodConfig(max_unary_request_bytes=64, max_unary_response_bytes=256),
+    )
+    srv.configure_method(
+        "/greet.v1.GreetService/StreamGreet",
+        MethodConfig(max_stream_request_bytes=64, max_stream_response_bytes=64),
+    )
+    register_greet(srv, LimitedServicer())
+
+    port = await srv._start_http(port=0)
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            oversized_request = await client.post(
+                "/greet.v1.GreetService/Greet",
+                json={"name": "q" * 128},
+            )
+            oversized_response = await client.post(
+                "/greet.v1.GreetService/Greet",
+                json={"name": "ok"},
+            )
+
+            stream_request = await client.post(
+                "/greet.v1.GreetService/StreamGreet",
+                content=_pack_envelope(0, b'{"name":"' + b"q" * 128 + b'"}'),
+                headers={"Content-Type": "application/connect+json"},
+            )
+            stream_response = await client.post(
+                "/greet.v1.GreetService/StreamGreet",
+                content=_pack_envelope(0, b'{"name":"ok"}'),
+                headers={"Content-Type": "application/connect+json"},
+            )
+
+        assert oversized_request.json()["code"] == "resource_exhausted"
+        assert oversized_response.json()["code"] == "resource_exhausted"
+
+        request_frames = _read_frames(stream_request.content)
+        assert len(request_frames) == 1
+        assert json.loads(request_frames[0][1])["error"]["code"] == "resource_exhausted"
+
+        response_frames = _read_frames(stream_response.content)
+        assert len(response_frames) == 2
+        first = json.loads(response_frames[0][1])
+        assert first["message"] == "small"
+        end = json.loads(response_frames[1][1])
+        assert end["error"]["code"] == "resource_exhausted"
+    finally:
+        await srv._stop_http()
+        await srv.stop()
 
 
 # -- Connect+proto streaming. --
@@ -99,7 +171,7 @@ class StreamServicer:
 @pytest_asyncio.fixture
 async def stream_server():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(StreamServicer())
+    register_greet(srv, StreamServicer())
     yield srv
     await srv.stop()
 
@@ -144,7 +216,7 @@ async def test_stop_is_safe_to_call_twice():
         async def Greet(self, request, context):
             return greet_pb2.GreetResponse(message=f"hi {request.name}")
 
-    srv.register(S())
+    register_greet(srv, S())
     await srv.stop()
     # Calling stop again must not raise — keeps caller error handling simple.
     await srv.stop()
@@ -168,7 +240,7 @@ class EmptyStreamServicer:
 @pytest_asyncio.fixture
 async def empty_stream_server():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(EmptyStreamServicer())
+    register_greet(srv, EmptyStreamServicer())
     yield srv
     await srv.stop()
 
@@ -202,6 +274,7 @@ async def test_empty_stream_over_mcp_http(empty_stream_server):
                     "method": "tools/call",
                     "params": {"name": "GreetService.StreamGreet", "arguments": {"name": "x"}},
                 },
+                headers=_MCP_HEADERS,
             )
         result = r.json()["result"]
         assert "isError" not in result
@@ -223,7 +296,7 @@ class ImmediateErrServicer:
 @pytest_asyncio.fixture
 async def immediate_err_server():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(ImmediateErrServicer())
+    register_greet(srv, ImmediateErrServicer())
     yield srv
     await srv.stop()
 
@@ -264,9 +337,12 @@ async def test_stream_rejects_oversized_request_envelope(stream_server):
                 content=forged,
                 headers={"Content-Type": "application/connect+json"},
             )
-        assert r.status_code >= 400
-        body = r.json()
-        assert body["code"] == "invalid_argument"
+        assert r.status_code == 200
+        frames = _read_frames(r.content)
+        assert len(frames) == 1
+        assert frames[0][0] & 0x02
+        body = json.loads(frames[0][1])["error"]
+        assert body["code"] == "resource_exhausted"
     finally:
         await stream_server._stop_http()
 
@@ -286,7 +362,7 @@ class SlowStreamServicer:
 @pytest_asyncio.fixture
 async def slow_stream_server():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(SlowStreamServicer())
+    register_greet(srv, SlowStreamServicer())
     yield srv
     await srv.stop()
 
@@ -329,7 +405,7 @@ class SlowUnaryServicer:
 @pytest_asyncio.fixture
 async def slow_unary_server():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
-    srv.register(SlowUnaryServicer())
+    register_greet(srv, SlowUnaryServicer())
     yield srv
     await srv.stop()
 
@@ -347,7 +423,7 @@ async def test_mcp_http_connect_timeout(slow_unary_server):
                     "method": "tools/call",
                     "params": {"name": "GreetService.Greet", "arguments": {"name": "x"}},
                 },
-                headers={"Connect-Timeout-Ms": "100"},
+                headers={**_MCP_HEADERS, "Connect-Timeout-Ms": "100"},
                 timeout=5.0,
             )
         body = r.json()
@@ -470,6 +546,7 @@ async def test_connect_http_rejects_oversized_upstream_response():
 async def test_set_max_unary_request_bytes_lifts_cap(basic_server):
     """A server with the cap raised must accept a body that exceeds the default."""
     basic_server.set_max_unary_request_bytes(64 * 1024 * 1024)
+    basic_server.set_max_unary_response_bytes(64 * 1024 * 1024)
     port = await basic_server._start_http(port=0)
     try:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
@@ -500,6 +577,7 @@ async def test_mcp_http_rejects_oversized_body(stream_server):
                     "method": "tools/call",
                     "params": {"name": "GreetService.Greet", "arguments": huge_args},
                 },
+                headers=_MCP_HEADERS,
             )
         assert r.status_code >= 400
         body = r.json()

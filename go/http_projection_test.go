@@ -23,27 +23,27 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type httpProjectionRefactorServicer struct {
+type httpProjectionTestServicer struct {
 	greetpb.UnimplementedGreetServiceServer
 	greet  func(context.Context, *greetpb.GreetRequest) (*greetpb.GreetResponse, error)
 	stream func(*greetpb.StreamGreetRequest, grpc.ServerStreamingServer[greetpb.GreetResponse]) error
 }
 
-func (s *httpProjectionRefactorServicer) Greet(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+func (s *httpProjectionTestServicer) Greet(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 	if s.greet != nil {
 		return s.greet(ctx, req)
 	}
 	return &greetpb.GreetResponse{Message: "hello " + req.GetName()}, nil
 }
 
-func (s *httpProjectionRefactorServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
+func (s *httpProjectionTestServicer) StreamGreet(req *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 	if s.stream != nil {
 		return s.stream(req, stream)
 	}
 	return nil
 }
 
-func newHTTPProjectionRefactorHandler(
+func newHTTPProjectionHandler(
 	t *testing.T,
 	servicer greetpb.GreetServiceServer,
 	configure func(*Server),
@@ -55,8 +55,7 @@ func newHTTPProjectionRefactorHandler(
 		configure(srv)
 	}
 	greetpb.RegisterGreetServiceServer(srv, servicer)
-	handler, err := srv.HTTPHandler()
-	require.NoError(t, err)
+	handler := srv.HTTPHandler()
 	return handler
 }
 
@@ -87,7 +86,7 @@ func TestHTTPProjectionUnaryResponseLimitJSONAndProto(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+			handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 				greet: func(context.Context, *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 					return &greetpb.GreetResponse{Message: largeResponse}, nil
 				},
@@ -115,7 +114,7 @@ func TestHTTPProjectionUnaryResponseLimitJSONAndProto(t *testing.T) {
 
 func TestHTTPProjectionPerMethodUnaryResponseOverride(t *testing.T) {
 	largeResponse := strings.Repeat("x", 512)
-	handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 		greet: func(context.Context, *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 			return &greetpb.GreetResponse{Message: largeResponse}, nil
 		},
@@ -149,7 +148,7 @@ func TestHTTPProjectionStreamResponseLimitIsPerMessage(t *testing.T) {
 	capBytes := max(int64(len(firstBytes)), int64(len(secondBytes)))
 	require.Greater(t, int64(len(firstBytes)+len(secondBytes)), capBytes)
 
-	handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 		stream: func(_ *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 			if err := stream.Send(first); err != nil {
 				return err
@@ -184,7 +183,7 @@ func TestHTTPProjectionStreamRejectsOversizedIndividualMessage(t *testing.T) {
 	var sendCode codes.Code
 	thirdMessageReached := false
 
-	handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 		stream: func(_ *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 			if err := stream.Send(small); err != nil {
 				return err
@@ -223,7 +222,7 @@ func TestHTTPProjectionStreamRejectsOversizedIndividualMessage(t *testing.T) {
 func TestHTTPProjectionPerMethodStreamLimitOverrides(t *testing.T) {
 	name := strings.Repeat("request", 32)
 	message := strings.Repeat("response", 32)
-	handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 		stream: func(req *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 			assert.Equal(t, name, req.GetName())
 			return stream.Send(&greetpb.GreetResponse{Message: message})
@@ -266,7 +265,7 @@ func TestHTTPProjectionStreamingSendHeaderFlushesImmediately(t *testing.T) {
 			close(release)
 		}
 	}()
-	handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 		stream: func(_ *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 			if err := stream.SendHeader(metadata.Pairs("x-early-header", "ready")); err != nil {
 				return err
@@ -320,7 +319,7 @@ func TestHTTPProjectionStreamingSendHeaderFlushesImmediately(t *testing.T) {
 
 func TestHTTPProjectionBoundsErrorControlPayloads(t *testing.T) {
 	t.Run("unary", func(t *testing.T) {
-		handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+		handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 			greet: func(context.Context, *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 				return nil, status.Error(codes.Internal, strings.Repeat("x", 4096))
 			},
@@ -339,7 +338,7 @@ func TestHTTPProjectionBoundsErrorControlPayloads(t *testing.T) {
 	})
 
 	t.Run("stream control envelope is independent and bounded", func(t *testing.T) {
-		handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+		handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 			stream: func(*greetpb.StreamGreetRequest, grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
 				return status.Error(codes.Internal, strings.Repeat("x", maxConnectControlEnvelope+1024))
 			},
@@ -361,7 +360,7 @@ func TestHTTPProjectionBoundsErrorControlPayloads(t *testing.T) {
 
 func TestHTTPProjectionInboundMetadataIsFiltered(t *testing.T) {
 	captured := make(chan metadata.MD, 1)
-	handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 		greet: func(ctx context.Context, _ *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 			md, _ := metadata.FromIncomingContext(ctx)
 			captured <- md.Copy()
@@ -373,6 +372,7 @@ func TestHTTPProjectionInboundMetadataIsFiltered(t *testing.T) {
 		srv.UseHTTPMetadataMapper(func(r *http.Request) metadata.MD {
 			return metadata.MD{
 				"x-request-id":                 r.Header.Values("X-Request-Id"),
+				"x-empty":                      {""},
 				"trace-bin":                    {"AP8", "YWJjZA=="},
 				"authorization":                r.Header.Values("Authorization"),
 				"x-tenant":                     r.Header.Values("X-Tenant"),
@@ -403,6 +403,7 @@ func TestHTTPProjectionInboundMetadataIsFiltered(t *testing.T) {
 
 	md := <-captured
 	assert.Equal(t, []string{"request-123"}, md.Get("x-request-id"))
+	assert.Equal(t, []string{""}, md.Get("x-empty"))
 	assert.Equal(t, []string{string([]byte{0, 0xff}), "abcd"}, md.Get("trace-bin"))
 	assert.Equal(t, []string{"trusted-tenant"}, md.Get("x-tenant"))
 	assert.Equal(t, []string{"trusted-principal"}, md.Get("invariant-internal-principal"))
@@ -412,7 +413,7 @@ func TestHTTPProjectionInboundMetadataIsFiltered(t *testing.T) {
 }
 
 func TestHTTPProjectionMapsUnaryGRPCHeadersAndTrailers(t *testing.T) {
-	handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 		greet: func(ctx context.Context, _ *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 			if err := grpc.SetHeader(ctx, metadata.Pairs(
 				"x-projection-header", "leading",
@@ -447,10 +448,9 @@ func TestHTTPProjectionMapsUnaryGRPCHeadersAndTrailers(t *testing.T) {
 }
 
 func TestHTTPProjectionRejectsLateMetadataMapperChange(t *testing.T) {
-	server := nativeRefactorServer(t)
-	greetpb.RegisterGreetServiceServer(server, &httpProjectionRefactorServicer{})
-	_, err := server.HTTPHandler()
-	require.NoError(t, err)
+	server := nativeTestServer(t)
+	greetpb.RegisterGreetServiceServer(server, &httpProjectionTestServicer{})
+	server.HTTPHandler()
 
 	assert.PanicsWithValue(t,
 		"invariant: HTTP metadata mapper cannot be changed after serving begins",
@@ -465,7 +465,7 @@ func TestHTTPProjectionRichStatusDetailsRoundTrip(t *testing.T) {
 	richStatus, err := status.New(codes.FailedPrecondition, "cannot greet").WithDetails(detail)
 	require.NoError(t, err)
 
-	handler := newHTTPProjectionRefactorHandler(t, &httpProjectionRefactorServicer{
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
 		greet: func(context.Context, *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
 			return nil, richStatus.Err()
 		},
