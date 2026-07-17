@@ -111,6 +111,75 @@ func TestSchemaAndIPCRoundTrip(t *testing.T) {
 	require.Contains(t, diagnostic(t, closedDiagnostics, "state").GetMessage(), "closed value set")
 }
 
+func TestSemanticRefinementSchema(t *testing.T) {
+	dataset := semanticDataset()
+	schema, diagnostics, err := invariantarrow.Schema(dataset)
+	require.NoError(t, err)
+
+	decimal, ok := fieldByName(t, schema, "amount").Type.(*arrowlib.Decimal128Type)
+	require.True(t, ok)
+	require.EqualValues(t, 18, decimal.Precision)
+	require.EqualValues(t, 4, decimal.Scale)
+
+	uuid, ok := fieldByName(t, schema, "record_id").Type.(*extensions.UUIDType)
+	require.True(t, ok)
+	require.Equal(t, "arrow.uuid", uuid.ExtensionName())
+	require.True(t, arrowlib.TypeEqual(&arrowlib.FixedSizeBinaryType{ByteWidth: 16}, uuid.StorageType()))
+
+	fixed, ok := fieldByName(t, schema, "digest").Type.(*arrowlib.FixedSizeBinaryType)
+	require.True(t, ok)
+	require.Equal(t, 24, fixed.ByteWidth)
+
+	for _, path := range []string{"amount", "record_id"} {
+		require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED, diagnostic(t, diagnostics, path).GetCompatibility())
+	}
+	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS, diagnostic(t, diagnostics, "digest").GetCompatibility())
+
+	var encoded bytes.Buffer
+	require.NoError(t, invariantarrow.WriteIPC(&encoded, schema))
+	reader, err := ipc.NewReader(bytes.NewReader(encoded.Bytes()))
+	require.NoError(t, err)
+	defer reader.Release()
+	require.True(t, arrowlib.TypeEqual(decimal, fieldByName(t, reader.Schema(), "amount").Type))
+	require.True(t, arrowlib.TypeEqual(uuid, fieldByName(t, reader.Schema(), "record_id").Type))
+	require.True(t, arrowlib.TypeEqual(fixed, fieldByName(t, reader.Schema(), "digest").Type))
+}
+
+func semanticDataset() *datav1.DatasetSchema {
+	return &datav1.DatasetSchema{
+		Name:          "semantic_record",
+		SourceMessage: "example.SemanticRecord",
+		Fields: []*datav1.Field{
+			{
+				Name:     "amount",
+				StableId: 1,
+				Presence: datav1.Presence_PRESENCE_EXPLICIT,
+				Nullable: true,
+				Type: &datav1.DataType{Kind: &datav1.DataType_Decimal{Decimal: &datav1.DecimalType{
+					Precision: 18,
+					Scale:     4,
+				}}},
+			},
+			{
+				Name:     "record_id",
+				StableId: 2,
+				Presence: datav1.Presence_PRESENCE_EXPLICIT,
+				Nullable: true,
+				Type:     &datav1.DataType{Kind: &datav1.DataType_Uuid{Uuid: &datav1.UuidType{}}},
+			},
+			{
+				Name:     "digest",
+				StableId: 3,
+				Presence: datav1.Presence_PRESENCE_EXPLICIT,
+				Nullable: true,
+				Type: &datav1.DataType{Kind: &datav1.DataType_FixedBytes{FixedBytes: &datav1.FixedBytesType{
+					ByteLength: 24,
+				}}},
+			},
+		},
+	}
+}
+
 func fieldByName(t *testing.T, schema *arrowlib.Schema, name string) arrowlib.Field {
 	t.Helper()
 	fields, ok := schema.FieldsByName(name)

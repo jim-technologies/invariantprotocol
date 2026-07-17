@@ -171,6 +171,8 @@ func implicitDefault(dataType *datav1.DataType, path string) (any, error) {
 			return nil, fmt.Errorf("iceberg: implicit protobuf enum field %q has no declared values", path)
 		}
 		return float64(kind.Enum.GetValues()[0].GetNumber()), nil
+	case *datav1.DataType_Decimal, *datav1.DataType_Uuid, *datav1.DataType_FixedBytes:
+		return nil, fmt.Errorf("iceberg: implicit protobuf field %q has a refined logical type without a valid implicit value; use explicit presence", path)
 	default:
 		return nil, fmt.Errorf("iceberg: implicit protobuf field %q is not a scalar or enum", path)
 	}
@@ -258,9 +260,52 @@ func mapType(dataType *datav1.DataType, path string) (iceberglib.Type, []*datav1
 				"protobuf %s is encoded as RFC 8259 JSON text in an Iceberg string; %s",
 				kind.Json.GetKind(), jsonRangeReduction(kind.Json.GetKind()),
 			), nil
+	case *datav1.DataType_Decimal:
+		precision, scale, err := decimalParameters(kind.Decimal)
+		if err != nil {
+			return nil, nil, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", fmt.Errorf("iceberg: field %q: %w", path, err)
+		}
+		return iceberglib.DecimalTypeOf(precision, scale), nil,
+			datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+			fmt.Sprintf("canonical decimal text is decoded into Iceberg decimal(%d, %d); precision and scale are preserved but the physical representation changes", precision, scale), nil
+	case *datav1.DataType_Uuid:
+		if kind.Uuid == nil {
+			return nil, nil, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", fmt.Errorf("iceberg: field %q has an invalid UUID logical type", path)
+		}
+		return iceberglib.PrimitiveTypes.UUID, nil,
+			datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+			"canonical UUID text is decoded into Iceberg uuid", nil
+	case *datav1.DataType_FixedBytes:
+		width, err := fixedByteWidth(kind.FixedBytes)
+		if err != nil {
+			return nil, nil, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", fmt.Errorf("iceberg: field %q: %w", path, err)
+		}
+		return iceberglib.FixedTypeOf(width), nil,
+			datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS,
+			fmt.Sprintf("exact-width protobuf bytes map losslessly to Iceberg fixed[%d]", width), nil
 	default:
 		return nil, nil, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", fmt.Errorf("iceberg: field %q has an unspecified logical type", path)
 	}
+}
+
+func decimalParameters(decimal *datav1.DecimalType) (int, int, error) {
+	if decimal == nil || decimal.GetPrecision() == 0 || decimal.GetPrecision() > 38 {
+		return 0, 0, errors.New("decimal precision must be between 1 and 38")
+	}
+	if decimal.GetScale() > decimal.GetPrecision() {
+		return 0, 0, errors.New("decimal scale must not exceed precision")
+	}
+	return int(decimal.GetPrecision()), int(decimal.GetScale()), nil
+}
+
+func fixedByteWidth(fixed *datav1.FixedBytesType) (int, error) {
+	if fixed == nil || fixed.GetByteLength() == 0 {
+		return 0, errors.New("fixed byte length must be positive")
+	}
+	if fixed.GetByteLength() > math.MaxInt32 {
+		return 0, fmt.Errorf("fixed byte length %d exceeds Iceberg's maximum of %d", fixed.GetByteLength(), int64(math.MaxInt32))
+	}
+	return int(fixed.GetByteLength()), nil
 }
 
 func jsonRangeReduction(kind datav1.JsonKind) string {

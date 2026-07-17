@@ -2,7 +2,7 @@ version: v2
 plugins:
   - local: ../node_modules/.bin/protoc-gen-es
     out: ../typescript/src/gen
-    opt: target=ts
+    opt: target=ts,import_extension=.js
 inputs:
   # Pin the BSR commit so rich gRPC status bindings are reproducible and do
   # not change merely because googleapis moves its main label.

@@ -6,7 +6,7 @@ and target renderers derive Arrow, Parquet, Iceberg, or PostgreSQL schemas from
 that bundle.
 
 ```text
-.proto + source comments
+.proto + portable data annotations + source comments
           |
           v
 descriptor.binpb
@@ -44,8 +44,9 @@ allocated deterministically. Later compiles use the previous bundle to:
 - reject reuse of a retired protobuf numeric path; and
 - keep list elements and map keys/values globally unique.
 
-Evolution validation also rejects changes to presence, declared defaults, or
-oneof membership for an existing numeric path. Enum evolution is additive:
+Evolution validation also rejects changes to presence, declared defaults,
+oneof membership, or a portable logical refinement for an existing numeric
+path. Enum evolution is additive:
 existing name/number pairs must remain present. To rename an enum value, retain
 the old name as an alias instead of removing or renumbering it.
 
@@ -64,25 +65,92 @@ use the emitted Arrow IPC artifact as evolution state.
 
 Not every protobuf message is a durable row. RPC requests, responses, helper
 messages, and recursive trees should not silently become tables. Compilation
-therefore requires explicit fully-qualified root message names. This selection
-is build configuration, not another type definition. Once a bundle has been
-committed, its root set is append-only: new roots may be added, but omitting a
-previous root fails compilation instead of silently discarding that dataset's
-identity and tombstone history.
+therefore discovers only messages explicitly marked as dataset roots:
 
-Dataset and field storage names are deterministic snake_case projections of
-protobuf names. Compilation rejects an empty projected name or a collision
-after that lossy normalization, both across selected datasets and in every
-reachable nested struct, rather than emitting a bundle that target renderers
-cannot interpret consistently.
+```proto
+import "invariant/data/v1/annotations.proto";
 
-Custom protobuf dataset/column options are intentionally not published yet.
-Public custom options are extensions, and Protobuf's guidance is to obtain a
-globally registered extension number for a public declaration. Invariant will
-not ship a temporary ad-hoc number that could collide in a downstream
-descriptor set. Inferable
-logical schemas work without annotations; physical policies remain downstream
-until a registered annotation surface is justified.
+message LedgerEvent {
+  option (invariant.data.v1.dataset) = {};
+
+  optional string event_id = 1 [
+    (invariant.data.v1.field) = { uuid: {} }
+  ];
+  optional string amount = 2 [(invariant.data.v1.field) = {
+    decimal: {
+      precision: 18
+      scale: 4
+    }
+  }];
+  optional bytes checksum = 3 [(invariant.data.v1.field) = {
+    fixed_bytes: { byte_length: 32 }
+  }];
+}
+```
+
+Omit `--message` for normal compilation. Repeated
+`--message fully.qualified.Name` flags remain an explicit selection mechanism
+for one-off or controlled builds, and take precedence when supplied; they are
+not a second schema language. Once a bundle has been committed, its root set is
+append-only: new roots may be added, but omitting a previous root fails
+compilation instead of silently discarding that dataset's identity and
+tombstone history. A root-message rename cannot be inferred safely; retain the
+old message/root while adding the new one, or start a distinct bundle.
+
+Discovery covers the complete supplied `FileDescriptorSet`, including imported
+files. An annotation is therefore graph-wide intent: an annotated dependency is
+also selected. When combining independently governed descriptor graphs, pass
+explicit `--message` roots if that is not the desired bundle boundary.
+
+Dataset and field storage names begin as deterministic snake_case projections
+of protobuf names. Subsequent compiles retain the committed names by numeric
+identity, so a source field rename does not silently rename a physical column.
+Compilation rejects an empty name or a collision after normalization, both
+across selected datasets and in every reachable nested struct.
+
+Invariant repository policy assigns `51974` from Protobuf's
+organization-internal range to the two aggregate data options on their
+respective `MessageOptions` and `FieldOptions` extension spaces. It is not
+globally registered or guaranteed collision-free outside the supplied
+descriptor graph. The controlled, Git-based distribution model makes that a
+practical tradeoff, and one aggregate per scope avoids consuming a new number
+for every future portable refinement. The compiler rejects a conflicting
+declaration visible in the input `FileDescriptorSet`. Consumers merging
+independently governed descriptor sets should treat the number as assigned to
+Invariant.
+
+Field options express only semantics that every supported target can carry:
+
+- `decimal`: `string` carrier, precision 1–38, scale no greater than precision;
+- `uuid`: `string` carrier containing canonical UUID text; and
+- `fixed_bytes`: `bytes` carrier with a non-zero width no greater than
+  2,147,483,647.
+
+A refined singular field must have explicit or oneof presence and cannot have
+a declared protobuf default. Otherwise protobuf's implicit empty string or
+bytes value would become an invalid value in the refined domain. A repeated
+refined field is valid and applies the refinement per element. Maps are not
+refined.
+
+The annotation source is distributed from Git with the runtime packages. Pin
+the same repository revision and expose its `proto/` directory as a local Buf
+workspace/module dependency or `protoc -I` import root. No protobuf registry is
+required.
+
+## Moving to SchemaBundle v2
+
+IR and mapping version 2 add portable refinements and stable storage-name
+retention. Version 1 bundles and readers are rejected instead of being guessed
+forward. With no external v1 consumers, regenerate the committed baseline once
+with the v2 compiler.
+
+Before removing explicit `--message` flags, annotate every existing root.
+Explicit names replace annotation discovery when supplied; the two sets are not
+unioned. Removing a committed root annotation then fails the append-only root
+check. Adding, removing, or changing a field refinement on an active numeric
+path is a logical-shape change and requires a new protobuf field number. An
+existing root can be renamed only by retaining the old message/root while
+adding the new one, or by starting a distinct bundle.
 
 ## Canonical mapping rules
 
@@ -100,12 +168,15 @@ unknown future values and avoiding data changes when a symbol is renamed.
 | `float`, `double` | native 32/64-bit float | `float`, `double` | `real`, `double precision` |
 | `bool`, `string`, `bytes` | native equivalents | native equivalents | `boolean`, `text`, `bytea` |
 | enum | `int32` plus enum metadata | `int` | `integer` |
-| nested message | struct/group | struct | `jsonb` in v1 |
-| repeated field | list | list | `jsonb` in v1 |
-| map | typed map | typed map | `jsonb` in v1 |
+| nested message | struct/group | struct | `jsonb` |
+| repeated field | list | list | `jsonb` |
+| map | typed map | typed map | `jsonb` |
 | `Timestamp` | UTC nanoseconds | `timestamptz_ns` | `timestamptz` (microseconds) |
 | `Duration` | duration/int64 nanoseconds | long nanoseconds | bigint nanoseconds |
 | `Any`, `Struct`, `Value`, `ListValue` | JSON representation | string JSON | `jsonb` |
+| annotated decimal text | `decimal128` / `DECIMAL` | `decimal` | `numeric` |
+| annotated canonical UUID text | `arrow.uuid` / `UUID` | `uuid` | `uuid` |
+| annotated exact-width bytes | fixed-size binary / `FIXED_LEN_BYTE_ARRAY` | `fixed` | `bytea` plus length check |
 
 Renderers return a mapping diagnostic for every logical node. Widening, range
 reduction, precision reduction, representation changes, and unsupported
@@ -140,6 +211,15 @@ Presence is compiled from native descriptors rather than guessed from syntax:
 - oneof members are nullable and retain their oneof group;
 - repeated/map containers are non-null with empty defaults; and
 - list elements and map keys/values are non-null.
+
+Decimal values use one canonical fixed-scale spelling: optional `-`, an integer
+of `0` or a non-zero digit followed by digits, and—when scale is non-zero—a
+decimal point followed by exactly `scale` digits. Leading `+`, exponent form,
+leading zeroes, whitespace, omitted or truncated fractional digits, and
+negative zero are rejected. UUID values use lowercase hyphenated `8-4-4-4-12`
+text. Fixed bytes must have exactly the annotated width. The Python PyArrow
+bridge enforces these rules while converting records; other data writers must
+enforce the same logical domain at their boundary.
 
 The Iceberg renderer records both `initial-default` and `write-default` for
 implicit scalar/enum fields and for empty repeated/map containers. Those
@@ -194,19 +274,21 @@ that SQL directly through its external-schema data source, then own inspection,
 diffing, migration generation, and application. HCL is not an intermediate
 format and is not another source of truth.
 
-SQL has no portable field-identity mechanism. Although the bundle retains a
-protobuf field rename by numeric identity, a generated SQL identifier change
-still looks like a drop/add to Atlas. Treat the output as desired state and
-review or annotate the downstream migration when preserving an existing column
-through a rename. The same caveat applies to renamed fields embedded inside a
-`jsonb` value.
+SQL has no portable field-identity mechanism, so the compiler retains the
+committed storage name when a protobuf field is renamed under the same numeric
+identity. Treat the output as desired state and review Atlas's diff. Renames
+inside values represented as `jsonb` remain application-level data-evolution
+concerns.
 
 The SQL renderer quotes identifiers, preserves comments, stores complex values
-as `jsonb` in v1, and adds an at-most-one check for each top-level oneof. It does
-not invent primary keys, foreign keys, uniqueness, indexes, normalization, or
+as `jsonb`, adds an at-most-one check for each top-level oneof, and checks
+annotated fixed-byte lengths. Native decimal, UUID, and checked `bytea`
+mappings apply to top-level singular columns; refinements inside repeated or
+nested containers remain part of their `jsonb` representation. It does not
+invent primary keys, foreign keys, uniqueness, indexes, normalization, or
 partitioning.
 
-## Deliberate v1 boundary
+## Deliberate schema boundary
 
 This release compiles and renders **schemas**, and Python can convert matching
 generated protobuf messages into a `pyarrow.Table`. Invariant does not choose

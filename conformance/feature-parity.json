@@ -288,10 +288,15 @@
     {
       "id": "schema_compiler_and_renderers",
       "kind": "build_tool",
-      "description": "Compile descriptor roots into SchemaBundle and render Arrow, Parquet, Iceberg, and PostgreSQL schemas.",
+      "description": "Discover annotated dataset roots, compile portable decimal/UUID/fixed-byte refinements into SchemaBundle, and render Arrow, Parquet, Iceberg, and PostgreSQL schemas.",
       "availability": "One repository CLI consumes language-neutral protobuf artifacts; duplicating the compiler per runtime is forbidden.",
       "consumers": ["go", "python", "rust", "typescript"],
-      "implementation": ["go/cmd/invariant-schema", "go/data"]
+      "implementation": [
+        "proto/invariant/data/v1/annotations.proto",
+        "proto/invariant/data/v1/schema.proto",
+        "go/cmd/invariant-schema",
+        "go/data"
+      ]
     },
     {
       "id": "pyarrow_record_bridge",

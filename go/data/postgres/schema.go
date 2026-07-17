@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"unicode/utf8"
 
@@ -23,6 +24,7 @@ type column struct {
 	defaultSQL  string
 	notNull     bool
 	oneof       string
+	fixedBytes  int
 }
 
 // DDL returns complete, semicolon-terminated PostgreSQL DDL for one dataset.
@@ -63,13 +65,22 @@ func DDL(dataset *datav1.DatasetSchema) (string, []*datav1.MappingDiagnostic, er
 		if err != nil {
 			return "", diagnostics, fmt.Errorf("postgres: field %q: %w", field.GetName(), err)
 		}
+		defaultSQL, err := defaultExpression(field)
+		if err != nil {
+			return "", diagnostics, fmt.Errorf("postgres: field %q: %w", field.GetName(), err)
+		}
+		fixedBytes := 0
+		if fixed := field.GetType().GetFixedBytes(); fixed != nil {
+			fixedBytes = int(fixed.GetByteLength())
+		}
 		columns = append(columns, column{
 			name:        name,
 			description: field.GetDescription(),
 			sqlType:     typeName,
-			defaultSQL:  defaultExpression(field),
+			defaultSQL:  defaultSQL,
 			notNull:     !field.GetNullable(),
 			oneof:       field.GetOneof(),
+			fixedBytes:  fixedBytes,
 		})
 		diagnostics = append(diagnostics, &datav1.MappingDiagnostic{
 			FieldPath:     field.GetName(),
@@ -94,6 +105,14 @@ func DDL(dataset *datav1.DatasetSchema) (string, []*datav1.MappingDiagnostic, er
 		}
 		if col.defaultSQL != "" {
 			definition += " DEFAULT " + col.defaultSQL
+		}
+		if col.fixedBytes > 0 {
+			constraint, err := identifier(tableName + "_" + col.name + "_fixed_bytes_check")
+			if err != nil {
+				return "", diagnostics, fmt.Errorf("postgres: field %q fixed-bytes constraint: %w", col.name, err)
+			}
+			definition += fmt.Sprintf(" CONSTRAINT %s CHECK (octet_length(%s) = %d)",
+				quoteIdentifier(constraint), quoteIdentifier(col.name), col.fixedBytes)
 		}
 		definitions = append(definitions, definition)
 	}
@@ -156,9 +175,50 @@ func mapType(dataType *datav1.DataType) (string, datav1.MappingCompatibility, st
 				"protobuf %s is encoded with protobuf JSON semantics in PostgreSQL JSONB, which cannot represent the protobuf string value U+0000; %s",
 				kind.Json.GetKind(), jsonRangeReduction(kind.Json.GetKind()),
 			), nil
+	case *datav1.DataType_Decimal:
+		precision, scale, err := decimalParameters(kind.Decimal)
+		if err != nil {
+			return "", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", err
+		}
+		return fmt.Sprintf("NUMERIC(%d,%d)", precision, scale),
+			datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+			fmt.Sprintf("canonical decimal text is decoded into PostgreSQL NUMERIC(%d,%d); precision and scale are preserved but the representation changes", precision, scale), nil
+	case *datav1.DataType_Uuid:
+		if kind.Uuid == nil {
+			return "", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", errors.New("invalid UUID logical type")
+		}
+		return "UUID", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+			"canonical UUID text is decoded into PostgreSQL UUID", nil
+	case *datav1.DataType_FixedBytes:
+		width, err := fixedByteWidth(kind.FixedBytes)
+		if err != nil {
+			return "", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", err
+		}
+		return "BYTEA", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS,
+			fmt.Sprintf("exact-width protobuf bytes map losslessly to PostgreSQL BYTEA with an octet_length check of %d", width), nil
 	default:
 		return "", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", errors.New("unspecified logical type")
 	}
+}
+
+func decimalParameters(decimal *datav1.DecimalType) (uint32, uint32, error) {
+	if decimal == nil || decimal.GetPrecision() == 0 || decimal.GetPrecision() > 38 {
+		return 0, 0, errors.New("decimal precision must be between 1 and 38")
+	}
+	if decimal.GetScale() > decimal.GetPrecision() {
+		return 0, 0, errors.New("decimal scale must not exceed precision")
+	}
+	return decimal.GetPrecision(), decimal.GetScale(), nil
+}
+
+func fixedByteWidth(fixed *datav1.FixedBytesType) (int, error) {
+	if fixed == nil || fixed.GetByteLength() == 0 {
+		return 0, errors.New("fixed byte length must be positive")
+	}
+	if fixed.GetByteLength() > math.MaxInt32 {
+		return 0, fmt.Errorf("fixed byte length %d exceeds PostgreSQL renderer's maximum of %d", fixed.GetByteLength(), int64(math.MaxInt32))
+	}
+	return int(fixed.GetByteLength()), nil
 }
 
 func jsonRangeReduction(kind datav1.JsonKind) string {
@@ -209,16 +269,19 @@ func mapPrimitive(kind datav1.PrimitiveKind) (string, datav1.MappingCompatibilit
 	}
 }
 
-func defaultExpression(field *datav1.Field) string {
+func defaultExpression(field *datav1.Field) (string, error) {
 	switch field.GetPresence() {
 	case datav1.Presence_PRESENCE_REPEATED:
-		return "'[]'::jsonb"
+		return "'[]'::jsonb", nil
 	case datav1.Presence_PRESENCE_MAP:
-		return "'{}'::jsonb"
+		return "'{}'::jsonb", nil
 	case datav1.Presence_PRESENCE_IMPLICIT:
-		return implicitDefault(field.GetType())
+		if field.GetType().GetDecimal() != nil || field.GetType().GetUuid() != nil || field.GetType().GetFixedBytes() != nil {
+			return "", errors.New("implicit protobuf presence has no valid default for a refined logical type; use explicit presence")
+		}
+		return implicitDefault(field.GetType()), nil
 	default:
-		return ""
+		return "", nil
 	}
 }
 

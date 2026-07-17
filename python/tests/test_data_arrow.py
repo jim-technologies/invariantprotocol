@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
 
 import data_pb2
 import data_proto2_pb2
@@ -310,6 +312,178 @@ def test_arrow_table_reports_protojson_range_failures_with_source_context() -> N
         match=r"protobuf JSON field 'opaque'.*data\.v1\.CanonicalRecord\.opaque.*type URL to resolve",
     ):
         arrow_table(dataset, [unresolved])
+
+
+def test_refined_types_map_and_convert_without_coercion() -> None:
+    dataset, record = _refined_record_fixture()
+
+    schema, diagnostics = arrow_schema(dataset)
+
+    assert schema.field("amount").type == pa.decimal128(6, 2)
+    assert schema.field("record_id").type == pa.uuid()
+    assert schema.field("checksum").type == pa.binary(4)
+    assert pa.types.is_fixed_size_binary(schema.field("checksum").type)
+    assert all(field.nullable for field in schema)
+    compatibility = {item.field_path: item.compatibility for item in diagnostics}
+    assert compatibility == {
+        "amount": schema_pb2.MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+        "record_id": schema_pb2.MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+        "checksum": schema_pb2.MAPPING_COMPATIBILITY_LOSSLESS,
+    }
+
+    identifier = UUID("550e8400-e29b-41d4-a716-446655440000")
+    table, _ = arrow_table(
+        dataset,
+        [
+            record(amount="1234.50", record_id=str(identifier), checksum=b"\x00\x01\x02\x03"),
+            record(amount="-0.01", record_id="00000000-0000-0000-0000-000000000000", checksum=b"four"),
+            record(),
+        ],
+    )
+
+    assert table.column("amount").to_pylist() == [Decimal("1234.50"), Decimal("-0.01"), None]
+    assert table.column("record_id").to_pylist() == [identifier, UUID(int=0), None]
+    assert table.column("checksum").to_pylist() == [b"\x00\x01\x02\x03", b"four", None]
+
+
+def test_refined_types_reject_noncanonical_or_out_of_domain_values() -> None:
+    dataset, record = _refined_record_fixture()
+    valid_uuid = "550e8400-e29b-41d4-a716-446655440000"
+
+    for amount in [
+        "+1.00",
+        "01.00",
+        ".50",
+        "1",
+        "1.0",
+        "1.000",
+        "1e0",
+        " 1.00",
+        "-0.00",
+    ]:
+        with pytest.raises(ValueError, match=r"decimal field 'amount'.*(canonical|negative-zero)"):
+            arrow_table(dataset, [record(amount=amount, record_id=valid_uuid, checksum=b"four")])
+
+    with pytest.raises(ValueError, match="decimal field 'amount' exceeds precision 6"):
+        arrow_table(dataset, [record(amount="10000.00", record_id=valid_uuid, checksum=b"four")])
+
+    for identifier in [
+        "550E8400-E29B-41D4-A716-446655440000",
+        "550e8400e29b41d4a716446655440000",
+        "{550e8400-e29b-41d4-a716-446655440000}",
+        "not-a-uuid",
+    ]:
+        with pytest.raises(ValueError, match=r"UUID field 'record_id'.*canonical UUID"):
+            arrow_table(dataset, [record(amount="1.00", record_id=identifier, checksum=b"four")])
+
+    for checksum in [b"", b"abc", b"abcde"]:
+        with pytest.raises(ValueError, match=r"fixed-bytes field 'checksum'.*expected exactly 4 bytes"):
+            arrow_table(dataset, [record(amount="1.00", record_id=valid_uuid, checksum=checksum)])
+
+
+def test_refined_type_schemas_reject_invalid_parameters_and_carriers() -> None:
+    dataset, record = _refined_record_fixture()
+
+    invalid = schema_pb2.DatasetSchema()
+    invalid.CopyFrom(dataset)
+    invalid.fields[0].type.decimal.precision = 0
+    with pytest.raises(ValueError, match="precision must be between 1 and 38"):
+        arrow_schema(invalid)
+
+    invalid.CopyFrom(dataset)
+    invalid.fields[0].type.decimal.precision = 39
+    with pytest.raises(ValueError, match="precision must be between 1 and 38"):
+        arrow_schema(invalid)
+
+    invalid.CopyFrom(dataset)
+    invalid.fields[0].type.decimal.scale = 7
+    with pytest.raises(ValueError, match="scale must not exceed precision 6"):
+        arrow_schema(invalid)
+
+    invalid.CopyFrom(dataset)
+    invalid.fields[2].type.fixed_bytes.byte_length = 0
+    with pytest.raises(ValueError, match=r"length must be between 1 and 2147483647"):
+        arrow_schema(invalid)
+
+    invalid.CopyFrom(dataset)
+    invalid.fields[2].type.fixed_bytes.byte_length = 1 << 31
+    with pytest.raises(ValueError, match=r"length must be between 1 and 2147483647"):
+        arrow_schema(invalid)
+
+    invalid.CopyFrom(dataset)
+    invalid.fields[0].type.ClearField("decimal")
+    invalid.fields[0].type.fixed_bytes.byte_length = 4
+    with pytest.raises(ValueError, match="logical fixed_bytes requires a protobuf bytes carrier"):
+        arrow_table(invalid, [record(amount="1.00")])
+
+
+def _refined_record_fixture():
+    file_proto = descriptor_pb2.FileDescriptorProto(
+        name="refined_types.proto",
+        package="data.refined",
+        syntax="proto2",
+    )
+    message_proto = file_proto.message_type.add(name="RefinedRecord")
+    for name, number, field_type in [
+        ("amount", 1, descriptor_pb2.FieldDescriptorProto.TYPE_STRING),
+        ("record_id", 2, descriptor_pb2.FieldDescriptorProto.TYPE_STRING),
+        ("checksum", 3, descriptor_pb2.FieldDescriptorProto.TYPE_BYTES),
+    ]:
+        message_proto.field.add(
+            name=name,
+            number=number,
+            label=descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL,
+            type=field_type,
+        )
+
+    pool = descriptor_pool.DescriptorPool()  # ty: ignore[possibly-missing-implicit-call]
+    pool.Add(file_proto)
+    record_descriptor = pool.FindMessageTypeByName("data.refined.RefinedRecord")
+    record = message_factory.GetMessageClass(record_descriptor)
+    fields = [
+        schema_pb2.Field(
+            proto_full_name="data.refined.RefinedRecord.amount",
+            proto_number_path=[1],
+            name="amount",
+            stable_id=1,
+            presence=schema_pb2.PRESENCE_EXPLICIT,
+            nullable=True,
+            type=schema_pb2.DataType(decimal=schema_pb2.DecimalType(precision=6, scale=2)),
+            synthetic_role=schema_pb2.SYNTHETIC_ROLE_PROTO_FIELD,
+            json_name="amount",
+        ),
+        schema_pb2.Field(
+            proto_full_name="data.refined.RefinedRecord.record_id",
+            proto_number_path=[2],
+            name="record_id",
+            stable_id=2,
+            presence=schema_pb2.PRESENCE_EXPLICIT,
+            nullable=True,
+            type=schema_pb2.DataType(uuid=schema_pb2.UuidType()),
+            synthetic_role=schema_pb2.SYNTHETIC_ROLE_PROTO_FIELD,
+            json_name="recordId",
+        ),
+        schema_pb2.Field(
+            proto_full_name="data.refined.RefinedRecord.checksum",
+            proto_number_path=[3],
+            name="checksum",
+            stable_id=3,
+            presence=schema_pb2.PRESENCE_EXPLICIT,
+            nullable=True,
+            type=schema_pb2.DataType(fixed_bytes=schema_pb2.FixedBytesType(byte_length=4)),
+            synthetic_role=schema_pb2.SYNTHETIC_ROLE_PROTO_FIELD,
+            json_name="checksum",
+        ),
+    ]
+    return (
+        schema_pb2.DatasetSchema(
+            source_message="data.refined.RefinedRecord",
+            name="refined_record",
+            fields=fields,
+            last_field_id=3,
+        ),
+        record,
+    )
 
 
 def _metadata(owner: pa.Schema | pa.Field, key: str) -> str:

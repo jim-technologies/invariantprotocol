@@ -17,22 +17,26 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 const (
 	// IRVersion is the current SchemaBundle protobuf model version.
-	IRVersion uint32 = 1
+	IRVersion uint32 = 2
 
 	// MappingVersion is the current protobuf-to-logical-type mapping version.
-	MappingVersion uint32 = 1
+	MappingVersion uint32 = 2
 
 	maxStableID int32 = 2147483447
+
+	maxFixedBytesLength uint32 = 1<<31 - 1
 )
 
-// CompileDescriptorBytes compiles the explicitly selected protobuf messages
-// from a serialized FileDescriptorSet. Dataset roots are required: ordinary
-// RPC request and response messages are not implicitly storage datasets.
+// CompileDescriptorBytes compiles protobuf messages from a serialized
+// FileDescriptorSet. Explicit message names take precedence; when none are
+// supplied, messages marked with the dataset option are discovered. Ordinary
+// RPC request and response messages are never implicitly storage datasets.
 //
 // Pass the last committed bundle as previous when evolving a schema. Stable
 // field identities are retained by protobuf number path, and removed
@@ -42,22 +46,29 @@ func CompileDescriptorBytes(
 	messageNames []string,
 	previous *datav1.SchemaBundle,
 ) (*datav1.SchemaBundle, error) {
-	if len(messageNames) == 0 {
-		return nil, errors.New("compile descriptor: at least one dataset message is required")
-	}
-
 	var fds descriptorpb.FileDescriptorSet
 	if err := proto.Unmarshal(descriptor, &fds); err != nil {
 		return nil, fmt.Errorf("compile descriptor: unmarshal FileDescriptorSet: %w", err)
+	}
+	if err := validateAnnotationOptionNumbers(&fds); err != nil {
+		return nil, fmt.Errorf("compile descriptor: %w", err)
 	}
 	files, err := protodesc.NewFiles(&fds)
 	if err != nil {
 		return nil, fmt.Errorf("compile descriptor: resolve FileDescriptorSet: %w", err)
 	}
 
-	names := make([]string, 0, len(messageNames))
-	seenNames := make(map[string]struct{}, len(messageNames))
-	for _, rawName := range messageNames {
+	selectedNames := messageNames
+	if len(selectedNames) == 0 {
+		selectedNames, err = annotatedDatasetNames(files)
+		if err != nil {
+			return nil, fmt.Errorf("compile descriptor: discover datasets: %w", err)
+		}
+	}
+
+	names := make([]string, 0, len(selectedNames))
+	seenNames := make(map[string]struct{}, len(selectedNames))
+	for _, rawName := range selectedNames {
 		name := strings.TrimPrefix(strings.TrimSpace(rawName), ".")
 		if name == "" {
 			return nil, errors.New("compile descriptor: dataset message name must not be empty")
@@ -69,7 +80,7 @@ func CompileDescriptorBytes(
 		names = append(names, name)
 	}
 	if len(names) == 0 {
-		return nil, errors.New("compile descriptor: at least one dataset message is required")
+		return nil, errors.New("compile descriptor: at least one dataset message must be selected or annotated")
 	}
 	slices.Sort(names)
 
@@ -136,6 +147,133 @@ func CompileDescriptorBytes(
 	}, nil
 }
 
+func validateAnnotationOptionNumbers(files *descriptorpb.FileDescriptorSet) error {
+	const optionNumber int32 = 51974
+	type declaration struct {
+		name     string
+		typeName string
+	}
+	allowed := map[string]declaration{
+		".google.protobuf.MessageOptions": {
+			name: "invariant.data.v1.dataset", typeName: ".invariant.data.v1.DatasetOptions",
+		},
+		".google.protobuf.FieldOptions": {
+			name: "invariant.data.v1.field", typeName: ".invariant.data.v1.FieldOptions",
+		},
+	}
+
+	var visitExtensions func(string, []*descriptorpb.DescriptorProto, []*descriptorpb.FieldDescriptorProto) error
+	visitExtensions = func(scope string, messages []*descriptorpb.DescriptorProto, extensions []*descriptorpb.FieldDescriptorProto) error {
+		for _, extension := range extensions {
+			if extension == nil || extension.GetNumber() != optionNumber {
+				continue
+			}
+			expected, protected := allowed[extension.GetExtendee()]
+			if !protected {
+				continue
+			}
+			name := strings.TrimPrefix(scope+"."+extension.GetName(), ".")
+			if name != expected.name {
+				return fmt.Errorf(
+					"custom option number %d for %s is assigned to %q by Invariant but also declared by %q",
+					optionNumber, strings.TrimPrefix(extension.GetExtendee(), "."), expected.name, name,
+				)
+			}
+			if extension.GetType() != descriptorpb.FieldDescriptorProto_TYPE_MESSAGE ||
+				extension.GetTypeName() != expected.typeName ||
+				extension.GetLabel() != descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL {
+				return fmt.Errorf("invariant custom option %q has an unexpected declaration", expected.name)
+			}
+		}
+		for _, message := range messages {
+			if message == nil {
+				continue
+			}
+			messageScope := strings.TrimPrefix(scope+"."+message.GetName(), ".")
+			if err := visitExtensions(messageScope, message.GetNestedType(), message.GetExtension()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, file := range files.GetFile() {
+		if file == nil {
+			continue
+		}
+		if err := visitExtensions(file.GetPackage(), file.GetMessageType(), file.GetExtension()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func annotatedDatasetNames(files *protoregistry.Files) ([]string, error) {
+	var names []string
+	var discoveryErr error
+
+	var visitMessages func(protoreflect.MessageDescriptors)
+	visitMessages = func(messages protoreflect.MessageDescriptors) {
+		for i := range messages.Len() {
+			md := messages.Get(i)
+			annotated, err := hasDatasetOption(md)
+			if err != nil {
+				discoveryErr = fmt.Errorf("message %q: %w", md.FullName(), err)
+				return
+			}
+			if annotated {
+				names = append(names, string(md.FullName()))
+			}
+			visitMessages(md.Messages())
+			if discoveryErr != nil {
+				return
+			}
+		}
+	}
+
+	files.RangeFiles(func(file protoreflect.FileDescriptor) bool {
+		visitMessages(file.Messages())
+		return discoveryErr == nil
+	})
+	if discoveryErr != nil {
+		return nil, discoveryErr
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+func hasDatasetOption(md protoreflect.MessageDescriptor) (bool, error) {
+	options, ok := md.Options().(*descriptorpb.MessageOptions)
+	if !ok || options == nil || !proto.HasExtension(options, datav1.E_Dataset) {
+		return false, nil
+	}
+	value := proto.GetExtension(options, datav1.E_Dataset)
+	datasetOptions, ok := value.(*datav1.DatasetOptions)
+	if !ok || datasetOptions == nil {
+		return false, fmt.Errorf("dataset option has unexpected type %T", value)
+	}
+	if len(datasetOptions.ProtoReflect().GetUnknown()) != 0 {
+		return false, errors.New("dataset option contains fields unsupported by this compiler")
+	}
+	return true, nil
+}
+
+func dataFieldOptions(fd protoreflect.FieldDescriptor) (*datav1.FieldOptions, error) {
+	options, ok := fd.Options().(*descriptorpb.FieldOptions)
+	if !ok || options == nil || !proto.HasExtension(options, datav1.E_Field) {
+		return nil, nil
+	}
+	value := proto.GetExtension(options, datav1.E_Field)
+	fieldOptions, ok := value.(*datav1.FieldOptions)
+	if !ok || fieldOptions == nil {
+		return nil, fmt.Errorf("field option has unexpected type %T", value)
+	}
+	if len(fieldOptions.ProtoReflect().GetUnknown()) != 0 {
+		return nil, errors.New("field option contains fields unsupported by this compiler")
+	}
+	return fieldOptions, nil
+}
+
 // CompileMessage compiles one protobuf message descriptor into a logical
 // dataset schema. The previous schema, when supplied, must be the prior state
 // for the same fully-qualified protobuf message.
@@ -150,6 +288,12 @@ func CompileMessage(
 		return nil, fmt.Errorf("compile message %q: synthetic map entries are not datasets", md.FullName())
 	}
 	datasetName := storageName(string(md.FullName()))
+	if previous != nil {
+		datasetName = previous.GetName()
+		if datasetName == "" {
+			return nil, fmt.Errorf("compile message %q: previous dataset has an empty storage name", md.FullName())
+		}
+	}
 	if datasetName == "" {
 		return nil, fmt.Errorf(
 			"compile message %q: protobuf message name normalizes to an empty storage name",
@@ -423,7 +567,7 @@ func (c *datasetCompiler) compileProtoField(
 	field := &datav1.Field{
 		ProtoFullName:   string(fd.FullName()),
 		ProtoNumberPath: path,
-		Name:            storageName(string(fd.Name())),
+		Name:            c.storageFieldName(identity, string(fd.Name())),
 		StableId:        id,
 		Presence:        presence,
 		Nullable:        nullable,
@@ -437,13 +581,32 @@ func (c *datasetCompiler) compileProtoField(
 		field.ProtobufDefault = protodesc.ToFieldDescriptorProto(fd).GetDefaultValue()
 	}
 
+	options, err := dataFieldOptions(fd)
+	if err != nil {
+		return nil, fmt.Errorf("field %q: %w", fd.FullName(), err)
+	}
+	if options != nil && !fd.IsList() && !fd.IsMap() {
+		if presence != datav1.Presence_PRESENCE_EXPLICIT && presence != datav1.Presence_PRESENCE_ONEOF {
+			return nil, fmt.Errorf(
+				"field %q: a refined singular field must have explicit or oneof presence, got %s",
+				fd.FullName(), presence,
+			)
+		}
+		if fd.HasDefault() {
+			return nil, fmt.Errorf("field %q: a refined singular field must not declare a protobuf default", fd.FullName())
+		}
+	}
+
 	switch {
 	case fd.IsMap():
+		if options != nil {
+			return nil, fmt.Errorf("field %q: semantic type refinements are not supported on protobuf maps", fd.FullName())
+		}
 		field.Type, err = c.compileMapType(fd, path, identity, stack)
 	case fd.IsList():
-		field.Type, err = c.compileListType(fd, path, identity, stack)
+		field.Type, err = c.compileListType(fd, path, identity, stack, options)
 	default:
-		field.Type, err = c.compileValueType(fd, path, identity, stack)
+		field.Type, err = c.compileRefinedValueType(fd, path, identity, stack, options)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("field %q: %w", fd.FullName(), err)
@@ -462,12 +625,13 @@ func (c *datasetCompiler) compileSyntheticField(
 	identity string,
 	role datav1.SyntheticRole,
 	stack map[protoreflect.FullName]bool,
+	options *datav1.FieldOptions,
 ) (*datav1.Field, error) {
 	id, err := c.allocate(identity)
 	if err != nil {
 		return nil, err
 	}
-	typ, err := c.compileValueType(fd, path, identity, stack)
+	typ, err := c.compileRefinedValueType(fd, path, identity, stack, options)
 	if err != nil {
 		return nil, err
 	}
@@ -492,6 +656,7 @@ func (c *datasetCompiler) compileListType(
 	path []uint32,
 	identity string,
 	stack map[protoreflect.FullName]bool,
+	options *datav1.FieldOptions,
 ) (*datav1.DataType, error) {
 	elementIdentity := appendIdentity(identity, "list:element")
 	element, err := c.compileSyntheticField(
@@ -502,6 +667,7 @@ func (c *datasetCompiler) compileListType(
 		elementIdentity,
 		datav1.SyntheticRole_SYNTHETIC_ROLE_LIST_ELEMENT,
 		stack,
+		options,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list element: %w", err)
@@ -525,6 +691,7 @@ func (c *datasetCompiler) compileMapType(
 		appendIdentity(identity, "map:key"),
 		datav1.SyntheticRole_SYNTHETIC_ROLE_MAP_KEY,
 		stack,
+		nil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("map key: %w", err)
@@ -537,6 +704,7 @@ func (c *datasetCompiler) compileMapType(
 		appendIdentity(identity, "map:value"),
 		datav1.SyntheticRole_SYNTHETIC_ROLE_MAP_VALUE,
 		stack,
+		nil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("map value: %w", err)
@@ -544,6 +712,91 @@ func (c *datasetCompiler) compileMapType(
 	return &datav1.DataType{
 		Kind: &datav1.DataType_Map{Map: &datav1.MapType{Key: key, Value: value}},
 	}, nil
+}
+
+func (c *datasetCompiler) compileRefinedValueType(
+	fd protoreflect.FieldDescriptor,
+	path []uint32,
+	identity string,
+	stack map[protoreflect.FullName]bool,
+	options *datav1.FieldOptions,
+) (*datav1.DataType, error) {
+	if options == nil {
+		return c.compileValueType(fd, path, identity, stack)
+	}
+
+	switch semanticType := options.GetSemanticType().(type) {
+	case *datav1.FieldOptions_Decimal:
+		if fd.Kind() != protoreflect.StringKind {
+			return nil, fmt.Errorf("decimal refinement requires a protobuf string carrier, got %s", fd.Kind())
+		}
+		decimal := semanticType.Decimal
+		if decimal == nil {
+			return nil, errors.New("decimal refinement is missing its value")
+		}
+		if decimal.GetPrecision() < 1 || decimal.GetPrecision() > 38 {
+			return nil, fmt.Errorf("decimal precision must be between 1 and 38, got %d", decimal.GetPrecision())
+		}
+		if decimal.GetScale() > decimal.GetPrecision() {
+			return nil, fmt.Errorf(
+				"decimal scale %d exceeds precision %d",
+				decimal.GetScale(), decimal.GetPrecision(),
+			)
+		}
+		return &datav1.DataType{
+			Kind: &datav1.DataType_Decimal{Decimal: &datav1.DecimalType{
+				Precision: decimal.GetPrecision(),
+				Scale:     decimal.GetScale(),
+			}},
+		}, nil
+
+	case *datav1.FieldOptions_Uuid:
+		if fd.Kind() != protoreflect.StringKind {
+			return nil, fmt.Errorf("uuid refinement requires a protobuf string carrier, got %s", fd.Kind())
+		}
+		if semanticType.Uuid == nil {
+			return nil, errors.New("uuid refinement is missing its value")
+		}
+		return &datav1.DataType{
+			Kind: &datav1.DataType_Uuid{Uuid: &datav1.UuidType{}},
+		}, nil
+
+	case *datav1.FieldOptions_FixedBytes:
+		if fd.Kind() != protoreflect.BytesKind {
+			return nil, fmt.Errorf("fixed_bytes refinement requires a protobuf bytes carrier, got %s", fd.Kind())
+		}
+		fixedBytes := semanticType.FixedBytes
+		if fixedBytes == nil {
+			return nil, errors.New("fixed_bytes refinement is missing its value")
+		}
+		if fixedBytes.GetByteLength() == 0 {
+			return nil, errors.New("fixed_bytes byte_length must be greater than zero")
+		}
+		if fixedBytes.GetByteLength() > maxFixedBytesLength {
+			return nil, fmt.Errorf(
+				"fixed_bytes byte_length must not exceed %d, got %d",
+				maxFixedBytesLength, fixedBytes.GetByteLength(),
+			)
+		}
+		return &datav1.DataType{
+			Kind: &datav1.DataType_FixedBytes{
+				FixedBytes: &datav1.FixedBytesType{ByteLength: fixedBytes.GetByteLength()},
+			},
+		}, nil
+
+	case nil:
+		return nil, errors.New("field option must select exactly one semantic type")
+
+	default:
+		return nil, errors.New("field option contains an unsupported semantic type")
+	}
+}
+
+func (c *datasetCompiler) storageFieldName(identity, sourceName string) string {
+	if previous, ok := c.previousFields[identity]; ok {
+		return previous.GetName()
+	}
+	return storageName(sourceName)
 }
 
 func (c *datasetCompiler) compileValueType(
@@ -719,6 +972,18 @@ func sameLogicalShape(previous, current *datav1.DataType) bool {
 		return ok &&
 			previous.GetProtobufType() == current.GetProtobufType() &&
 			previousKind.Json.GetKind() == currentKind.Json.GetKind()
+	case *datav1.DataType_Decimal:
+		currentKind, ok := current.GetKind().(*datav1.DataType_Decimal)
+		return ok && previousKind.Decimal != nil && currentKind.Decimal != nil &&
+			previousKind.Decimal.GetPrecision() == currentKind.Decimal.GetPrecision() &&
+			previousKind.Decimal.GetScale() == currentKind.Decimal.GetScale()
+	case *datav1.DataType_Uuid:
+		currentKind, ok := current.GetKind().(*datav1.DataType_Uuid)
+		return ok && previousKind.Uuid != nil && currentKind.Uuid != nil
+	case *datav1.DataType_FixedBytes:
+		currentKind, ok := current.GetKind().(*datav1.DataType_FixedBytes)
+		return ok && previousKind.FixedBytes != nil && currentKind.FixedBytes != nil &&
+			previousKind.FixedBytes.GetByteLength() == currentKind.FixedBytes.GetByteLength()
 	default:
 		return false
 	}

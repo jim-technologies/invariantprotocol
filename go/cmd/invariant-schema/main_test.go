@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/jim-technologies/invariantprotocol/go/data"
 	datav1 "github.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,7 +59,8 @@ func TestCompileRetainsPreviousBundleAutomatically(t *testing.T) {
 	second := decodeBundle(t, secondBytes)
 	dataset := second.GetDatasets()[0]
 	require.Len(t, dataset.GetFields(), 2)
-	assert.Equal(t, "identifier", dataset.GetFields()[0].GetName())
+	assert.Equal(t, "id", dataset.GetFields()[0].GetName(), "a source rename must not rename an existing storage column")
+	assert.Equal(t, "example.v1.Record.identifier", dataset.GetFields()[0].GetProtoFullName())
 	assert.Equal(t, firstID, dataset.GetFields()[0].GetStableId(), "a source rename must retain storage identity")
 	assert.Greater(t, dataset.GetFields()[1].GetStableId(), removedID)
 	require.Len(t, dataset.GetRetiredFields(), 1)
@@ -73,6 +75,28 @@ func TestCompileRetainsPreviousBundleAutomatically(t *testing.T) {
 	thirdBytes, err := os.ReadFile(bundlePath)
 	require.NoError(t, err)
 	assert.Equal(t, secondBytes, thirdBytes, "deterministic compilation must not churn a committed bundle")
+}
+
+func TestCompileDiscoversAnnotatedDatasetsWithoutMessageFlags(t *testing.T) {
+	directory := t.TempDir()
+	descriptorPath := filepath.Join(directory, "descriptor.binpb")
+	bundlePath := filepath.Join(directory, "schema.binpb")
+	writeAnnotatedDescriptor(t, descriptorPath)
+
+	var stdout, stderr bytes.Buffer
+	require.NoError(t, run([]string{
+		"compile",
+		"--descriptor", descriptorPath,
+		"--output", bundlePath,
+	}, &stdout, &stderr))
+	assert.Empty(t, stdout.String())
+	assert.Empty(t, stderr.String())
+
+	encoded, err := os.ReadFile(bundlePath)
+	require.NoError(t, err)
+	bundle := decodeBundle(t, encoded)
+	require.Len(t, bundle.GetDatasets(), 1)
+	assert.Equal(t, "example.v1.Record", bundle.GetDatasets()[0].GetSourceMessage())
 }
 
 func TestCompileRejectsEmptyStorageNamesBeforeWriting(t *testing.T) {
@@ -177,14 +201,14 @@ func TestRenderRejectsUnknownBundleVersions(t *testing.T) {
 			mutate: func(bundle *datav1.SchemaBundle) {
 				bundle.IrVersion = 0
 			},
-			wantError: "sql: bundle ir_version is 0, want 1",
+			wantError: "sql: bundle ir_version is 0, want 2",
 		},
 		{
 			name: "mapping",
 			mutate: func(bundle *datav1.SchemaBundle) {
-				bundle.MappingVersion = 2
+				bundle.MappingVersion = 1
 			},
-			wantError: "sql: bundle mapping_version is 2, want 1",
+			wantError: "sql: bundle mapping_version is 1, want 2",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -216,6 +240,31 @@ func writeDescriptor(t *testing.T, path string, fields ...*descriptorpb.FieldDes
 	require.NoError(t, os.WriteFile(path, encoded, 0o644))
 }
 
+func writeAnnotatedDescriptor(t *testing.T, path string) {
+	t.Helper()
+	options := &descriptorpb.MessageOptions{}
+	proto.SetExtension(options, datav1.E_Dataset, &datav1.DatasetOptions{})
+	set := &descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{{
+		Name:    new("example/v1/record.proto"),
+		Package: new("example.v1"),
+		Syntax:  new("proto3"),
+		MessageType: []*descriptorpb.DescriptorProto{
+			{
+				Name:    new("Record"),
+				Options: options,
+				Field:   []*descriptorpb.FieldDescriptorProto{field("id", 1)},
+			},
+			{
+				Name:  new("Request"),
+				Field: []*descriptorpb.FieldDescriptorProto{field("query", 1)},
+			},
+		},
+	}}}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(set)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, encoded, 0o644))
+}
+
 func field(name string, number int32) *descriptorpb.FieldDescriptorProto {
 	return &descriptorpb.FieldDescriptorProto{
 		Name:   new(name),
@@ -227,8 +276,8 @@ func field(name string, number int32) *descriptorpb.FieldDescriptorProto {
 
 func oneFieldBundle(sourceMessage string) *datav1.SchemaBundle {
 	return &datav1.SchemaBundle{
-		IrVersion:      1,
-		MappingVersion: 1,
+		IrVersion:      data.IRVersion,
+		MappingVersion: data.MappingVersion,
 		Datasets: []*datav1.DatasetSchema{{
 			SourceMessage: sourceMessage,
 			Name:          strings.ToLower(strings.ReplaceAll(sourceMessage, ".", "_")),

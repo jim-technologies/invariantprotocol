@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -226,9 +227,52 @@ func mapType(dataType *datav1.DataType, path string) (arrowlib.DataType, []*data
 				"protobuf %s is encoded as RFC 8259 text in Arrow's canonical JSON extension type; %s",
 				kind.Json.GetKind(), jsonRangeReduction(kind.Json.GetKind()),
 			), nil
+	case *datav1.DataType_Decimal:
+		precision, scale, err := decimalParameters(kind.Decimal)
+		if err != nil {
+			return nil, nil, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", fmt.Errorf("arrow: field %q: %w", path, err)
+		}
+		return &arrowlib.Decimal128Type{Precision: precision, Scale: scale}, nil,
+			datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+			fmt.Sprintf("canonical decimal text is decoded into Arrow decimal128(%d, %d); precision and scale are preserved but the physical representation changes", precision, scale), nil
+	case *datav1.DataType_Uuid:
+		if kind.Uuid == nil {
+			return nil, nil, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", fmt.Errorf("arrow: field %q has an invalid UUID logical type", path)
+		}
+		return extensions.NewUUIDType(), nil,
+			datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+			"canonical UUID text is decoded into Arrow's canonical arrow.uuid extension over fixed-size binary[16]", nil
+	case *datav1.DataType_FixedBytes:
+		width, err := fixedByteWidth(kind.FixedBytes)
+		if err != nil {
+			return nil, nil, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", fmt.Errorf("arrow: field %q: %w", path, err)
+		}
+		return &arrowlib.FixedSizeBinaryType{ByteWidth: width}, nil,
+			datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS,
+			fmt.Sprintf("exact-width protobuf bytes map losslessly to Arrow fixed_size_binary[%d]", width), nil
 	default:
 		return nil, nil, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", fmt.Errorf("arrow: field %q has an unspecified logical type", path)
 	}
+}
+
+func decimalParameters(decimal *datav1.DecimalType) (int32, int32, error) {
+	if decimal == nil || decimal.GetPrecision() == 0 || decimal.GetPrecision() > 38 {
+		return 0, 0, errors.New("decimal precision must be between 1 and 38")
+	}
+	if decimal.GetScale() > decimal.GetPrecision() {
+		return 0, 0, errors.New("decimal scale must not exceed precision")
+	}
+	return int32(decimal.GetPrecision()), int32(decimal.GetScale()), nil
+}
+
+func fixedByteWidth(fixed *datav1.FixedBytesType) (int, error) {
+	if fixed == nil || fixed.GetByteLength() == 0 {
+		return 0, errors.New("fixed byte length must be positive")
+	}
+	if fixed.GetByteLength() > math.MaxInt32 {
+		return 0, fmt.Errorf("fixed byte length %d exceeds Arrow IPC's maximum of %d", fixed.GetByteLength(), int64(math.MaxInt32))
+	}
+	return int(fixed.GetByteLength()), nil
 }
 
 func jsonRangeReduction(kind datav1.JsonKind) string {
@@ -309,6 +353,12 @@ func logicalTypeName(dataType *datav1.DataType) string {
 		return "duration"
 	case *datav1.DataType_Json:
 		return "json"
+	case *datav1.DataType_Decimal:
+		return "decimal"
+	case *datav1.DataType_Uuid:
+		return "uuid"
+	case *datav1.DataType_FixedBytes:
+		return "fixed_bytes"
 	default:
 		return "unspecified"
 	}

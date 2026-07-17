@@ -102,6 +102,70 @@ func TestSchemaFieldIDsAndEmptyFileRoundTrip(t *testing.T) {
 	require.Contains(t, diagnostic(t, closedDiagnostics, "state").GetMessage(), "admits undeclared values")
 }
 
+func TestSemanticRefinementSchema(t *testing.T) {
+	dataset := semanticDataset()
+	mapped, diagnostics, err := Schema(dataset)
+	require.NoError(t, err)
+
+	decimalNode := mapped.Root().Field(mapped.Root().FieldIndexByName("amount")).(*parquetschema.PrimitiveNode)
+	require.Equal(t, parquetlib.Types.FixedLenByteArray, decimalNode.PhysicalType())
+	decimal, ok := decimalNode.LogicalType().(parquetschema.DecimalLogicalType)
+	require.True(t, ok)
+	require.EqualValues(t, 18, decimal.Precision())
+	require.EqualValues(t, 4, decimal.Scale())
+
+	uuidNode := mapped.Root().Field(mapped.Root().FieldIndexByName("record_id")).(*parquetschema.PrimitiveNode)
+	require.Equal(t, parquetlib.Types.FixedLenByteArray, uuidNode.PhysicalType())
+	require.Equal(t, 16, uuidNode.TypeLength())
+	_, ok = uuidNode.LogicalType().(parquetschema.UUIDLogicalType)
+	require.True(t, ok)
+
+	fixedNode := mapped.Root().Field(mapped.Root().FieldIndexByName("digest")).(*parquetschema.PrimitiveNode)
+	require.Equal(t, parquetlib.Types.FixedLenByteArray, fixedNode.PhysicalType())
+	require.Equal(t, 24, fixedNode.TypeLength())
+	require.True(t, fixedNode.LogicalType().IsNone())
+
+	for _, path := range []string{"amount", "record_id"} {
+		require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED, diagnostic(t, diagnostics, path).GetCompatibility())
+	}
+	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS, diagnostic(t, diagnostics, "digest").GetCompatibility())
+}
+
+func semanticDataset() *datav1.DatasetSchema {
+	return &datav1.DatasetSchema{
+		Name:          "semantic_record",
+		SourceMessage: "example.SemanticRecord",
+		Fields: []*datav1.Field{
+			{
+				Name:     "amount",
+				StableId: 1,
+				Presence: datav1.Presence_PRESENCE_EXPLICIT,
+				Nullable: true,
+				Type: &datav1.DataType{Kind: &datav1.DataType_Decimal{Decimal: &datav1.DecimalType{
+					Precision: 18,
+					Scale:     4,
+				}}},
+			},
+			{
+				Name:     "record_id",
+				StableId: 2,
+				Presence: datav1.Presence_PRESENCE_EXPLICIT,
+				Nullable: true,
+				Type:     &datav1.DataType{Kind: &datav1.DataType_Uuid{Uuid: &datav1.UuidType{}}},
+			},
+			{
+				Name:     "digest",
+				StableId: 3,
+				Presence: datav1.Presence_PRESENCE_EXPLICIT,
+				Nullable: true,
+				Type: &datav1.DataType{Kind: &datav1.DataType_FixedBytes{FixedBytes: &datav1.FixedBytesType{
+					ByteLength: 24,
+				}}},
+			},
+		},
+	}
+}
+
 func datasetField(t *testing.T, dataset *datav1.DatasetSchema, name string) *datav1.Field {
 	t.Helper()
 	for _, field := range dataset.GetFields() {

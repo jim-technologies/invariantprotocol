@@ -1,6 +1,6 @@
 {
   "name": "@jim-technologies/invariant-protocol",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "description": "Project gRPC services into MCP, CLI, HTTP/Connect, and gRPC interfaces from proto descriptors",
   "type": "module",

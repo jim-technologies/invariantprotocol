@@ -9,8 +9,8 @@ import {
 
 export * from "./gen/invariant/data/v1/schema_pb.js";
 
-export const SCHEMA_IR_VERSION = 1;
-export const SCHEMA_MAPPING_VERSION = 1;
+export const SCHEMA_IR_VERSION = 2;
+export const SCHEMA_MAPPING_VERSION = 2;
 
 /** Parse a supported serialized invariant.data.v1.SchemaBundle. */
 export function parseSchemaBundle(data: Uint8Array): SchemaBundle {

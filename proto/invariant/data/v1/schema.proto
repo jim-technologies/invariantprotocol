@@ -176,7 +176,37 @@ message DataType {
 
     // A protobuf dynamic JSON well-known type.
     JsonType json = 9;
+
+    // A base-10 fixed-precision value carried as canonical decimal text.
+    DecimalType decimal = 10;
+
+    // A UUID carried as canonical UUID text.
+    UuidType uuid = 11;
+
+    // An exact-width binary value carried as protobuf bytes.
+    FixedBytesType fixed_bytes = 12;
   }
+}
+
+// DecimalType refines a protobuf string into a portable fixed-precision
+// decimal. Precision is capped at 38 so Arrow Decimal128, Parquet, Iceberg,
+// and PostgreSQL can share one definition.
+message DecimalType {
+  // Total number of base-10 digits. Valid values are 1 through 38.
+  uint32 precision = 1;
+
+  // Number of base-10 digits to the right of the decimal point. It must not
+  // exceed precision.
+  uint32 scale = 2;
+}
+
+// UuidType refines a protobuf string containing canonical RFC 9562 text.
+message UuidType {}
+
+// FixedBytesType refines protobuf bytes to an exact, non-zero byte width.
+message FixedBytesType {
+  // Required number of bytes in every present value.
+  uint32 byte_length = 1;
 }
 
 // PrimitiveType retains the exact protobuf scalar kind. Wire encodings that

@@ -1,4 +1,7 @@
-use invariant::data::v1::{Field, Presence, SchemaBundle, SyntheticRole, data_type};
+use invariant::data::v1::{
+    DataType, DatasetSchema, DecimalType, Field, FixedBytesType, Presence, SchemaBundle,
+    SyntheticRole, UuidType, data_type,
+};
 use invariant::{DataSchemaError, parse_schema_bundle};
 use prost::Message;
 
@@ -7,8 +10,8 @@ fn reads_shared_canonical_schema_bundle() {
     let encoded = include_bytes!("../../testdata/data.schema.binpb");
     let bundle = parse_schema_bundle(encoded.as_slice()).expect("valid canonical schema bundle");
 
-    assert_eq!(bundle.ir_version, 1);
-    assert_eq!(bundle.mapping_version, 1);
+    assert_eq!(bundle.ir_version, 2);
+    assert_eq!(bundle.mapping_version, 2);
     assert_eq!(
         bundle
             .datasets
@@ -76,8 +79,8 @@ fn reads_shared_canonical_schema_bundle() {
 #[test]
 fn rejects_unsupported_bundle_versions() {
     let mut bundle = SchemaBundle {
-        ir_version: 2,
-        mapping_version: 1,
+        ir_version: 1,
+        mapping_version: 2,
         ..Default::default()
     };
     assert!(matches!(
@@ -85,11 +88,74 @@ fn rejects_unsupported_bundle_versions() {
         Err(DataSchemaError::UnsupportedIrVersion { .. })
     ));
 
-    bundle.ir_version = 1;
-    bundle.mapping_version = 2;
+    bundle.ir_version = 2;
+    bundle.mapping_version = 1;
     assert!(matches!(
         invariant::validate_schema_bundle(&bundle),
         Err(DataSchemaError::UnsupportedMappingVersion { .. })
+    ));
+}
+
+#[test]
+fn round_trips_portable_refined_types() {
+    let refined = [
+        data_type::Kind::Decimal(DecimalType {
+            precision: 18,
+            scale: 4,
+        }),
+        data_type::Kind::Uuid(UuidType {}),
+        data_type::Kind::FixedBytes(FixedBytesType { byte_length: 32 }),
+    ];
+    let bundle = SchemaBundle {
+        ir_version: 2,
+        mapping_version: 2,
+        datasets: vec![DatasetSchema {
+            source_message: "example.v1.Record".into(),
+            name: "example_v1_record".into(),
+            fields: refined
+                .into_iter()
+                .enumerate()
+                .map(|(index, kind)| Field {
+                    name: format!("field_{index}"),
+                    r#type: Some(Box::new(DataType {
+                        kind: Some(kind),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let decoded = parse_schema_bundle(&bundle.encode_to_vec()).expect("supported refined bundle");
+    let fields = &decoded.datasets[0].fields;
+    assert!(matches!(
+        fields[0]
+            .r#type
+            .as_deref()
+            .and_then(|value| value.kind.as_ref()),
+        Some(data_type::Kind::Decimal(DecimalType {
+            precision: 18,
+            scale: 4
+        }))
+    ));
+    assert!(matches!(
+        fields[1]
+            .r#type
+            .as_deref()
+            .and_then(|value| value.kind.as_ref()),
+        Some(data_type::Kind::Uuid(_))
+    ));
+    assert!(matches!(
+        fields[2]
+            .r#type
+            .as_deref()
+            .and_then(|value| value.kind.as_ref()),
+        Some(data_type::Kind::FixedBytes(FixedBytesType {
+            byte_length: 32
+        }))
     ));
 }
 

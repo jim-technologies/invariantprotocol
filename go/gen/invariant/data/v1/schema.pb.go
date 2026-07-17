@@ -838,6 +838,9 @@ type DataType struct {
 	//	*DataType_Timestamp
 	//	*DataType_Duration
 	//	*DataType_Json
+	//	*DataType_Decimal
+	//	*DataType_Uuid
+	//	*DataType_FixedBytes
 	Kind          isDataType_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -959,6 +962,33 @@ func (x *DataType) GetJson() *JsonType {
 	return nil
 }
 
+func (x *DataType) GetDecimal() *DecimalType {
+	if x != nil {
+		if x, ok := x.Kind.(*DataType_Decimal); ok {
+			return x.Decimal
+		}
+	}
+	return nil
+}
+
+func (x *DataType) GetUuid() *UuidType {
+	if x != nil {
+		if x, ok := x.Kind.(*DataType_Uuid); ok {
+			return x.Uuid
+		}
+	}
+	return nil
+}
+
+func (x *DataType) GetFixedBytes() *FixedBytesType {
+	if x != nil {
+		if x, ok := x.Kind.(*DataType_FixedBytes); ok {
+			return x.FixedBytes
+		}
+	}
+	return nil
+}
+
 type isDataType_Kind interface {
 	isDataType_Kind()
 }
@@ -1003,6 +1033,21 @@ type DataType_Json struct {
 	Json *JsonType `protobuf:"bytes,9,opt,name=json,proto3,oneof"`
 }
 
+type DataType_Decimal struct {
+	// A base-10 fixed-precision value carried as canonical decimal text.
+	Decimal *DecimalType `protobuf:"bytes,10,opt,name=decimal,proto3,oneof"`
+}
+
+type DataType_Uuid struct {
+	// A UUID carried as canonical UUID text.
+	Uuid *UuidType `protobuf:"bytes,11,opt,name=uuid,proto3,oneof"`
+}
+
+type DataType_FixedBytes struct {
+	// An exact-width binary value carried as protobuf bytes.
+	FixedBytes *FixedBytesType `protobuf:"bytes,12,opt,name=fixed_bytes,json=fixedBytes,proto3,oneof"`
+}
+
 func (*DataType_Primitive) isDataType_Kind() {}
 
 func (*DataType_Enum) isDataType_Kind() {}
@@ -1019,6 +1064,153 @@ func (*DataType_Duration) isDataType_Kind() {}
 
 func (*DataType_Json) isDataType_Kind() {}
 
+func (*DataType_Decimal) isDataType_Kind() {}
+
+func (*DataType_Uuid) isDataType_Kind() {}
+
+func (*DataType_FixedBytes) isDataType_Kind() {}
+
+// DecimalType refines a protobuf string into a portable fixed-precision
+// decimal. Precision is capped at 38 so Arrow Decimal128, Parquet, Iceberg,
+// and PostgreSQL can share one definition.
+type DecimalType struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Total number of base-10 digits. Valid values are 1 through 38.
+	Precision uint32 `protobuf:"varint,1,opt,name=precision,proto3" json:"precision,omitempty"`
+	// Number of base-10 digits to the right of the decimal point. It must not
+	// exceed precision.
+	Scale         uint32 `protobuf:"varint,2,opt,name=scale,proto3" json:"scale,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DecimalType) Reset() {
+	*x = DecimalType{}
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DecimalType) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DecimalType) ProtoMessage() {}
+
+func (x *DecimalType) ProtoReflect() protoreflect.Message {
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DecimalType.ProtoReflect.Descriptor instead.
+func (*DecimalType) Descriptor() ([]byte, []int) {
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *DecimalType) GetPrecision() uint32 {
+	if x != nil {
+		return x.Precision
+	}
+	return 0
+}
+
+func (x *DecimalType) GetScale() uint32 {
+	if x != nil {
+		return x.Scale
+	}
+	return 0
+}
+
+// UuidType refines a protobuf string containing canonical RFC 9562 text.
+type UuidType struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UuidType) Reset() {
+	*x = UuidType{}
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UuidType) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UuidType) ProtoMessage() {}
+
+func (x *UuidType) ProtoReflect() protoreflect.Message {
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UuidType.ProtoReflect.Descriptor instead.
+func (*UuidType) Descriptor() ([]byte, []int) {
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{6}
+}
+
+// FixedBytesType refines protobuf bytes to an exact, non-zero byte width.
+type FixedBytesType struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Required number of bytes in every present value.
+	ByteLength    uint32 `protobuf:"varint,1,opt,name=byte_length,json=byteLength,proto3" json:"byte_length,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FixedBytesType) Reset() {
+	*x = FixedBytesType{}
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FixedBytesType) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FixedBytesType) ProtoMessage() {}
+
+func (x *FixedBytesType) ProtoReflect() protoreflect.Message {
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FixedBytesType.ProtoReflect.Descriptor instead.
+func (*FixedBytesType) Descriptor() ([]byte, []int) {
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *FixedBytesType) GetByteLength() uint32 {
+	if x != nil {
+		return x.ByteLength
+	}
+	return 0
+}
+
 // PrimitiveType retains the exact protobuf scalar kind. Wire encodings that
 // share a value domain therefore remain distinguishable in the derived IR.
 type PrimitiveType struct {
@@ -1031,7 +1223,7 @@ type PrimitiveType struct {
 
 func (x *PrimitiveType) Reset() {
 	*x = PrimitiveType{}
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[5]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1043,7 +1235,7 @@ func (x *PrimitiveType) String() string {
 func (*PrimitiveType) ProtoMessage() {}
 
 func (x *PrimitiveType) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[5]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1056,7 +1248,7 @@ func (x *PrimitiveType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrimitiveType.ProtoReflect.Descriptor instead.
 func (*PrimitiveType) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{5}
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *PrimitiveType) GetKind() PrimitiveKind {
@@ -1081,7 +1273,7 @@ type EnumType struct {
 
 func (x *EnumType) Reset() {
 	*x = EnumType{}
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[6]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1093,7 +1285,7 @@ func (x *EnumType) String() string {
 func (*EnumType) ProtoMessage() {}
 
 func (x *EnumType) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[6]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1106,7 +1298,7 @@ func (x *EnumType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnumType.ProtoReflect.Descriptor instead.
 func (*EnumType) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{6}
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *EnumType) GetFullName() string {
@@ -1145,7 +1337,7 @@ type EnumValue struct {
 
 func (x *EnumValue) Reset() {
 	*x = EnumValue{}
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[7]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1157,7 +1349,7 @@ func (x *EnumValue) String() string {
 func (*EnumValue) ProtoMessage() {}
 
 func (x *EnumValue) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[7]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1170,7 +1362,7 @@ func (x *EnumValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnumValue.ProtoReflect.Descriptor instead.
 func (*EnumValue) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{7}
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *EnumValue) GetName() string {
@@ -1205,7 +1397,7 @@ type StructType struct {
 
 func (x *StructType) Reset() {
 	*x = StructType{}
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[8]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1217,7 +1409,7 @@ func (x *StructType) String() string {
 func (*StructType) ProtoMessage() {}
 
 func (x *StructType) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[8]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1230,7 +1422,7 @@ func (x *StructType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StructType.ProtoReflect.Descriptor instead.
 func (*StructType) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{8}
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *StructType) GetFields() []*Field {
@@ -1251,7 +1443,7 @@ type ListType struct {
 
 func (x *ListType) Reset() {
 	*x = ListType{}
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[9]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1263,7 +1455,7 @@ func (x *ListType) String() string {
 func (*ListType) ProtoMessage() {}
 
 func (x *ListType) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[9]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1276,7 +1468,7 @@ func (x *ListType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListType.ProtoReflect.Descriptor instead.
 func (*ListType) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{9}
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListType) GetElement() *Field {
@@ -1299,7 +1491,7 @@ type MapType struct {
 
 func (x *MapType) Reset() {
 	*x = MapType{}
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[10]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1311,7 +1503,7 @@ func (x *MapType) String() string {
 func (*MapType) ProtoMessage() {}
 
 func (x *MapType) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[10]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1324,7 +1516,7 @@ func (x *MapType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MapType.ProtoReflect.Descriptor instead.
 func (*MapType) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{10}
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *MapType) GetKey() *Field {
@@ -1354,7 +1546,7 @@ type TimestampType struct {
 
 func (x *TimestampType) Reset() {
 	*x = TimestampType{}
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[11]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1366,7 +1558,7 @@ func (x *TimestampType) String() string {
 func (*TimestampType) ProtoMessage() {}
 
 func (x *TimestampType) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[11]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1379,7 +1571,7 @@ func (x *TimestampType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TimestampType.ProtoReflect.Descriptor instead.
 func (*TimestampType) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{11}
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TimestampType) GetUnit() TimeUnit {
@@ -1407,7 +1599,7 @@ type DurationType struct {
 
 func (x *DurationType) Reset() {
 	*x = DurationType{}
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[12]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1419,7 +1611,7 @@ func (x *DurationType) String() string {
 func (*DurationType) ProtoMessage() {}
 
 func (x *DurationType) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[12]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1432,7 +1624,7 @@ func (x *DurationType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DurationType.ProtoReflect.Descriptor instead.
 func (*DurationType) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{12}
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DurationType) GetUnit() TimeUnit {
@@ -1454,7 +1646,7 @@ type JsonType struct {
 
 func (x *JsonType) Reset() {
 	*x = JsonType{}
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[13]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1466,7 +1658,7 @@ func (x *JsonType) String() string {
 func (*JsonType) ProtoMessage() {}
 
 func (x *JsonType) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[13]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1479,7 +1671,7 @@ func (x *JsonType) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JsonType.ProtoReflect.Descriptor instead.
 func (*JsonType) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{13}
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *JsonType) GetKind() JsonKind {
@@ -1505,7 +1697,7 @@ type MappingDiagnostic struct {
 
 func (x *MappingDiagnostic) Reset() {
 	*x = MappingDiagnostic{}
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[14]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1517,7 +1709,7 @@ func (x *MappingDiagnostic) String() string {
 func (*MappingDiagnostic) ProtoMessage() {}
 
 func (x *MappingDiagnostic) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_schema_proto_msgTypes[14]
+	mi := &file_invariant_data_v1_schema_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1530,7 +1722,7 @@ func (x *MappingDiagnostic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MappingDiagnostic.ProtoReflect.Descriptor instead.
 func (*MappingDiagnostic) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{14}
+	return file_invariant_data_v1_schema_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *MappingDiagnostic) GetFieldPath() string {
@@ -1590,7 +1782,7 @@ const file_invariant_data_v1_schema_proto_rawDesc = "" +
 	"\vhas_default\x18\v \x01(\bR\n" +
 	"hasDefault\x12)\n" +
 	"\x10protobuf_default\x18\f \x01(\tR\x0fprotobufDefault\x12\x1b\n" +
-	"\tjson_name\x18\r \x01(\tR\bjsonName\"\xfc\x03\n" +
+	"\tjson_name\x18\r \x01(\tR\bjsonName\"\xb1\x05\n" +
 	"\bDataType\x12#\n" +
 	"\rprotobuf_type\x18\x01 \x01(\tR\fprotobufType\x12@\n" +
 	"\tprimitive\x18\x02 \x01(\v2 .invariant.data.v1.PrimitiveTypeH\x00R\tprimitive\x121\n" +
@@ -1600,8 +1792,21 @@ const file_invariant_data_v1_schema_proto_rawDesc = "" +
 	"\x03map\x18\x06 \x01(\v2\x1a.invariant.data.v1.MapTypeH\x00R\x03map\x12@\n" +
 	"\ttimestamp\x18\a \x01(\v2 .invariant.data.v1.TimestampTypeH\x00R\ttimestamp\x12=\n" +
 	"\bduration\x18\b \x01(\v2\x1f.invariant.data.v1.DurationTypeH\x00R\bduration\x121\n" +
-	"\x04json\x18\t \x01(\v2\x1b.invariant.data.v1.JsonTypeH\x00R\x04jsonB\x06\n" +
-	"\x04kind\"E\n" +
+	"\x04json\x18\t \x01(\v2\x1b.invariant.data.v1.JsonTypeH\x00R\x04json\x12:\n" +
+	"\adecimal\x18\n" +
+	" \x01(\v2\x1e.invariant.data.v1.DecimalTypeH\x00R\adecimal\x121\n" +
+	"\x04uuid\x18\v \x01(\v2\x1b.invariant.data.v1.UuidTypeH\x00R\x04uuid\x12D\n" +
+	"\vfixed_bytes\x18\f \x01(\v2!.invariant.data.v1.FixedBytesTypeH\x00R\n" +
+	"fixedBytesB\x06\n" +
+	"\x04kind\"A\n" +
+	"\vDecimalType\x12\x1c\n" +
+	"\tprecision\x18\x01 \x01(\rR\tprecision\x12\x14\n" +
+	"\x05scale\x18\x02 \x01(\rR\x05scale\"\n" +
+	"\n" +
+	"\bUuidType\"1\n" +
+	"\x0eFixedBytesType\x12\x1f\n" +
+	"\vbyte_length\x18\x01 \x01(\rR\n" +
+	"byteLength\"E\n" +
 	"\rPrimitiveType\x124\n" +
 	"\x04kind\x18\x01 \x01(\x0e2 .invariant.data.v1.PrimitiveKindR\x04kind\"u\n" +
 	"\bEnumType\x12\x1b\n" +
@@ -1696,7 +1901,7 @@ func file_invariant_data_v1_schema_proto_rawDescGZIP() []byte {
 }
 
 var file_invariant_data_v1_schema_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_invariant_data_v1_schema_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_invariant_data_v1_schema_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_invariant_data_v1_schema_proto_goTypes = []any{
 	(Presence)(0),             // 0: invariant.data.v1.Presence
 	(SyntheticRole)(0),        // 1: invariant.data.v1.SyntheticRole
@@ -1709,16 +1914,19 @@ var file_invariant_data_v1_schema_proto_goTypes = []any{
 	(*RetiredField)(nil),      // 8: invariant.data.v1.RetiredField
 	(*Field)(nil),             // 9: invariant.data.v1.Field
 	(*DataType)(nil),          // 10: invariant.data.v1.DataType
-	(*PrimitiveType)(nil),     // 11: invariant.data.v1.PrimitiveType
-	(*EnumType)(nil),          // 12: invariant.data.v1.EnumType
-	(*EnumValue)(nil),         // 13: invariant.data.v1.EnumValue
-	(*StructType)(nil),        // 14: invariant.data.v1.StructType
-	(*ListType)(nil),          // 15: invariant.data.v1.ListType
-	(*MapType)(nil),           // 16: invariant.data.v1.MapType
-	(*TimestampType)(nil),     // 17: invariant.data.v1.TimestampType
-	(*DurationType)(nil),      // 18: invariant.data.v1.DurationType
-	(*JsonType)(nil),          // 19: invariant.data.v1.JsonType
-	(*MappingDiagnostic)(nil), // 20: invariant.data.v1.MappingDiagnostic
+	(*DecimalType)(nil),       // 11: invariant.data.v1.DecimalType
+	(*UuidType)(nil),          // 12: invariant.data.v1.UuidType
+	(*FixedBytesType)(nil),    // 13: invariant.data.v1.FixedBytesType
+	(*PrimitiveType)(nil),     // 14: invariant.data.v1.PrimitiveType
+	(*EnumType)(nil),          // 15: invariant.data.v1.EnumType
+	(*EnumValue)(nil),         // 16: invariant.data.v1.EnumValue
+	(*StructType)(nil),        // 17: invariant.data.v1.StructType
+	(*ListType)(nil),          // 18: invariant.data.v1.ListType
+	(*MapType)(nil),           // 19: invariant.data.v1.MapType
+	(*TimestampType)(nil),     // 20: invariant.data.v1.TimestampType
+	(*DurationType)(nil),      // 21: invariant.data.v1.DurationType
+	(*JsonType)(nil),          // 22: invariant.data.v1.JsonType
+	(*MappingDiagnostic)(nil), // 23: invariant.data.v1.MappingDiagnostic
 }
 var file_invariant_data_v1_schema_proto_depIdxs = []int32{
 	7,  // 0: invariant.data.v1.SchemaBundle.datasets:type_name -> invariant.data.v1.DatasetSchema
@@ -1727,29 +1935,32 @@ var file_invariant_data_v1_schema_proto_depIdxs = []int32{
 	0,  // 3: invariant.data.v1.Field.presence:type_name -> invariant.data.v1.Presence
 	10, // 4: invariant.data.v1.Field.type:type_name -> invariant.data.v1.DataType
 	1,  // 5: invariant.data.v1.Field.synthetic_role:type_name -> invariant.data.v1.SyntheticRole
-	11, // 6: invariant.data.v1.DataType.primitive:type_name -> invariant.data.v1.PrimitiveType
-	12, // 7: invariant.data.v1.DataType.enum:type_name -> invariant.data.v1.EnumType
-	14, // 8: invariant.data.v1.DataType.struct:type_name -> invariant.data.v1.StructType
-	15, // 9: invariant.data.v1.DataType.list:type_name -> invariant.data.v1.ListType
-	16, // 10: invariant.data.v1.DataType.map:type_name -> invariant.data.v1.MapType
-	17, // 11: invariant.data.v1.DataType.timestamp:type_name -> invariant.data.v1.TimestampType
-	18, // 12: invariant.data.v1.DataType.duration:type_name -> invariant.data.v1.DurationType
-	19, // 13: invariant.data.v1.DataType.json:type_name -> invariant.data.v1.JsonType
-	2,  // 14: invariant.data.v1.PrimitiveType.kind:type_name -> invariant.data.v1.PrimitiveKind
-	13, // 15: invariant.data.v1.EnumType.values:type_name -> invariant.data.v1.EnumValue
-	9,  // 16: invariant.data.v1.StructType.fields:type_name -> invariant.data.v1.Field
-	9,  // 17: invariant.data.v1.ListType.element:type_name -> invariant.data.v1.Field
-	9,  // 18: invariant.data.v1.MapType.key:type_name -> invariant.data.v1.Field
-	9,  // 19: invariant.data.v1.MapType.value:type_name -> invariant.data.v1.Field
-	3,  // 20: invariant.data.v1.TimestampType.unit:type_name -> invariant.data.v1.TimeUnit
-	3,  // 21: invariant.data.v1.DurationType.unit:type_name -> invariant.data.v1.TimeUnit
-	4,  // 22: invariant.data.v1.JsonType.kind:type_name -> invariant.data.v1.JsonKind
-	5,  // 23: invariant.data.v1.MappingDiagnostic.compatibility:type_name -> invariant.data.v1.MappingCompatibility
-	24, // [24:24] is the sub-list for method output_type
-	24, // [24:24] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	14, // 6: invariant.data.v1.DataType.primitive:type_name -> invariant.data.v1.PrimitiveType
+	15, // 7: invariant.data.v1.DataType.enum:type_name -> invariant.data.v1.EnumType
+	17, // 8: invariant.data.v1.DataType.struct:type_name -> invariant.data.v1.StructType
+	18, // 9: invariant.data.v1.DataType.list:type_name -> invariant.data.v1.ListType
+	19, // 10: invariant.data.v1.DataType.map:type_name -> invariant.data.v1.MapType
+	20, // 11: invariant.data.v1.DataType.timestamp:type_name -> invariant.data.v1.TimestampType
+	21, // 12: invariant.data.v1.DataType.duration:type_name -> invariant.data.v1.DurationType
+	22, // 13: invariant.data.v1.DataType.json:type_name -> invariant.data.v1.JsonType
+	11, // 14: invariant.data.v1.DataType.decimal:type_name -> invariant.data.v1.DecimalType
+	12, // 15: invariant.data.v1.DataType.uuid:type_name -> invariant.data.v1.UuidType
+	13, // 16: invariant.data.v1.DataType.fixed_bytes:type_name -> invariant.data.v1.FixedBytesType
+	2,  // 17: invariant.data.v1.PrimitiveType.kind:type_name -> invariant.data.v1.PrimitiveKind
+	16, // 18: invariant.data.v1.EnumType.values:type_name -> invariant.data.v1.EnumValue
+	9,  // 19: invariant.data.v1.StructType.fields:type_name -> invariant.data.v1.Field
+	9,  // 20: invariant.data.v1.ListType.element:type_name -> invariant.data.v1.Field
+	9,  // 21: invariant.data.v1.MapType.key:type_name -> invariant.data.v1.Field
+	9,  // 22: invariant.data.v1.MapType.value:type_name -> invariant.data.v1.Field
+	3,  // 23: invariant.data.v1.TimestampType.unit:type_name -> invariant.data.v1.TimeUnit
+	3,  // 24: invariant.data.v1.DurationType.unit:type_name -> invariant.data.v1.TimeUnit
+	4,  // 25: invariant.data.v1.JsonType.kind:type_name -> invariant.data.v1.JsonKind
+	5,  // 26: invariant.data.v1.MappingDiagnostic.compatibility:type_name -> invariant.data.v1.MappingCompatibility
+	27, // [27:27] is the sub-list for method output_type
+	27, // [27:27] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_invariant_data_v1_schema_proto_init() }
@@ -1766,6 +1977,9 @@ func file_invariant_data_v1_schema_proto_init() {
 		(*DataType_Timestamp)(nil),
 		(*DataType_Duration)(nil),
 		(*DataType_Json)(nil),
+		(*DataType_Decimal)(nil),
+		(*DataType_Uuid)(nil),
+		(*DataType_FixedBytes)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1773,7 +1987,7 @@ func file_invariant_data_v1_schema_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_invariant_data_v1_schema_proto_rawDesc), len(file_invariant_data_v1_schema_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   15,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

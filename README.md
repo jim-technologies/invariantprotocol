@@ -355,15 +355,35 @@ path.
 
 ## Protobuf-derived data schemas
 
-Invariant compiles explicitly selected durable messages into one generated
-`invariant.data.v1.SchemaBundle`. The bundle is the versioned mapping and
-evolution authority consumed by all four languages; there are not four
+Invariant compiles messages marked with `(invariant.data.v1.dataset)` into one
+generated `invariant.data.v1.SchemaBundle`. The bundle is the versioned mapping
+and evolution authority consumed by all four languages; there are not four
 independent inference implementations.
+
+```proto
+import "invariant/data/v1/annotations.proto";
+
+message LedgerEvent {
+  option (invariant.data.v1.dataset) = {};
+
+  optional string event_id = 1 [
+    (invariant.data.v1.field) = { uuid: {} }
+  ];
+  optional string amount = 2 [(invariant.data.v1.field) = {
+    decimal: {
+      precision: 18
+      scale: 4
+    }
+  }];
+  optional bytes checksum = 3 [(invariant.data.v1.field) = {
+    fixed_bytes: { byte_length: 32 }
+  }];
+}
+```
 
 ```bash
 go run ./go/cmd/invariant-schema compile \
   --descriptor descriptor.binpb \
-  --message ledger.v1.LedgerEvent \
   --output ledger.schema.binpb
 
 go run ./go/cmd/invariant-schema arrow \
@@ -378,8 +398,18 @@ go run ./go/cmd/invariant-schema sql \
 
 `compile` reads an existing output bundle before replacing it. Numeric
 protobuf paths retain active field identities, removed identities remain
-tombstoned, and incompatible reuse fails. Commit and review the bundle, but
-continue to author only protobuf.
+tombstoned, field storage names survive same-number source renames while the
+dataset full name remains stable, and incompatible reuse fails.
+Repeated `--message` flags can explicitly select roots for controlled or
+one-off builds; annotation discovery is the normal convention. Commit and
+review the bundle, but continue to author only protobuf.
+
+Portable field refinements map canonical decimal text, canonical UUID text,
+and exact-width bytes to native Arrow, Parquet, Iceberg, and PostgreSQL types.
+Annotations declare those value domains; they do not validate message values by
+themselves. Python's `arrow_table()` currently enforces the canonical values,
+and other writers must validate at their own boundary. The options do not
+encode keys, indexes, partitions, placement, or migration policy.
 
 The PostgreSQL renderer emits desired-state DDL directly for Atlas; HCL is not
 another source format. Invariant does not infer keys, indexes, partitions,
@@ -408,12 +438,12 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.7.1`; new releases do not create language-prefixed tags.
+tag `v0.8.0`; new releases do not create language-prefixed tags.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.7.1
+go get github.com/jim-technologies/invariantprotocol/go@v0.8.0
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -423,30 +453,35 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.7.1#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.0#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.7.1#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.0#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.7.1" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.0" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.7.1" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.0" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.7.1"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.8.0"
 ```
 
 For reproducible production builds, replace the tag with a full commit
 revision using the package manager's normal Git syntax.
+
+Protobuf sources use the same Git revision. Pin or vendor the repository and
+make its `proto/` directory an import root (a local Buf workspace/module
+dependency, or a `protoc -I` path) so
+`invariant/data/v1/annotations.proto` resolves without a registry.
 
 ## Development and release contract
 

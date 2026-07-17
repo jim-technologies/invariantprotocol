@@ -5,8 +5,8 @@ use thiserror::Error;
 
 use crate::{DatasetSchema, SchemaBundle};
 
-pub const SCHEMA_IR_VERSION: u32 = 1;
-pub const SCHEMA_MAPPING_VERSION: u32 = 1;
+pub const SCHEMA_IR_VERSION: u32 = 2;
+pub const SCHEMA_MAPPING_VERSION: u32 = 2;
 
 #[derive(Debug, Error)]
 pub enum DataSchemaError {

@@ -32,8 +32,8 @@ func TestSharedCanonicalSchemaBundle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, encoded, regenerated, "the committed cross-language artifact must be deterministic")
 
-	require.Equal(t, uint32(1), previous.GetIrVersion())
-	require.Equal(t, uint32(1), previous.GetMappingVersion())
+	require.Equal(t, IRVersion, previous.GetIrVersion())
+	require.Equal(t, MappingVersion, previous.GetMappingVersion())
 	require.Len(t, previous.GetDatasets(), 2)
 	canonical := previous.GetDatasets()[0]
 	proto2 := previous.GetDatasets()[1]

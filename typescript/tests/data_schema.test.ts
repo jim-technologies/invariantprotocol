@@ -22,8 +22,8 @@ describe("canonical data schema", () => {
     const encoded = new Uint8Array(readFileSync(goldenBundle));
     const bundle = parseSchemaBundle(encoded);
 
-    expect(bundle.irVersion).toBe(1);
-    expect(bundle.mappingVersion).toBe(1);
+    expect(bundle.irVersion).toBe(2);
+    expect(bundle.mappingVersion).toBe(2);
     expect(bundle.datasets.map((dataset) => dataset.sourceMessage)).toEqual([
       "data.v1.CanonicalRecord",
       "data.v1.Proto2Record",
@@ -71,10 +71,33 @@ describe("canonical data schema", () => {
   });
 
   test.each(["ir", "mapping"] as const)("rejects an unsupported %s version", (version) => {
-    const bundle = create(SchemaBundleSchema, { irVersion: 1, mappingVersion: 1 });
-    if (version === "ir") bundle.irVersion = 2;
-    else bundle.mappingVersion = 2;
+    const bundle = create(SchemaBundleSchema, { irVersion: 2, mappingVersion: 2 });
+    if (version === "ir") bundle.irVersion = 1;
+    else bundle.mappingVersion = 1;
 
     expect(() => parseSchemaBundle(serializeSchemaBundle(bundle))).toThrow(`unsupported SchemaBundle ${version}_version`);
+  });
+
+  test("round-trips portable refined types", () => {
+    const bundle = create(SchemaBundleSchema, {
+      irVersion: 2,
+      mappingVersion: 2,
+      datasets: [
+        {
+          sourceMessage: "example.v1.Record",
+          name: "example_v1_record",
+          fields: [
+            { name: "amount", type: { kind: { case: "decimal", value: { precision: 18, scale: 4 } } } },
+            { name: "id", type: { kind: { case: "uuid", value: {} } } },
+            { name: "digest", type: { kind: { case: "fixedBytes", value: { byteLength: 32 } } } },
+          ],
+        },
+      ],
+    });
+
+    const fields = parseSchemaBundle(serializeSchemaBundle(bundle)).datasets[0]?.fields;
+    expect(fields?.[0]?.type?.kind).toEqual({ case: "decimal", value: expect.objectContaining({ precision: 18, scale: 4 }) });
+    expect(fields?.[1]?.type?.kind.case).toBe("uuid");
+    expect(fields?.[2]?.type?.kind).toEqual({ case: "fixedBytes", value: expect.objectContaining({ byteLength: 32 }) });
   });
 });

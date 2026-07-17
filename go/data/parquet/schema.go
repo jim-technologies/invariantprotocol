@@ -150,6 +150,20 @@ func fieldDiagnostics(field *datav1.Field, path string) []*datav1.MappingDiagnos
 			"protobuf %s is encoded as RFC 8259 text with Parquet's JSON logical annotation; %s",
 			kind.Json.GetKind(), jsonRangeReduction(kind.Json.GetKind()),
 		)
+	case *datav1.DataType_Decimal:
+		compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED
+		message = fmt.Sprintf(
+			"canonical decimal text is decoded into Parquet DECIMAL(%d, %d); precision and scale are preserved but the physical representation changes",
+			kind.Decimal.GetPrecision(), kind.Decimal.GetScale(),
+		)
+	case *datav1.DataType_Uuid:
+		compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED
+		message = "canonical UUID text is decoded into Parquet's UUID logical type over FIXED_LEN_BYTE_ARRAY(16)"
+	case *datav1.DataType_FixedBytes:
+		message = fmt.Sprintf(
+			"exact-width protobuf bytes map losslessly to Parquet FIXED_LEN_BYTE_ARRAY(%d)",
+			kind.FixedBytes.GetByteLength(),
+		)
 	case *datav1.DataType_Enum:
 		if kind.Enum.GetClosed() {
 			compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED

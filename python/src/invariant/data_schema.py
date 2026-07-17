@@ -5,8 +5,8 @@ from invariant.gen.invariant.data.v1.schema_pb2 import (
     SchemaBundle,  # ty: ignore[unresolved-import] — generated member
 )
 
-SCHEMA_IR_VERSION = 1
-SCHEMA_MAPPING_VERSION = 1
+SCHEMA_IR_VERSION = 2
+SCHEMA_MAPPING_VERSION = 2
 
 
 def parse_schema_bundle(data: bytes | bytearray | memoryview) -> SchemaBundle:

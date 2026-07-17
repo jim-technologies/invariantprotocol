@@ -7,4 +7,4 @@ plugins:
     opt: paths=source_relative
   - local: ../node_modules/.bin/protoc-gen-es
     out: ../typescript/src/gen
-    opt: target=ts
+    opt: target=ts,import_extension=.js

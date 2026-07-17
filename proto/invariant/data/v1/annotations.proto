@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package invariant.data.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1;datav1";
+
+// DatasetOptions marks a message as a durable dataset root. It is an
+// aggregate so portable dataset semantics can be added without allocating
+// another custom-option number.
+message DatasetOptions {}
+
+// DecimalOptions refines a protobuf string into a fixed-precision decimal.
+message DecimalOptions {
+  // Total number of base-10 digits. Valid values are 1 through 38.
+  uint32 precision = 1;
+
+  // Digits to the right of the decimal point. Must not exceed precision.
+  uint32 scale = 2;
+}
+
+// UuidOptions refines a protobuf string containing canonical UUID text.
+message UuidOptions {}
+
+// FixedBytesOptions refines protobuf bytes to an exact non-zero width.
+message FixedBytesOptions {
+  // Required number of bytes in every present value.
+  uint32 byte_length = 1;
+}
+
+// FieldOptions refines protobuf carrier types with portable logical meaning.
+// It deliberately contains no renderer-specific type strings or physical
+// storage policy.
+message FieldOptions {
+  oneof semantic_type {
+    // A string containing canonical fixed-precision decimal text.
+    DecimalOptions decimal = 1;
+
+    // A string containing canonical UUID text.
+    UuidOptions uuid = 2;
+
+    // Bytes whose length is exactly fixed_bytes.byte_length.
+    FixedBytesOptions fixed_bytes = 3;
+  }
+}
+
+// Invariant repository policy assigns 51974 from Protobuf's
+// organization-internal custom-option range. It is not globally registered.
+// Both extendees may use the same number because each has its own
+// extension-number space. The schema compiler rejects foreign reuse visible in
+// a supplied descriptor image.
+extend google.protobuf.MessageOptions {
+  DatasetOptions dataset = 51974;
+}
+
+extend google.protobuf.FieldOptions {
+  FieldOptions field = 51974;
+}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	datav1 "github.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1"
@@ -198,6 +199,272 @@ func TestCompileDescriptorBytesUsesExplicitDeterministicRoots(t *testing.T) {
 	require.ErrorContains(t, err, "is not a protobuf message")
 	_, err = CompileDescriptorBytes(descriptor, []string{"google.protobuf.Timestamp"}, nil)
 	require.ErrorContains(t, err, "dependency namespace")
+}
+
+func TestCompileDescriptorBytesDiscoversAnnotatedDatasets(t *testing.T) {
+	file := rowFile("annotated.proto", "annotated.v1")
+	file.MessageType[0].Options = &descriptorpb.MessageOptions{}
+	proto.SetExtension(file.MessageType[0].Options, datav1.E_Dataset, &datav1.DatasetOptions{})
+	file.MessageType = append(file.MessageType, &descriptorpb.DescriptorProto{
+		Name: new("NotADataset"),
+		Field: []*descriptorpb.FieldDescriptorProto{{
+			Name:   new("value"),
+			Number: proto.Int32(1),
+			Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+		}},
+	})
+	descriptor := descriptorSetBytes(t, file)
+
+	bundle, err := CompileDescriptorBytes(descriptor, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, bundle.GetDatasets(), 1)
+	assert.Equal(t, "annotated.v1.Row", bundle.GetDatasets()[0].GetSourceMessage())
+
+	// Explicit roots remain the authoritative selection when supplied, even
+	// when another message carries the dataset annotation.
+	explicit, err := CompileDescriptorBytes(descriptor, []string{"annotated.v1.NotADataset"}, nil)
+	require.NoError(t, err)
+	require.Len(t, explicit.GetDatasets(), 1)
+	assert.Equal(t, "annotated.v1.NotADataset", explicit.GetDatasets()[0].GetSourceMessage())
+}
+
+func TestCompileDescriptorBytesRejectsAnnotationNumberCollisions(t *testing.T) {
+	for _, extendee := range []string{
+		".google.protobuf.MessageOptions",
+		".google.protobuf.FieldOptions",
+	} {
+		t.Run(strings.TrimPrefix(extendee, ".google.protobuf."), func(t *testing.T) {
+			file := rowFile("row.proto", "collision.v1")
+			collision := &descriptorpb.FileDescriptorProto{
+				Name:    new("foreign/options.proto"),
+				Package: new("foreign.options"),
+				Syntax:  new("proto2"),
+				Extension: []*descriptorpb.FieldDescriptorProto{{
+					Name:     new("conflict"),
+					Number:   proto.Int32(51974),
+					Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					Type:     descriptorpb.FieldDescriptorProto_TYPE_BOOL.Enum(),
+					Extendee: new(extendee),
+				}},
+			}
+			descriptor := descriptorSetBytes(t, file, collision)
+
+			_, err := CompileDescriptorBytes(descriptor, []string{"collision.v1.Row"}, nil)
+			require.ErrorContains(t, err, `custom option number 51974`)
+			require.ErrorContains(t, err, `assigned to "invariant.data.v1.`)
+			require.ErrorContains(t, err, `also declared by "foreign.options.conflict"`)
+		})
+	}
+}
+
+func TestCompileDescriptorBytesRejectsInvalidOrNewerAnnotationDeclarations(t *testing.T) {
+	t.Run("declaration fingerprint", func(t *testing.T) {
+		file := rowFile("row.proto", "collision.v1")
+		invalid := &descriptorpb.FileDescriptorProto{
+			Name:    new("invariant/data/v1/invalid_annotations.proto"),
+			Package: new("invariant.data.v1"),
+			Syntax:  new("proto2"),
+			Extension: []*descriptorpb.FieldDescriptorProto{{
+				Name:     new("field"),
+				Number:   proto.Int32(51974),
+				Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+				Type:     descriptorpb.FieldDescriptorProto_TYPE_BOOL.Enum(),
+				Extendee: new(".google.protobuf.FieldOptions"),
+			}},
+		}
+
+		_, err := CompileDescriptorBytes(
+			descriptorSetBytes(t, file, invalid),
+			[]string{"collision.v1.Row"},
+			nil,
+		)
+		require.ErrorContains(t, err, `invariant custom option "invariant.data.v1.field" has an unexpected declaration`)
+	})
+
+	t.Run("newer dataset option", func(t *testing.T) {
+		file := rowFile("annotated.proto", "annotated.v1")
+		option := &datav1.DatasetOptions{}
+		option.ProtoReflect().SetUnknown([]byte{0x98, 0x06, 0x01})
+		file.MessageType[0].Options = &descriptorpb.MessageOptions{}
+		proto.SetExtension(file.MessageType[0].Options, datav1.E_Dataset, option)
+
+		_, err := CompileDescriptorBytes(descriptorSetBytes(t, file), nil, nil)
+		require.ErrorContains(t, err, "dataset option contains fields unsupported by this compiler")
+	})
+
+	t.Run("newer field option", func(t *testing.T) {
+		option := uuidOptions()
+		option.ProtoReflect().SetUnknown([]byte{0x98, 0x06, 0x01})
+		_, err := CompileMessage(refinedMessage(t, refinedMessageSpec{
+			fields: []refinedFieldSpec{{
+				name: "id", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: option,
+			}},
+		}), nil)
+		require.ErrorContains(t, err, "field option contains fields unsupported by this compiler")
+	})
+}
+
+func TestRepositoryAnnotationDeclarationsMatchCompilerPolicy(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	encoded, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "..", "proto", "descriptor.binpb"))
+	require.NoError(t, err)
+	var files descriptorpb.FileDescriptorSet
+	require.NoError(t, proto.Unmarshal(encoded, &files))
+	require.NoError(t, validateAnnotationOptionNumbers(&files))
+	assert.EqualValues(t, 51974, datav1.E_Dataset.TypeDescriptor().Number())
+	assert.EqualValues(t, 51974, datav1.E_Field.TypeDescriptor().Number())
+}
+
+func TestCompileMessageAppliesPortableTypeRefinements(t *testing.T) {
+	md := refinedMessage(t, refinedMessageSpec{
+		fields: []refinedFieldSpec{
+			{name: "amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(38, 9)},
+			{name: "id", number: 2, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: uuidOptions()},
+			{name: "digest", number: 3, kind: descriptorpb.FieldDescriptorProto_TYPE_BYTES, options: fixedBytesOptions(32)},
+			{name: "amounts", number: 4, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, repeated: true, options: decimalOptions(12, 2)},
+		},
+	})
+
+	schema, err := CompileMessage(md, nil)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(38), schemaField(t, schema, 1).GetType().GetDecimal().GetPrecision())
+	assert.Equal(t, uint32(9), schemaField(t, schema, 1).GetType().GetDecimal().GetScale())
+	assert.NotNil(t, schemaField(t, schema, 2).GetType().GetUuid())
+	assert.Equal(t, uint32(32), schemaField(t, schema, 3).GetType().GetFixedBytes().GetByteLength())
+
+	repeated := schemaField(t, schema, 4)
+	require.NotNil(t, repeated.GetType().GetList())
+	assert.Nil(t, repeated.GetType().GetDecimal())
+	element := repeated.GetType().GetList().GetElement()
+	require.NotNil(t, element)
+	assert.Equal(t, uint32(12), element.GetType().GetDecimal().GetPrecision())
+	assert.Equal(t, uint32(2), element.GetType().GetDecimal().GetScale())
+
+	serialized := descriptorSetBytes(t, protodesc.ToFileDescriptorProto(md.ParentFile()))
+	bundle, err := CompileDescriptorBytes(serialized, []string{"shape.v1.ScalarRow"}, nil)
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(schema, bundle.GetDatasets()[0]), "serialized field options must compile identically")
+}
+
+func TestCompileMessageValidatesPortableTypeRefinements(t *testing.T) {
+	tests := []struct {
+		name      string
+		syntax    string
+		field     refinedFieldSpec
+		wantError string
+	}{
+		{
+			name:      "decimal carrier",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_BYTES, options: decimalOptions(10, 2)},
+			wantError: "decimal refinement requires a protobuf string carrier",
+		},
+		{
+			name:      "zero decimal precision",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(0, 0)},
+			wantError: "decimal precision must be between 1 and 38",
+		},
+		{
+			name:      "excess decimal precision",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(39, 0)},
+			wantError: "decimal precision must be between 1 and 38",
+		},
+		{
+			name:      "decimal scale",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(10, 11)},
+			wantError: "decimal scale 11 exceeds precision 10",
+		},
+		{
+			name:      "uuid carrier",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_BYTES, options: uuidOptions()},
+			wantError: "uuid refinement requires a protobuf string carrier",
+		},
+		{
+			name:      "fixed bytes carrier",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: fixedBytesOptions(16)},
+			wantError: "fixed_bytes refinement requires a protobuf bytes carrier",
+		},
+		{
+			name:      "zero fixed bytes length",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_BYTES, options: fixedBytesOptions(0)},
+			wantError: "fixed_bytes byte_length must be greater than zero",
+		},
+		{
+			name:      "excess fixed bytes length",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_BYTES, options: fixedBytesOptions(1 << 31)},
+			wantError: "fixed_bytes byte_length must not exceed 2147483647",
+		},
+		{
+			name:      "empty option",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: &datav1.FieldOptions{}},
+			wantError: "field option must select exactly one semantic type",
+		},
+		{
+			name:      "implicit singular presence",
+			syntax:    "proto3",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: uuidOptions()},
+			wantError: "refined singular field must have explicit or oneof presence",
+		},
+		{
+			name:      "required singular presence",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, required: true, options: uuidOptions()},
+			wantError: "refined singular field must have explicit or oneof presence",
+		},
+		{
+			name:      "protobuf default",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, defaultValue: "0.00", options: decimalOptions(10, 2)},
+			wantError: "refined singular field must not declare a protobuf default",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := CompileMessage(refinedMessage(t, refinedMessageSpec{
+				syntax: tt.syntax,
+				fields: []refinedFieldSpec{tt.field},
+			}), nil)
+			require.ErrorContains(t, err, tt.wantError)
+		})
+	}
+}
+
+func TestCompileMessageRejectsMapRefinement(t *testing.T) {
+	md := refinedMapMessage(t, decimalOptions(10, 2))
+	_, err := CompileMessage(md, nil)
+	require.ErrorContains(t, err, "semantic type refinements are not supported on protobuf maps")
+}
+
+func TestCompileMessagePreservesStorageNamesAndRejectsRefinementEvolution(t *testing.T) {
+	firstDescriptor := refinedMessage(t, refinedMessageSpec{
+		fields: []refinedFieldSpec{{
+			name: "amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(10, 2),
+		}},
+	})
+	first, err := CompileMessage(firstDescriptor, nil)
+	require.NoError(t, err)
+	first.Name = "ledger_entries"
+	first.Fields[0].Name = "ledger_amount"
+
+	renamedDescriptor := refinedMessage(t, refinedMessageSpec{
+		fields: []refinedFieldSpec{{
+			name: "renamed_amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(10, 2),
+		}},
+	})
+	renamed, err := CompileMessage(renamedDescriptor, first)
+	require.NoError(t, err)
+	assert.Equal(t, "ledger_entries", renamed.GetName())
+	assert.Equal(t, "ledger_amount", schemaField(t, renamed, 1).GetName())
+	assert.Equal(t, "shape.v1.ScalarRow.renamed_amount", schemaField(t, renamed, 1).GetProtoFullName())
+
+	changedDescriptor := refinedMessage(t, refinedMessageSpec{
+		fields: []refinedFieldSpec{{
+			name: "renamed_amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(11, 2),
+		}},
+	})
+	_, err = CompileMessage(changedDescriptor, renamed)
+	require.ErrorContains(t, err, "logical shape changed")
+	require.ErrorContains(t, err, "use a new protobuf field number")
 }
 
 func TestCompileDescriptorBytesKeepsDatasetRootsAppendOnly(t *testing.T) {
@@ -883,6 +1150,113 @@ func storageCollisionMessage(t *testing.T, nested bool) protoreflect.MessageDesc
 		Syntax:      new("proto3"),
 		MessageType: messages,
 	}, root)
+}
+
+type refinedMessageSpec struct {
+	syntax string
+	fields []refinedFieldSpec
+}
+
+type refinedFieldSpec struct {
+	name         string
+	number       int32
+	kind         descriptorpb.FieldDescriptorProto_Type
+	repeated     bool
+	required     bool
+	defaultValue string
+	options      *datav1.FieldOptions
+}
+
+func refinedMessage(t *testing.T, spec refinedMessageSpec) protoreflect.MessageDescriptor {
+	t.Helper()
+	if spec.syntax == "" {
+		spec.syntax = "proto2"
+	}
+	fields := make([]*descriptorpb.FieldDescriptorProto, 0, len(spec.fields))
+	for _, fieldSpec := range spec.fields {
+		label := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL
+		switch {
+		case fieldSpec.repeated:
+			label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED
+		case fieldSpec.required:
+			label = descriptorpb.FieldDescriptorProto_LABEL_REQUIRED
+		}
+		field := &descriptorpb.FieldDescriptorProto{
+			Name:   new(fieldSpec.name),
+			Number: new(fieldSpec.number),
+			Label:  label.Enum(),
+			Type:   fieldSpec.kind.Enum(),
+		}
+		if fieldSpec.defaultValue != "" {
+			field.DefaultValue = new(fieldSpec.defaultValue)
+		}
+		if fieldSpec.options != nil {
+			field.Options = &descriptorpb.FieldOptions{}
+			proto.SetExtension(field.Options, datav1.E_Field, fieldSpec.options)
+		}
+		fields = append(fields, field)
+	}
+	return messageFromFile(t, &descriptorpb.FileDescriptorProto{
+		Name:    new("refined.proto"),
+		Package: new("shape.v1"),
+		Syntax:  new(spec.syntax),
+		MessageType: []*descriptorpb.DescriptorProto{{
+			Name:  new("ScalarRow"),
+			Field: fields,
+		}},
+	}, "ScalarRow")
+}
+
+func refinedMapMessage(t *testing.T, options *datav1.FieldOptions) protoreflect.MessageDescriptor {
+	t.Helper()
+	fieldOptions := &descriptorpb.FieldOptions{}
+	proto.SetExtension(fieldOptions, datav1.E_Field, options)
+	return messageFromFile(t, &descriptorpb.FileDescriptorProto{
+		Name:    new("refined_map.proto"),
+		Package: new("shape.v1"),
+		Syntax:  new("proto3"),
+		MessageType: []*descriptorpb.DescriptorProto{{
+			Name: new("MapRow"),
+			NestedType: []*descriptorpb.DescriptorProto{{
+				Name:    new("ValuesEntry"),
+				Options: &descriptorpb.MessageOptions{MapEntry: new(true)},
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{
+						Name: new("key"), Number: proto.Int32(1),
+						Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:  descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+					},
+					{
+						Name: new("value"), Number: proto.Int32(2),
+						Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:  descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+					},
+				},
+			}},
+			Field: []*descriptorpb.FieldDescriptorProto{{
+				Name: new("values"), Number: proto.Int32(1),
+				Label:    descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(),
+				Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+				TypeName: new(".shape.v1.MapRow.ValuesEntry"), Options: fieldOptions,
+			}},
+		}},
+	}, "MapRow")
+}
+
+func decimalOptions(precision, scale uint32) *datav1.FieldOptions {
+	return &datav1.FieldOptions{SemanticType: &datav1.FieldOptions_Decimal{
+		Decimal: &datav1.DecimalOptions{Precision: precision, Scale: scale},
+	}}
+}
+
+func uuidOptions() *datav1.FieldOptions {
+	return &datav1.FieldOptions{SemanticType: &datav1.FieldOptions_Uuid{Uuid: &datav1.UuidOptions{}}}
+}
+
+func fixedBytesOptions(byteLength uint32) *datav1.FieldOptions {
+	return &datav1.FieldOptions{SemanticType: &datav1.FieldOptions_FixedBytes{
+		FixedBytes: &datav1.FixedBytesOptions{ByteLength: byteLength},
+	}}
 }
 
 func rowFile(path, packageName string) *descriptorpb.FileDescriptorProto {

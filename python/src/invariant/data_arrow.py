@@ -7,9 +7,12 @@ not require the optional ``data`` dependency.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable
+from decimal import Decimal
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from google.protobuf import descriptor as protobuf_descriptor
 from google.protobuf import descriptor_pb2, json_format
@@ -53,6 +56,7 @@ _WRAPPER_TYPES = {
 }
 _INT64_MIN = -(1 << 63)
 _INT64_MAX = (1 << 63) - 1
+_INT32_MAX = (1 << 31) - 1
 _NANOS_PER_SECOND = 1_000_000_000
 _TIMESTAMP_SECONDS_MIN = -62_135_596_800
 _TIMESTAMP_SECONDS_MAX = 253_402_300_799
@@ -294,6 +298,34 @@ def _map_type(pa: Any, data_type: DataType, path: str) -> tuple[Any, list[Mappin
             f"protobuf {schema_pb2.JsonKind.Name(data_type.json.kind)} is encoded as RFC 8259 text in Arrow's "
             f"canonical JSON extension type; {_json_range_reduction(data_type.json.kind)}",
         )
+    if kind == "decimal":
+        precision, scale = _decimal_parameters(data_type, path)
+        mapped = pa.decimal128(precision, scale)
+        return (
+            mapped,
+            [],
+            schema_pb2.MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+            f"canonical decimal text is decoded into Arrow {mapped}; precision and scale are preserved but the physical representation changes",
+        )
+    if kind == "uuid":
+        uuid_type = getattr(pa, "uuid", None)
+        if uuid_type is None:
+            raise ValueError(f"arrow: field {path!r} requires a PyArrow release with UUID support")
+        return (
+            uuid_type(),
+            [],
+            schema_pb2.MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
+            "canonical UUID text is decoded into Arrow's UUID extension type over fixed-size binary[16]",
+        )
+    if kind == "fixed_bytes":
+        byte_length = _fixed_bytes_length(data_type, path)
+        mapped = pa.binary(byte_length)
+        return (
+            mapped,
+            [],
+            schema_pb2.MAPPING_COMPATIBILITY_LOSSLESS,
+            f"exact-width protobuf bytes map losslessly to Arrow {mapped}",
+        )
     raise ValueError(f"arrow: field {path!r} has an unspecified logical type")
 
 
@@ -532,11 +564,16 @@ def _validate_value_type(
 ) -> None:
     primitive_kind = _PRIMITIVE_KINDS.get(actual.type)
     if primitive_kind is not None:
-        if (
-            logical.WhichOneof("kind") != "primitive"
-            or logical.primitive.kind != primitive_kind
-            or logical.protobuf_type
-        ):
+        logical_kind = logical.WhichOneof("kind")
+        if logical_kind in {"decimal", "uuid"}:
+            if actual.type != protobuf_descriptor.FieldDescriptor.TYPE_STRING or logical.protobuf_type:
+                _descriptor_mismatch(path, f"logical {logical_kind} requires a protobuf string carrier")
+            return
+        if logical_kind == "fixed_bytes":
+            if actual.type != protobuf_descriptor.FieldDescriptor.TYPE_BYTES or logical.protobuf_type:
+                _descriptor_mismatch(path, "logical fixed_bytes requires a protobuf bytes carrier")
+            return
+        if logical_kind != "primitive" or logical.primitive.kind != primitive_kind or logical.protobuf_type:
             _descriptor_mismatch(path, "protobuf primitive kind does not match the SchemaBundle")
         return
 
@@ -737,7 +774,73 @@ def _convert_value(value: Any, data_type: DataType, path: str, source: str) -> A
                 f"arrow: protobuf JSON field {path!r} from {source!r} ({data_type.protobuf_type}) "
                 f"is outside the canonical ProtoJSON domain: {_json_range_reduction(data_type.json.kind)}: {error}"
             ) from error
+    if kind == "decimal":
+        return _decimal_value(value, data_type, path)
+    if kind == "uuid":
+        return _uuid_value(value, path)
+    if kind == "fixed_bytes":
+        byte_length = _fixed_bytes_length(data_type, path)
+        if not isinstance(value, bytes):
+            raise TypeError(f"arrow: fixed-bytes field {path!r} is not protobuf bytes")
+        if len(value) != byte_length:
+            raise ValueError(
+                f"arrow: fixed-bytes field {path!r} has length {len(value)}; expected exactly {byte_length} bytes"
+            )
+        return value
     raise ValueError(f"arrow: field {path!r} has an unspecified logical type")
+
+
+def _decimal_parameters(data_type: DataType, path: str) -> tuple[int, int]:
+    precision = data_type.decimal.precision
+    scale = data_type.decimal.scale
+    if precision < 1 or precision > 38:
+        raise ValueError(f"arrow: decimal field {path!r} precision must be between 1 and 38")
+    if scale > precision:
+        raise ValueError(f"arrow: decimal field {path!r} scale must not exceed precision {precision}")
+    return precision, scale
+
+
+def _decimal_value(value: Any, data_type: DataType, path: str) -> Decimal:
+    precision, scale = _decimal_parameters(data_type, path)
+    if not isinstance(value, str):
+        raise TypeError(f"arrow: decimal field {path!r} is not protobuf text")
+
+    if scale == 0:
+        canonical = re.fullmatch(r"-?(?:0|[1-9][0-9]*)", value) is not None
+    else:
+        canonical = re.fullmatch(rf"-?(?:0|[1-9][0-9]*)\.[0-9]{{{scale}}}", value) is not None
+    if not canonical:
+        raise ValueError(f"arrow: decimal field {path!r} is not canonical decimal({precision}, {scale}) text")
+
+    digits = value.removeprefix("-").replace(".", "")
+    if value.startswith("-") and not digits.strip("0"):
+        raise ValueError(f"arrow: decimal field {path!r} uses the non-canonical negative-zero spelling")
+    significant = digits.lstrip("0")
+    if len(significant) > precision:
+        raise ValueError(f"arrow: decimal field {path!r} exceeds precision {precision}")
+    unscaled = int(digits)
+    if unscaled >= 10**precision:  # Defensive: the digit check above avoids unbounded integer parsing.
+        raise ValueError(f"arrow: decimal field {path!r} exceeds precision {precision}")
+    return Decimal(value)
+
+
+def _uuid_value(value: Any, path: str) -> UUID:
+    if not isinstance(value, str):
+        raise TypeError(f"arrow: UUID field {path!r} is not protobuf text")
+    try:
+        parsed = UUID(value)
+    except ValueError as error:
+        raise ValueError(f"arrow: UUID field {path!r} is not valid canonical UUID text") from error
+    if str(parsed) != value:
+        raise ValueError(f"arrow: UUID field {path!r} is not lowercase hyphenated canonical UUID text")
+    return parsed
+
+
+def _fixed_bytes_length(data_type: DataType, path: str) -> int:
+    byte_length = data_type.fixed_bytes.byte_length
+    if byte_length < 1 or byte_length > _INT32_MAX:
+        raise ValueError(f"arrow: fixed-bytes field {path!r} length must be between 1 and {_INT32_MAX} bytes")
+    return byte_length
 
 
 def _checked_nanoseconds(seconds: int, nanos: int, path: str, logical_type: str) -> int:

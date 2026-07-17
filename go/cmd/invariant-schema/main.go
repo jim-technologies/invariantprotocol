@@ -52,7 +52,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
-	fmt.Fprintln(w, "  invariant-schema compile --descriptor FILE --message FULL_NAME [--message FULL_NAME ...] --output FILE")
+	fmt.Fprintln(w, "  invariant-schema compile --descriptor FILE [--message FULL_NAME ...] --output FILE")
+	fmt.Fprintln(w, "    Without --message, messages marked (invariant.data.v1.dataset) are compiled.")
 	fmt.Fprintln(w, "  invariant-schema arrow|parquet|iceberg|sql --bundle FILE [--message FULL_NAME] [--output FILE|-]")
 }
 
@@ -84,9 +85,6 @@ func runCompile(args []string, stderr io.Writer) error {
 	}
 	if descriptorPath == "" {
 		return errors.New("compile: --descriptor is required")
-	}
-	if len(messages) == 0 {
-		return errors.New("compile: at least one --message is required")
 	}
 	if outputPath == "" {
 		return errors.New("compile: --output is required")

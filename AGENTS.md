@@ -131,12 +131,22 @@ authority. Do not infer a second schema independently from Python descriptors
 or arbitrary dictionaries.
 
 Protobuf is the only authored logical contract, not a physical storage format.
-Compilation requires explicit fully-qualified root messages. The existing
-output bundle is derived evolution state: numeric protobuf paths retain active
-IDs, every removed nested/list/map ID is tombstoned, and reuse or a type/
-presence change on an active ID fails. Never delete or hand-edit that history
-to make a schema change pass; use a new protobuf field number and reserve the
-old number/name.
+Messages marked `(invariant.data.v1.dataset)` are discovered when the compiler
+is run without `--message`; explicit names remain a root-selection override.
+Portable field annotations refine string carriers to decimal/UUID and bytes to
+an exact width. Refined singular carriers require explicit or oneof presence,
+repeated refinements apply per element, and maps are not refined. The existing
+output bundle is derived evolution state: while the dataset full name remains
+stable, numeric protobuf paths retain active IDs and field storage names. Every
+removed nested/list/map ID is tombstoned, and reuse or a
+type/presence/refinement change on an active ID fails. Never delete
+or hand-edit that history to make a schema change pass; use a new protobuf
+field number and reserve the old number/name.
+
+Annotations declare a logical value domain; they do not validate runtime
+message values. Python's `arrow_table()` enforces canonical decimal/UUID text
+and fixed byte width. Every other writer must enforce the same domain at its
+own boundary rather than assuming the option is a validation interceptor.
 
 Renderers emit a diagnostic per logical node. Do not silently collapse maps,
 unsigned values, enum numbers, temporal precision/range, or recursive types.
@@ -155,16 +165,24 @@ metadata attached specifically to map key/value children through IPC. Direct
 bundle-to-Parquet rendering retains those child IDs and is covered end to end;
 do not chain Parquet generation through the emitted Arrow IPC artifact.
 
-Custom public protobuf options are deferred until Invariant has a globally
-registered Protobuf extension number. Do not reuse downstream ad-hoc option
-numbers. Dataset roots become append-only after the first bundle is committed;
+Invariant repository policy assigns `51974` from Protobuf's
+organization-internal range to its aggregate data options; it is not globally
+registered. MessageOptions and FieldOptions have separate number spaces; do not
+allocate additional numbers for new portable semantics. The compiler must
+reject foreign reuse visible on either extendee within a supplied descriptor
+image. Dataset roots become append-only after the first bundle is committed;
 reachable extension ranges and normalized storage-name collisions must fail
-compilation. Keys, indexes, partitions, table placement, migrations, file writes,
-and catalog commits remain downstream policy.
+compilation. Keys, indexes, partitions, table placement, migrations, file
+writes, and catalog commits remain downstream policy.
 
 Go, Python, Rust, and TypeScript bundle readers reject unknown IR or mapping
 versions by default. Raw generated messages remain wire types, not permission
 to interpret a newer mapping with older code.
+
+The v1→v2 bundle reset is allowed only because there are no external data-schema
+consumers. Once a released bundle carries real identities/tombstones, do not
+bump its accepted version and abandon that history; ship an explicit artifact
+migration before changing the compiler's required version.
 
 ## Convention over configuration
 
@@ -452,5 +470,3 @@ as stdio; do not add a second tool registry.
 - Go-native protobuf-record to Arrow conversion and framework-owned data-file writing
 - Iceberg catalog commits, partition policies, and table migration/application
 - Relational keys, indexes, normalization, and SQL dialects beyond PostgreSQL
-- Public dataset/column protobuf annotations (waiting on a globally registered
-  extension number)

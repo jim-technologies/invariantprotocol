@@ -10,6 +10,40 @@ but never silent behaviour regressions.
 
 ## Unreleased
 
+## v0.8.0 — 2026-07-16
+
+### Added
+
+- **Portable protobuf data annotations.** Messages marked with
+  `(invariant.data.v1.dataset)` become dataset roots, while aggregate field
+  option `51974` refines string and bytes carriers into decimal, UUID, and
+  exact-width byte domains without target-specific type strings. The compiler
+  rejects invalid carriers, parameters, visible option collisions, unknown
+  future option fields, and incompatible evolution.
+- **Native mappings for the common data targets.** Arrow, Parquet, Iceberg, and
+  PostgreSQL render their native decimal, UUID, and fixed-byte equivalents.
+  Python's PyArrow bridge also validates canonical record values and converts
+  them without coercion.
+
+### Changed
+
+- **Annotated root discovery is now the convention.**
+  `invariant-schema compile` discovers annotated messages when `--message` is
+  omitted; explicit roots remain available for controlled builds and take
+  precedence. Dataset roots stay append-only once the generated bundle is
+  committed.
+- **Field storage names survive same-number source renames.** The compiler
+  retains committed field IDs and storage names while the dataset protobuf full
+  name remains stable, preventing a source rename from silently becoming a
+  physical column rename.
+
+### Breaking
+
+- **SchemaBundle IR and mapping versions are now 2.** Version 1 artifacts and
+  readers fail clearly rather than being guessed forward. There are no external
+  v1 data-schema consumers, so this release regenerates the committed baseline
+  instead of carrying a compatibility layer.
+
 ## v0.7.1 — 2026-07-16
 
 ### Fixed

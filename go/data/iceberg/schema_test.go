@@ -194,6 +194,76 @@ func TestSchemaRejectsRequiredProtobufFieldsWithoutSafeHistory(t *testing.T) {
 	require.ErrorContains(t, err, "no safe canonical value for historical rows")
 }
 
+func TestSemanticRefinementSchema(t *testing.T) {
+	dataset := semanticDataset()
+	schema, diagnostics, err := invarianticeberg.Schema(dataset)
+	require.NoError(t, err)
+
+	decimal, ok := icebergField(t, schema, "amount").Type.(iceberglib.DecimalType)
+	require.True(t, ok)
+	require.Equal(t, 18, decimal.Precision())
+	require.Equal(t, 4, decimal.Scale())
+
+	_, ok = icebergField(t, schema, "record_id").Type.(iceberglib.UUIDType)
+	require.True(t, ok)
+	fixed, ok := icebergField(t, schema, "digest").Type.(iceberglib.FixedType)
+	require.True(t, ok)
+	require.Equal(t, 24, fixed.Len())
+
+	for _, path := range []string{"amount", "record_id"} {
+		require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED, diagnostic(t, diagnostics, path).GetCompatibility())
+	}
+	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS, diagnostic(t, diagnostics, "digest").GetCompatibility())
+
+	encoded, err := invarianticeberg.JSON(schema)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"type":"decimal(18, 4)"`)
+	require.Contains(t, string(encoded), `"type":"uuid"`)
+	require.Contains(t, string(encoded), `"type":"fixed[24]"`)
+
+	malformed := proto.Clone(dataset).(*datav1.DatasetSchema)
+	amount := datasetField(t, malformed, "amount")
+	amount.Presence = datav1.Presence_PRESENCE_IMPLICIT
+	amount.Nullable = false
+	_, _, err = invarianticeberg.Schema(malformed)
+	require.ErrorContains(t, err, "refined logical type without a valid implicit value")
+}
+
+func semanticDataset() *datav1.DatasetSchema {
+	return &datav1.DatasetSchema{
+		Name:          "semantic_record",
+		SourceMessage: "example.SemanticRecord",
+		Fields: []*datav1.Field{
+			{
+				Name:     "amount",
+				StableId: 1,
+				Presence: datav1.Presence_PRESENCE_EXPLICIT,
+				Nullable: true,
+				Type: &datav1.DataType{Kind: &datav1.DataType_Decimal{Decimal: &datav1.DecimalType{
+					Precision: 18,
+					Scale:     4,
+				}}},
+			},
+			{
+				Name:     "record_id",
+				StableId: 2,
+				Presence: datav1.Presence_PRESENCE_EXPLICIT,
+				Nullable: true,
+				Type:     &datav1.DataType{Kind: &datav1.DataType_Uuid{Uuid: &datav1.UuidType{}}},
+			},
+			{
+				Name:     "digest",
+				StableId: 3,
+				Presence: datav1.Presence_PRESENCE_EXPLICIT,
+				Nullable: true,
+				Type: &datav1.DataType{Kind: &datav1.DataType_FixedBytes{FixedBytes: &datav1.FixedBytesType{
+					ByteLength: 24,
+				}}},
+			},
+		},
+	}
+}
+
 func icebergField(t *testing.T, schema *iceberglib.Schema, name string) iceberglib.NestedField {
 	t.Helper()
 	for _, field := range schema.Fields() {

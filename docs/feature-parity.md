@@ -63,3 +63,9 @@ When a runtime has a useful extra integration, document it as such without
 quietly expanding a Core row. For example, Go, Python, and TypeScript currently
 consume a primary `google.api.http` binding in their remote HTTP adapters, while
 the portable remote-HTTP contract is the canonical Connect method path.
+
+The data compiler follows the same rule: dataset and field annotations are
+language-neutral protobuf options, one Go build tool compiles the descriptor
+image, and all four languages decode the same versioned SchemaBundle. Decimal,
+UUID, and fixed-byte refinements are generated IR variants in every reader;
+PyArrow record conversion remains a Python ecosystem adapter.
