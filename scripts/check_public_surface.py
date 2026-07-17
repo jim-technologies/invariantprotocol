@@ -81,6 +81,7 @@ PUBLIC_PACKAGE_ALLOWLIST = (
     "github.com/jim-technologies/invariantprotocol/go",
     "github.com/jim-technologies/invariantprotocol",
     "github:jim-technologies/invariantprotocol",
+    "https://github.com/jim-technologies/invariantprotocol/actions/workflows/ci.yml",
 )
 
 PUBLIC_PACKAGE_PATTERNS = (
@@ -96,6 +97,10 @@ PUBLIC_PACKAGE_PATTERNS = (
     re.compile(
         r"github:jim-technologies/invariantprotocol(?:#[a-z0-9_./-]+)?"
         r"(?=$|[^a-z0-9_./-])"
+    ),
+    re.compile(
+        r"https://github\.com/jim-technologies/invariantprotocol/actions/workflows/"
+        r"ci\.yml(?:/badge\.svg)?(?=$|[^a-z0-9_./-])"
     ),
 )
 

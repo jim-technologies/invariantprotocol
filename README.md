@@ -1,5 +1,7 @@
 # Invariant Protocol
 
+[![CI](https://github.com/jim-technologies/invariantprotocol/actions/workflows/ci.yml/badge.svg)](https://github.com/jim-technologies/invariantprotocol/actions/workflows/ci.yml)
+
 Invariant is a gRPC-first framework for projecting one registered protobuf
 service onto native gRPC, HTTP/Connect, MCP, and CLI. Application code uses
 generated messages and generated service APIs; Invariant does not introduce a
