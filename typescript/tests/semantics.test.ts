@@ -69,6 +69,179 @@ describe("cross-projection HandlerContext semantics", () => {
     expect(protocols).toEqual(["in-process", "cli", "mcp"]);
   });
 
+  test("honors cancellation and deadlines before handlers and between stream messages", async () => {
+    let unaryCalls = 0;
+    let streamCalls = 0;
+    let streamClosed = false;
+    let closeStream!: () => void;
+    const streamDidClose = new Promise<void>((resolveClosed) => {
+      closeStream = resolveClosed;
+    });
+    const server = Server.fromDescriptor(descriptorPath);
+    server.register(GreetService, {
+      async greet() {
+        unaryCalls += 1;
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
+        return { message: "too late" };
+      },
+      streamGreet: () =>
+        (async function* () {
+          streamCalls += 1;
+          try {
+            await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
+            yield { message: "too late" };
+          } finally {
+            streamClosed = true;
+            closeStream();
+          }
+        })(),
+    });
+
+    const canceled = new AbortController();
+    canceled.abort(new ConnectError("request canceled", Code.Canceled));
+    const unaryCanceled = createHandlerContext({
+      service: GreetService,
+      method: GreetService.method.greet,
+      protocolName: "in-process",
+      requestMethod: "POST",
+      url: "in-process:///greet.v1.GreetService/Greet",
+      requestSignal: canceled.signal,
+    });
+    await expect(server.invoke("GreetService.Greet", { name: "canceled" }, unaryCanceled)).rejects.toMatchObject({
+      code: Code.Canceled,
+    });
+
+    const streamCanceled = createHandlerContext({
+      service: GreetService,
+      method: GreetService.method.streamGreet,
+      protocolName: "in-process",
+      requestMethod: "POST",
+      url: "in-process:///greet.v1.GreetService/StreamGreet",
+      requestSignal: canceled.signal,
+    });
+    const consumeCanceled = async () => {
+      for await (const _message of server.invokeStream(
+        "GreetService.StreamGreet",
+        { name: "canceled", count: 1 },
+        streamCanceled,
+      )) {
+        // A pre-canceled call must not yield.
+      }
+    };
+    await expect(consumeCanceled()).rejects.toMatchObject({ code: Code.Canceled });
+    expect({ unaryCalls, streamCalls }).toEqual({ unaryCalls: 0, streamCalls: 0 });
+
+    const unaryExpired = createHandlerContext({
+      service: GreetService,
+      method: GreetService.method.greet,
+      protocolName: "in-process",
+      requestMethod: "POST",
+      url: "in-process:///greet.v1.GreetService/Greet",
+      timeoutMs: 5,
+    });
+    await expect(server.invoke("GreetService.Greet", { name: "deadline" }, unaryExpired)).rejects.toMatchObject({
+      code: Code.DeadlineExceeded,
+    });
+
+    const streamExpired = createHandlerContext({
+      service: GreetService,
+      method: GreetService.method.streamGreet,
+      protocolName: "in-process",
+      requestMethod: "POST",
+      url: "in-process:///greet.v1.GreetService/StreamGreet",
+      timeoutMs: 5,
+    });
+    const consumeExpired = async () => {
+      for await (const _message of server.invokeStream(
+        "GreetService.StreamGreet",
+        { name: "deadline", count: 1 },
+        streamExpired,
+      )) {
+        // The deadline must win before the delayed message.
+      }
+    };
+    await expect(consumeExpired()).rejects.toMatchObject({ code: Code.DeadlineExceeded });
+    expect({ unaryCalls, streamCalls, streamClosed }).toEqual({ unaryCalls: 1, streamCalls: 1, streamClosed: false });
+    await streamDidClose;
+    expect(streamClosed).toBe(true);
+
+    unaryCanceled.abort();
+    streamCanceled.abort();
+    unaryExpired.abort();
+    streamExpired.abort();
+  });
+
+  test("does not let an uncooperative stream delay cancellation while generator cleanup is pending", async () => {
+    let entered!: () => void;
+    const handlerEntered = new Promise<void>((resolveEntered) => {
+      entered = resolveEntered;
+    });
+    let release!: () => void;
+    const handlerRelease = new Promise<void>((resolveRelease) => {
+      release = resolveRelease;
+    });
+    let closed!: () => void;
+    const handlerClosed = new Promise<void>((resolveClosed) => {
+      closed = resolveClosed;
+    });
+    let generatorClosed = false;
+
+    const server = Server.fromDescriptor(descriptorPath);
+    server.register(GreetService, {
+      streamGreet: () =>
+        (async function* () {
+          try {
+            entered();
+            await handlerRelease;
+            yield { message: "too late" };
+          } finally {
+            generatorClosed = true;
+            closed();
+          }
+        })(),
+    });
+
+    const controller = new AbortController();
+    const context = createHandlerContext({
+      service: GreetService,
+      method: GreetService.method.streamGreet,
+      protocolName: "in-process",
+      requestMethod: "POST",
+      url: "in-process:///greet.v1.GreetService/StreamGreet",
+      requestSignal: controller.signal,
+    });
+    const consume = async () => {
+      for await (const _message of server.invokeStream(
+        "GreetService.StreamGreet",
+        { name: "cancel", count: 1 },
+        context,
+      )) {
+        // Cancellation must win before the blocked handler yields.
+      }
+    };
+    const result = consume();
+    await handlerEntered;
+    controller.abort(new ConnectError("request canceled", Code.Canceled));
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const didNotCancel = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("stream cancellation waited for generator cleanup")), 250);
+    });
+    try {
+      await expect(Promise.race([result, didNotCancel])).rejects.toMatchObject({ code: Code.Canceled });
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+    expect(generatorClosed).toBe(false);
+
+    release();
+    await handlerClosed;
+    expect(generatorClosed).toBe(true);
+    context.abort();
+  });
+
   test("runs a standard Connect interceptor exactly once with generated messages on every projection", async () => {
     const calls: Array<{ url: string; typeName: string }> = [];
     const server = registeredServer();
@@ -590,7 +763,7 @@ describe("cross-projection HandlerContext semantics", () => {
       request.on("error", rejectResponse);
       const split = Math.floor(payload.length / 2);
       request.write(payload.subarray(0, split));
-      setTimeout(() => request.end(payload.subarray(split)), 150);
+      setTimeout(() => request.end(payload.subarray(split)), 300);
     });
 
     expect(response.status).toBe(200);
@@ -939,7 +1112,7 @@ describe("cross-projection HandlerContext semantics", () => {
     const canceledCall = proxy.invoke("GreetService.Greet", { name: "Cancel" }, cancelContext);
     await requestEntered;
     cancelController.abort();
-    await expect(canceledCall).rejects.toMatchObject({ code: "canceled" });
+    await expect(canceledCall).rejects.toMatchObject({ code: Code.Canceled });
     await responseClosed;
     cancelContext.abort();
 
@@ -949,12 +1122,12 @@ describe("cross-projection HandlerContext semantics", () => {
       protocolName: "connect",
       requestMethod: "POST",
       url: "http://proxy/greet.v1.GreetService/Greet",
-      timeoutMs: 250,
+      timeoutMs: 100,
     });
     preparePendingRequest();
     const deadlineCall = proxy.invoke("GreetService.Greet", { name: "Deadline" }, deadlineContext);
     await requestEntered;
-    await expect(deadlineCall).rejects.toMatchObject({ code: "deadline_exceeded" });
+    await expect(deadlineCall).rejects.toMatchObject({ code: Code.DeadlineExceeded });
     await responseClosed;
     deadlineContext.abort();
 

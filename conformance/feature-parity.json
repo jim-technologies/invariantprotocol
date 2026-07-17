@@ -296,6 +296,16 @@
         "proto/invariant/data/v1/schema.proto",
         "go/cmd/invariant-schema",
         "go/data"
+      ],
+      "tests": [
+        "go/data/annotated_fixture_test.go",
+        "go/data/compiler_test.go",
+        "go/data/arrow/schema_test.go",
+        "go/data/parquet/schema_test.go",
+        "go/data/iceberg/schema_test.go",
+        "go/data/postgres/schema_test.go",
+        "go/cmd/invariant-schema/main_test.go",
+        "scripts/check_postgres_atlas.sh"
       ]
     },
     {

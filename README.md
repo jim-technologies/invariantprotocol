@@ -5,8 +5,9 @@ service onto native gRPC, HTTP/Connect, MCP, and CLI. Application code uses
 generated messages and generated service APIs; Invariant does not introduce a
 second RPC model or route production calls through an in-memory gRPC hop.
 
-Explicitly selected protobuf messages can also compile into one versioned data
-schema for Arrow, Parquet, Iceberg, and PostgreSQL.
+Annotated protobuf dataset messages can also compile into one versioned data
+schema for Arrow, Parquet, Iceberg, and PostgreSQL. Explicit `--message`
+selection remains available for controlled builds.
 
 ```text
 .proto (the only authored contract)
@@ -324,7 +325,10 @@ HTTP/Connect has four independent 16 MiB defaults in every runtime:
 
 Streaming limits apply per message, not to the stream lifetime. Each language
 provides `SetMax*` / `set_max_*` / `setMax*` methods and a per-full-method
-configuration API. Exceeding a projection limit returns `resource_exhausted`.
+configuration API. Zero resets a server-wide limit to 16 MiB and makes a
+per-method limit inherit from the server; negative values are rejected where
+the language's integer type permits them. Exceeding a projection limit returns
+`resource_exhausted`.
 
 Native gRPC limits remain ordinary grpc-go, grpcio, Tonic, or grpc-js controls.
 They measure protobuf gRPC messages and do not govern encoded HTTP JSON bytes.
@@ -441,12 +445,12 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.8.1`; new releases do not create language-prefixed tags.
+tag `v0.8.2`; new releases do not create language-prefixed tags.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.8.1
+go get github.com/jim-technologies/invariantprotocol/go@v0.8.2
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -456,26 +460,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.1#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.2#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.1#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.2#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.1" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.2" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.1" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.2" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.8.1"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.8.2"
 ```
 
 For reproducible production builds, replace the tag with a full commit

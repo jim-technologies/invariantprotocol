@@ -1,6 +1,8 @@
 import {
+  clone,
   create,
   type DescEnum,
+  type DescFile,
   type DescMessage,
   type DescMethod,
   type DescService,
@@ -10,8 +12,15 @@ import {
   type MessageShape,
   toJson,
 } from "@bufbuild/protobuf";
-import { DescriptorProtoSchema, EnumDescriptorProtoSchema, ServiceDescriptorProtoSchema } from "@bufbuild/protobuf/wkt";
 import {
+  DescriptorProtoSchema,
+  EnumDescriptorProtoSchema,
+  FileDescriptorProtoSchema,
+  ServiceDescriptorProtoSchema,
+} from "@bufbuild/protobuf/wkt";
+import {
+  Code as ConnectCode,
+  ConnectError,
   type HandlerContext as ConnectHandlerContext,
   createServiceImplSpec,
   type Interceptor,
@@ -86,7 +95,7 @@ export type ToolCatalogEntry = {
 };
 
 export const SERVER_NAME = "invariant-protocol";
-export const SERVER_VERSION = "0.8.1";
+export const SERVER_VERSION = "0.8.2";
 const DEFAULT_HTTP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_HTTP_METADATA_KEYS = ["traceparent", "tracestate", "baggage", "x-request-id"] as const;
 
@@ -186,28 +195,31 @@ export class Server {
 
   setMaxUnaryRequestBytes(n: number): void {
     this.assertMutable("HTTP unary request limit");
-    this.httpMaxUnaryRequest = positiveByteLimit(n, "HTTP unary request limit");
+    this.httpMaxUnaryRequest = n === 0 ? DEFAULT_HTTP_MESSAGE_BYTES : positiveByteLimit(n, "HTTP unary request limit");
   }
 
   setMaxUnaryResponseBytes(n: number): void {
     this.assertMutable("HTTP unary response limit");
-    this.httpMaxUnaryResponse = positiveByteLimit(n, "HTTP unary response limit");
+    this.httpMaxUnaryResponse =
+      n === 0 ? DEFAULT_HTTP_MESSAGE_BYTES : positiveByteLimit(n, "HTTP unary response limit");
   }
 
   setMaxStreamRequestBytes(n: number): void {
     this.assertMutable("HTTP stream request limit");
-    this.connectStreamMaxRequest = positiveByteLimit(n, "HTTP stream request limit");
+    this.connectStreamMaxRequest =
+      n === 0 ? DEFAULT_HTTP_MESSAGE_BYTES : positiveByteLimit(n, "HTTP stream request limit");
   }
 
   setMaxStreamResponseBytes(n: number): void {
     this.assertMutable("HTTP stream response limit");
-    this.connectStreamMaxResponse = positiveByteLimit(n, "HTTP stream response limit");
+    this.connectStreamMaxResponse =
+      n === 0 ? DEFAULT_HTTP_MESSAGE_BYTES : positiveByteLimit(n, "HTTP stream response limit");
   }
 
   configureMethod(fullMethod: string, config: MethodConfig): void {
     this.assertMutable("method configuration");
     for (const [name, value] of Object.entries(config)) {
-      if (value !== undefined) {
+      if (value !== undefined && value !== 0) {
         positiveByteLimit(value, `${fullMethod} ${name}`);
       }
     }
@@ -518,7 +530,9 @@ export class Server {
       throw new InvariantError("internal", `could not create a handler context for ${fullMethod}`);
     }
     try {
-      const response = await this.interceptUnary(method, request, callContext, handler);
+      const response = await runWithContext(callContext, () =>
+        this.interceptUnary(method, request, callContext, handler),
+      );
       return this.coerceMessage(method.output, response.message);
     } catch (error) {
       throw normalizeHandlerError(error, fullMethod);
@@ -586,10 +600,36 @@ export class Server {
       throw new InvariantError("internal", `could not create a handler context for ${fullMethod}`);
     }
     try {
-      const response = await this.interceptStream(method, requests, callContext, handler);
+      const response = await runWithContext(callContext, () =>
+        this.interceptStream(method, requests, callContext, handler),
+      );
       copyHeaders(response.header, callContext.responseHeader);
-      for await (const message of response.message) {
-        yield this.coerceMessage(method.output, message);
+      const iterator = response.message[Symbol.asyncIterator]();
+      let complete = false;
+      try {
+        for (;;) {
+          const item = await runWithContext(callContext, () => iterator.next());
+          if (item.done) {
+            complete = true;
+            break;
+          }
+          yield this.coerceMessage(method.output, item.value);
+        }
+      } finally {
+        if (!complete) {
+          const closing = iterator.return?.();
+          if (closing !== undefined) {
+            const remaining = callContext.timeoutMs();
+            if (callContext.signal.aborted || (remaining !== undefined && remaining <= 0)) {
+              // JavaScript cannot forcibly stop a handler that ignores its
+              // signal. Do request generator cleanup, but do not let that
+              // uncooperative handler delay cancellation indefinitely.
+              void closing.catch(() => undefined);
+            } else {
+              await closing;
+            }
+          }
+        }
       }
       copyHeaders(response.trailer, callContext.responseTrailer);
     } catch (error) {
@@ -645,7 +685,7 @@ export class Server {
     }
     const config = this.methodConfigs.get(`/${tool.serviceFullName}/${tool.methodName}`);
     const value = config?.[key];
-    return value ?? fallback;
+    return value === undefined || value === 0 ? fallback : value;
   }
 
   private createContext(method: DescMethod, options: ProjectionContextOptions): ManagedHandlerContext {
@@ -776,6 +816,15 @@ export class Server {
       this.validateGeneratedMessage(method.input, seenMessages, seenEnums);
       this.validateGeneratedMessage(method.output, seenMessages, seenEnums);
     }
+    const mismatch = descriptorGraphMismatch(
+      reachableServiceFiles(service),
+      reachableServiceFiles(descriptorService.desc),
+    );
+    if (mismatch !== undefined) {
+      throw new Error(
+        `Generated service '${service.typeName}' protobuf file '${mismatch}' does not match descriptor.binpb.`,
+      );
+    }
     return descriptorService;
   }
 
@@ -786,7 +835,11 @@ export class Server {
     seenMessages.add(message.typeName);
 
     const descriptorMessage = this.parsed.getMessage(message.typeName);
-    if (!descriptorMessage || !equals(DescriptorProtoSchema, message.proto, descriptorMessage.proto)) {
+    if (
+      !descriptorMessage ||
+      !equals(DescriptorProtoSchema, message.proto, descriptorMessage.proto) ||
+      !messageSemanticsMatch(message, descriptorMessage)
+    ) {
       throw new Error(`Generated message '${message.typeName}' does not match descriptor.binpb.`);
     }
 
@@ -817,7 +870,11 @@ export class Server {
     }
     seenEnums.add(en.typeName);
     const descriptorEnum = this.parsed.getEnum(en.typeName);
-    if (!descriptorEnum || !equals(EnumDescriptorProtoSchema, en.proto, descriptorEnum.proto)) {
+    if (
+      !descriptorEnum ||
+      !equals(EnumDescriptorProtoSchema, en.proto, descriptorEnum.proto) ||
+      en.open !== descriptorEnum.open
+    ) {
       throw new Error(`Generated enum '${en.typeName}' does not match descriptor.binpb.`);
     }
   }
@@ -919,6 +976,165 @@ function positiveByteLimit(value: number, subject: string): number {
     throw new RangeError(`${subject} must be a positive integer number of bytes.`);
   }
   return value;
+}
+
+function runWithContext<T>(context: HandlerContext, operation: () => Promise<T>): Promise<T> {
+  try {
+    assertContextActive(context);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      context.signal.removeEventListener("abort", abort);
+      reject(context.signal.reason ?? new ConnectError("request canceled", ConnectCode.Canceled));
+    };
+    context.signal.addEventListener("abort", abort, { once: true });
+    void Promise.resolve()
+      .then(() => {
+        assertContextActive(context);
+        return operation();
+      })
+      .then(
+        (value) => {
+          context.signal.removeEventListener("abort", abort);
+          try {
+            assertContextActive(context);
+            resolve(value);
+          } catch (error) {
+            reject(error);
+          }
+        },
+        (error) => {
+          context.signal.removeEventListener("abort", abort);
+          reject(error);
+        },
+      );
+  });
+}
+
+function assertContextActive(context: HandlerContext): void {
+  if (context.signal.aborted) {
+    throw context.signal.reason ?? new ConnectError("request canceled", ConnectCode.Canceled);
+  }
+  const remaining = context.timeoutMs();
+  if (remaining !== undefined && remaining <= 0) {
+    throw new ConnectError("deadline exceeded", ConnectCode.DeadlineExceeded);
+  }
+}
+
+function reachableServiceFiles(service: DescService): Map<string, DescFile> {
+  const files = new Map<string, DescFile>([[service.file.proto.name, service.file]]);
+  const seen = new Set<string>();
+  for (const method of service.methods) {
+    addReachableMessageFiles(files, seen, method.input);
+    addReachableMessageFiles(files, seen, method.output);
+  }
+  return files;
+}
+
+function addReachableMessageFiles(files: Map<string, DescFile>, seen: Set<string>, message: DescMessage): void {
+  if (seen.has(message.typeName)) {
+    return;
+  }
+  seen.add(message.typeName);
+  files.set(message.file.proto.name, message.file);
+  for (const field of message.fields) {
+    if (field.fieldKind === "message") {
+      addReachableMessageFiles(files, seen, field.message);
+    } else if (field.fieldKind === "enum") {
+      files.set(field.enum.file.proto.name, field.enum.file);
+    } else if (field.fieldKind === "list") {
+      if (field.listKind === "message") {
+        addReachableMessageFiles(files, seen, field.message);
+      } else if (field.listKind === "enum") {
+        files.set(field.enum.file.proto.name, field.enum.file);
+      }
+    } else if (field.fieldKind === "map") {
+      if (field.mapKind === "message") {
+        addReachableMessageFiles(files, seen, field.message);
+      } else if (field.mapKind === "enum") {
+        files.set(field.enum.file.proto.name, field.enum.file);
+      }
+    }
+  }
+}
+
+function descriptorGraphMismatch(generated: Map<string, DescFile>, runtime: Map<string, DescFile>): string | undefined {
+  if (generated.size !== runtime.size) {
+    return "<reachable graph>";
+  }
+  for (const path of [...generated.keys()].sort()) {
+    const generatedFile = generated.get(path);
+    const runtimeFile = runtime.get(path);
+    if (!generatedFile || !runtimeFile) {
+      return path;
+    }
+    if (generatedFile.edition !== runtimeFile.edition || generatedFile.deprecated !== runtimeFile.deprecated) {
+      return path;
+    }
+    const generatedProto = clone(FileDescriptorProtoSchema, generatedFile.proto);
+    const runtimeProto = clone(FileDescriptorProtoSchema, runtimeFile.proto);
+    generatedProto.sourceCodeInfo = undefined;
+    runtimeProto.sourceCodeInfo = undefined;
+    // Protobuf-ES deliberately trims language-specific file options from its
+    // embedded generated descriptors. Resolved wire semantics are checked on
+    // DescFile, DescMessage, DescField, and DescEnum instead.
+    generatedProto.options = undefined;
+    runtimeProto.options = undefined;
+    if (!equals(FileDescriptorProtoSchema, generatedProto, runtimeProto)) {
+      return path;
+    }
+  }
+  return undefined;
+}
+
+function messageSemanticsMatch(generated: DescMessage, runtime: DescMessage): boolean {
+  for (const field of generated.fields) {
+    const expected = runtime.fields.find((candidate) => candidate.name === field.name);
+    if (
+      !expected ||
+      field.fieldKind !== expected.fieldKind ||
+      field.presence !== expected.presence ||
+      field.utf8Validation !== expected.utf8Validation
+    ) {
+      return false;
+    }
+    if (field.fieldKind === "scalar" && expected.fieldKind === "scalar") {
+      if (field.scalar !== expected.scalar || field.longAsString !== expected.longAsString) {
+        return false;
+      }
+    } else if (field.fieldKind === "message" && expected.fieldKind === "message") {
+      if (field.delimitedEncoding !== expected.delimitedEncoding) {
+        return false;
+      }
+    } else if (field.fieldKind === "list" && expected.fieldKind === "list") {
+      if (field.listKind !== expected.listKind || field.packed !== expected.packed) {
+        return false;
+      }
+      if (
+        field.listKind === "scalar" &&
+        expected.listKind === "scalar" &&
+        (field.scalar !== expected.scalar || field.longAsString !== expected.longAsString)
+      ) {
+        return false;
+      }
+      if (
+        field.listKind === "message" &&
+        expected.listKind === "message" &&
+        field.delimitedEncoding !== expected.delimitedEncoding
+      ) {
+        return false;
+      }
+    } else if (
+      field.fieldKind === "map" &&
+      expected.fieldKind === "map" &&
+      (field.mapKind !== expected.mapKind || field.delimitedEncoding !== expected.delimitedEncoding)
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function readOnlyMap<K, V>(source: Map<K, V>): ReadonlyMap<K, V> {

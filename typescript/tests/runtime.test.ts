@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { create, createFileRegistry, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { create, createFileRegistry, fromBinary, getExtension, setExtension, toBinary } from "@bufbuild/protobuf";
 import {
   DescriptorProtoSchema,
   FieldDescriptorProto_Label,
@@ -22,6 +22,7 @@ import { codeFromGrpcStatus, codeFromHttpStatus, grpcStatusFor, InvariantError }
 import { grpcServiceDefinitionForService } from "../src/grpc.js";
 import { CONNECT_STREAM_JSON, httpHandler, ParsedDescriptor, runCli, SchemaGenerator, Server } from "../src/index.js";
 import { mcpDispatch } from "../src/mcp.js";
+import { http as googleApiHttp } from "./gen/google/api/annotations_pb.js";
 import {
   type GreetGroupRequest,
   type GreetRequest,
@@ -107,6 +108,13 @@ describe("schema generation", () => {
     const people = (group.properties as Record<string, any>).people;
     expect(people.type).toBe("array");
     expect(people.items.properties.name.type).toBe("string");
+
+    const recursive = new SchemaGenerator(ParsedDescriptor.fromFile(descriptorPath)).messageToSchema(
+      "data.v1.RecursiveRecord",
+    );
+    const parent = (recursive.properties as Record<string, any>).parent;
+    expect(parent.properties.parent).toMatchObject({ type: "object" });
+    expect(parent.properties.parent.properties).toBeUndefined();
   });
 });
 
@@ -239,6 +247,55 @@ describe("server dispatch", () => {
     expect(() => server.register(driftedService, {})).toThrow(/Generated message .* does not match descriptor\.binpb/);
   });
 
+  test("rejects generated services compiled with different protobuf file semantics", () => {
+    const descriptor = (syntax: "proto2" | "proto3") =>
+      create(FileDescriptorSetSchema, {
+        file: [
+          create(FileDescriptorProtoSchema, {
+            name: "presence.proto",
+            package: "presence.v1",
+            syntax,
+            messageType: [
+              create(DescriptorProtoSchema, {
+                name: "Envelope",
+                field: [
+                  create(FieldDescriptorProtoSchema, {
+                    name: "value",
+                    number: 1,
+                    label: FieldDescriptorProto_Label.OPTIONAL,
+                    type: FieldDescriptorProto_Type.STRING,
+                  }),
+                ],
+              }),
+            ],
+            service: [
+              create(ServiceDescriptorProtoSchema, {
+                name: "PresenceService",
+                method: [
+                  create(MethodDescriptorProtoSchema, {
+                    name: "Echo",
+                    inputType: ".presence.v1.Envelope",
+                    outputType: ".presence.v1.Envelope",
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      });
+
+    const generatedService = [...createFileRegistry(descriptor("proto2"))].find(
+      (desc) => desc.kind === "service" && desc.typeName === "presence.v1.PresenceService",
+    );
+    if (generatedService?.kind !== "service") {
+      throw new Error("missing generated presence service");
+    }
+    const server = Server.fromBytes(toBinary(FileDescriptorSetSchema, descriptor("proto3")));
+    expect(() => server.register(generatedService, {})).toThrow(
+      /Generated message 'presence\.v1\.Envelope' does not match descriptor\.binpb/,
+    );
+  });
+
   test("freezes registration, interceptors, filters, and limits on first execution", async () => {
     const server = registeredServer();
     await server.invoke("GreetService.Greet", { name: "Ada" });
@@ -270,13 +327,19 @@ describe("server dispatch", () => {
     expect(() => server.exclude("*")).toThrow(/before service registration/);
   });
 
-  test("rejects invalid global and per-method byte limits", () => {
+  test("resets byte limits with zero and rejects invalid values", () => {
     const server = registeredServer();
-    expect(() => server.setMaxUnaryRequestBytes(0)).toThrow(/positive integer/);
+    server.setMaxUnaryRequestBytes(1);
+    server.setMaxUnaryRequestBytes(0);
+    expect(server.maxUnaryRequestBytes()).toBe(16 * 1024 * 1024);
+
+    server.configureMethod("/greet.v1.GreetService/Greet", { maxUnaryResponseBytes: 0 });
+    expect(server.maxUnaryResponseBytes(server.tools.get("GreetService.Greet"))).toBe(16 * 1024 * 1024);
+
     expect(() => server.setMaxUnaryResponseBytes(-1)).toThrow(/positive integer/);
     expect(() => server.setMaxStreamRequestBytes(Number.NaN)).toThrow(/positive integer/);
     expect(() => server.setMaxStreamResponseBytes(1.5)).toThrow(/positive integer/);
-    expect(() => server.configureMethod("/greet.v1.GreetService/Greet", { maxUnaryResponseBytes: 0 })).toThrow(
+    expect(() => server.configureMethod("/greet.v1.GreetService/Greet", { maxUnaryResponseBytes: -1 })).toThrow(
       /positive integer/,
     );
   });
@@ -1206,18 +1269,22 @@ describe("projections", () => {
 
   test("gRPC reflection excludes unregistered services from symbols and returned files", async () => {
     const fds = fromBinary(FileDescriptorSetSchema, readFileSync(descriptorPath));
-    const greetFile = fds.file.find((file) => file.name === "greet.proto");
-    if (!greetFile) {
-      throw new Error("missing greet descriptor");
-    }
-    greetFile.service.push(
-      create(ServiceDescriptorProtoSchema, {
-        name: "HiddenService",
-        method: [
-          create(MethodDescriptorProtoSchema, {
-            name: "Hidden",
-            inputType: ".greet.v1.GreetRequest",
-            outputType: ".greet.v1.GreetResponse",
+    fds.file.push(
+      create(FileDescriptorProtoSchema, {
+        name: "hidden.proto",
+        package: "greet.v1",
+        syntax: "proto3",
+        dependency: ["greet.proto"],
+        service: [
+          create(ServiceDescriptorProtoSchema, {
+            name: "HiddenService",
+            method: [
+              create(MethodDescriptorProtoSchema, {
+                name: "Hidden",
+                inputType: ".greet.v1.GreetRequest",
+                outputType: ".greet.v1.GreetResponse",
+              }),
+            ],
           }),
         ],
       }),
@@ -1340,6 +1407,11 @@ describe("projections", () => {
         res.end(JSON.stringify({ code: "canceled", message: "request canceled" }));
         return;
       }
+      if (req.method === "GET" && url.pathname === "/v1/greet/ResponseBody") {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify("wrapped response"));
+        return;
+      }
       res.statusCode = 404;
       res.end(JSON.stringify({ code: "not_found", message: "missing" }));
     });
@@ -1376,6 +1448,30 @@ describe("projections", () => {
       message: "request canceled",
     });
     expect(observed).toHaveLength(3);
+
+    const fds = fromBinary(FileDescriptorSetSchema, readFileSync(descriptorPath));
+    const greetFile = fds.file.find((file) => file.name === "greet.proto");
+    const greetMethod = greetFile?.service
+      .find((service) => service.name === "GreetService")
+      ?.method.find((method) => method.name === "Greet");
+    const responseField = greetFile?.messageType
+      .find((message) => message.name === "GreetResponse")
+      ?.field.find((field) => field.name === "message");
+    if (!greetMethod?.options || !responseField) {
+      throw new Error("missing annotated Greet descriptors");
+    }
+    const rule = getExtension(greetMethod.options, googleApiHttp);
+    rule.responseBody = "response_text";
+    setExtension(greetMethod.options, googleApiHttp, rule);
+    responseField.name = "response_text";
+    responseField.jsonName = "wireText";
+
+    const responseBodyProxy = Server.fromBytes(toBinary(FileDescriptorSetSchema, fds));
+    responseBodyProxy.connectHttp(`http://127.0.0.1:${address.port}`);
+    const wrapped = await responseBodyProxy.invoke("GreetService.Greet", { name: "ResponseBody" });
+    expect(responseBodyProxy.toJson(responseBodyProxy.tools.get("GreetService.Greet")!, wrapped)).toEqual({
+      response_text: "wrapped response",
+    });
   });
 });
 

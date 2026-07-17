@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package schema.test.v1;
+
+import "invariant/data/v1/annotations.proto";
+
+// AnnotatedRecord exercises the complete authored-proto data-schema path.
+message AnnotatedRecord {
+  option (invariant.data.v1.dataset) = {};
+
+  // Exact monetary amount carried as canonical decimal text.
+  optional string amount = 1 [(invariant.data.v1.field) = {
+    decimal: {
+      precision: 18
+      scale: 4
+    }
+  }];
+
+  // Stable record identity carried as canonical UUID text.
+  optional string record_id = 2 [(invariant.data.v1.field) = {uuid: {}}];
+
+  // Exact-width binary digest.
+  optional bytes digest = 3 [(invariant.data.v1.field) = {fixed_bytes: {byte_length: 24}}];
+
+  oneof reference {
+    string external_id = 4;
+    int64 sequence = 5;
+  }
+}

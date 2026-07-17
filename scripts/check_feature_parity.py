@@ -51,6 +51,13 @@ def main() -> int:
             for path in feature.get("implementation", ()):
                 if not (ROOT / path).exists():
                     errors.append(f"{feature_id}: implementation path does not exist: {path}")
+            evidence = feature.get("tests")
+            if not isinstance(evidence, list) or not evidence:
+                errors.append(f"{feature_id}: build tool requires behavioral test evidence")
+            else:
+                for path in evidence:
+                    if not isinstance(path, str) or not (ROOT / path).is_file():
+                        errors.append(f"{feature_id}: test evidence does not exist: {path}")
             continue
 
         support = feature.get("support", {})

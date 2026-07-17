@@ -325,7 +325,9 @@ gRPC frame parser or a port-owning native projection.
 - Every runtime gives HTTP unary request, encoded unary response, streaming
   request message, and encoded streaming response message independent 16 MiB
   defaults. Exceeded → `resource_exhausted`. The idiomatic per-method config
-  overrides each limit for one full gRPC method.
+  overrides each limit for one full gRPC method. Zero resets a server-wide
+  limit to the default and makes a per-method value inherit; negative values
+  are rejected where the host integer type permits them.
 - Connect streaming request framing is inspected before payload allocation, so
   a forged size won't allocate a giant buffer. Streaming response limits apply
   per message, not to the lifetime of a stream.

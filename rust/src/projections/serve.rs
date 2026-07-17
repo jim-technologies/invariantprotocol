@@ -8,8 +8,8 @@
 
 use crate::projections::{http, mcp};
 use crate::server::Server;
+use futures::StreamExt;
 use std::sync::Arc;
-use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 /// One projection to run.
@@ -46,59 +46,56 @@ pub async fn serve(
         return Ok(());
     }
 
-    let (tx, rx) = watch::channel(false);
-    let mut handles: Vec<tokio::task::JoinHandle<Result<(), ServeError>>> = Vec::new();
-
+    let shutdown = CancellationToken::new();
+    let mut handles = futures::stream::FuturesUnordered::new();
     for projection in projections {
         let server = server.clone();
-        let mut shutdown = rx.clone();
-        let handle = tokio::spawn(async move {
-            tokio::select! {
-                result = run_projection(server, projection) => result,
-                _ = shutdown.changed() => Ok(()),
-            }
-        });
-        handles.push(handle);
+        let projection_shutdown = shutdown.child_token();
+        handles.push(tokio::spawn(run_projection(
+            server,
+            projection,
+            projection_shutdown,
+        )));
     }
 
-    let cancel_fut = async {
-        cancel.cancelled().await;
-    };
-    tokio::pin!(cancel_fut);
-
-    // Wait for either the cancellation token or the first projection to finish.
-    let first_result: Result<(), ServeError>;
-    {
-        let mut futures: futures::stream::FuturesUnordered<_> = handles.drain(..).collect();
-        tokio::select! {
-            biased;
-            _ = &mut cancel_fut => {
-                first_result = Ok(());
-            }
-            done = futures::StreamExt::next(&mut futures) => {
-                first_result = match done {
-                    Some(Ok(r)) => r,
-                    Some(Err(join)) => Err(ServeError::Http(std::io::Error::other(format!("join: {join}")))),
-                    None => Ok(()),
-                };
+    let first_result = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Ok(()),
+        done = handles.next() => {
+            match done {
+                Some(Ok(result)) => result,
+                Some(Err(join)) => Err(ServeError::Http(std::io::Error::other(format!(
+                    "join: {join}"
+                )))),
+                None => Ok(()),
             }
         }
-        handles = futures.into_iter().collect();
-    }
+    };
 
-    // Signal the remainder and drain them.
-    let _ = tx.send(true);
-    for h in handles {
-        let _ = h.await;
+    shutdown.cancel();
+    while handles.next().await.is_some() {
+        // Every projection owns its shutdown path; drain all tasks before
+        // returning so no transport or in-flight call is detached.
     }
     first_result
 }
 
-async fn run_projection(server: Arc<Server>, projection: Projection) -> Result<(), ServeError> {
+async fn run_projection(
+    server: Arc<Server>,
+    projection: Projection,
+    shutdown: CancellationToken,
+) -> Result<(), ServeError> {
     match projection {
-        Projection::Http(port) => http::serve_http(server, port)
+        Projection::Http(port) => {
+            let app = http::http_router(server);
+            let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown.cancelled_owned())
+                .await
+                .map_err(ServeError::Http)
+        }
+        Projection::McpStdio => mcp::serve_mcp_stdio_until_cancelled(server, shutdown)
             .await
             .map_err(ServeError::Http),
-        Projection::McpStdio => mcp::serve_mcp_stdio(server).await.map_err(ServeError::Http),
     }
 }

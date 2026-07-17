@@ -36,6 +36,8 @@ jobs:
         include:
           - language: Go
             command: make coverage-go
+          - language: Go race
+            command: make race-go
           - language: Python
             command: make coverage-python
           - language: Rust

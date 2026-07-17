@@ -7,6 +7,11 @@ use common::{
     reflected_service_names, serve_native,
 };
 use invariant::{Code, ProjectionContext, Response, Server, Status};
+use prost::Message;
+use prost_types::{
+    DescriptorProto, FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto,
+    ServiceDescriptorProto,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -25,6 +30,70 @@ async fn start_http(server: Arc<Server>) -> (reqwest::Url, tokio::task::JoinHand
         reqwest::Url::parse(&format!("http://{address}")).unwrap(),
         task,
     )
+}
+
+fn colliding_remote_descriptor() -> Vec<u8> {
+    let file = |package: &str| FileDescriptorProto {
+        name: Some(format!("{package}/echo.proto")),
+        package: Some(package.into()),
+        syntax: Some("proto3".into()),
+        message_type: vec![
+            DescriptorProto {
+                name: Some("Input".into()),
+                ..Default::default()
+            },
+            DescriptorProto {
+                name: Some("Output".into()),
+                ..Default::default()
+            },
+        ],
+        service: vec![ServiceDescriptorProto {
+            name: Some("EchoService".into()),
+            method: vec![MethodDescriptorProto {
+                name: Some("Call".into()),
+                input_type: Some(format!(".{package}.Input")),
+                output_type: Some(format!(".{package}.Output")),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    FileDescriptorSet {
+        file: vec![file("alpha.v1"), file("beta.v1")],
+    }
+    .encode_to_vec()
+}
+
+#[tokio::test]
+async fn batch_remote_registration_rejects_tool_collisions_atomically() {
+    let descriptor = colliding_remote_descriptor();
+    let http = Server::from_bytes(&descriptor).unwrap();
+    let client = reqwest::Client::new();
+    let base_url = reqwest::Url::parse("https://example.test").unwrap();
+    let status = http.connect_http(&client, base_url.clone()).unwrap_err();
+    assert_eq!(status.code(), Code::AlreadyExists);
+    assert!(status.message().contains("EchoService.Call"));
+    assert!(http.tool_catalog().is_empty());
+
+    http.exclude("beta.v1.*").unwrap();
+    http.connect_http(&client, base_url).unwrap();
+    assert_eq!(http.tool_catalog().len(), 1);
+    assert_eq!(http.tool_catalog()[0]["name"], "EchoService.Call");
+
+    let grpc = Server::from_bytes(&descriptor).unwrap();
+    let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
+    let status = grpc
+        .connect_grpc(channel.clone(), |client| client)
+        .unwrap_err();
+    assert_eq!(status.code(), Code::AlreadyExists);
+    assert!(status.message().contains("EchoService.Call"));
+    assert!(grpc.tool_catalog().is_empty());
+
+    grpc.exclude("beta.v1.*").unwrap();
+    grpc.connect_grpc(channel, |client| client).unwrap();
+    assert_eq!(grpc.tool_catalog().len(), 1);
+    assert_eq!(grpc.tool_catalog()[0]["name"], "EchoService.Call");
 }
 
 #[test]

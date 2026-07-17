@@ -487,7 +487,7 @@ function assertHandlerDeadline(context: HandlerContext): void {
 
 async function invokeUnaryBeforeDeadline<T>(context: HandlerContext, operation: () => Promise<T>): Promise<T> {
   assertHandlerDeadline(context);
-  const result = await withAbort(operation(), context.signal);
+  const result = await withAbort(operation, context.signal);
   assertHandlerDeadline(context);
   return result;
 }
@@ -497,7 +497,7 @@ async function* invokeStreamBeforeDeadline<T>(context: HandlerContext, stream: A
   try {
     for (;;) {
       assertHandlerDeadline(context);
-      const item = await withAbort(iterator.next(), context.signal);
+      const item = await withAbort(() => iterator.next(), context.signal);
       assertHandlerDeadline(context);
       if (item.done) {
         return;
@@ -505,11 +505,21 @@ async function* invokeStreamBeforeDeadline<T>(context: HandlerContext, stream: A
       yield item.value;
     }
   } finally {
-    await iterator.return?.();
+    const closing = iterator.return?.();
+    if (closing !== undefined) {
+      const remaining = context.timeoutMs();
+      if (context.signal.aborted || (remaining !== undefined && remaining <= 0)) {
+        // The handler receives this signal and should stop cooperatively. A
+        // handler that ignores it must not hold the transport open forever.
+        void closing.catch(() => undefined);
+      } else {
+        await closing;
+      }
+    }
   }
 }
 
-function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+function withAbort<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) {
     return Promise.reject(signal.reason);
   }
@@ -519,16 +529,23 @@ function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
       reject(signal.reason);
     };
     signal.addEventListener("abort", abort, { once: true });
-    void promise.then(
-      (value) => {
-        signal.removeEventListener("abort", abort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener("abort", abort);
-        reject(error);
-      },
-    );
+    void Promise.resolve()
+      .then(() => {
+        if (signal.aborted) {
+          throw signal.reason;
+        }
+        return operation();
+      })
+      .then(
+        (value) => {
+          signal.removeEventListener("abort", abort);
+          resolve(value);
+        },
+        (error) => {
+          signal.removeEventListener("abort", abort);
+          reject(error);
+        },
+      );
   });
 }
 
@@ -539,7 +556,7 @@ async function withAbsoluteDeadline<T>(
   expireDeadline: () => void,
 ): Promise<T> {
   assertAbsoluteDeadline(deadlineAt, signal, expireDeadline);
-  const result = await withAbort(operation(), signal);
+  const result = await withAbort(operation, signal);
   assertAbsoluteDeadline(deadlineAt, signal, expireDeadline);
   return result;
 }

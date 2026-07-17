@@ -12,9 +12,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-go run ./go/cmd/invariant-schema sql \
-  --bundle testdata/data.schema.binpb \
-  --message data.v1.CanonicalRecord \
+GOFLAGS=-mod=readonly go run ./go/cmd/invariant-schema sql \
+  --bundle testdata/schema/schema.binpb \
+  --message schema.test.v1.AnnotatedRecord \
   --output "$tmp_dir/schema.sql"
 
 docker run --detach \
@@ -63,8 +63,11 @@ atlas schema apply \
 atlas schema inspect \
   --url "$target_url" \
   --format '{{ sql . }}' >"$tmp_dir/inspected.sql"
-grep -Fq 'CREATE TABLE "data_v1_canonical_record"' "$tmp_dir/inspected.sql"
-grep -Fq '"data_v1_canonical_record_choice_oneof_check"' "$tmp_dir/inspected.sql"
+grep -Fq 'CREATE TABLE "schema_test_v1_annotated_record"' "$tmp_dir/inspected.sql"
+grep -Fq '"amount" numeric(18,4)' "$tmp_dir/inspected.sql"
+grep -Fq '"record_id" uuid' "$tmp_dir/inspected.sql"
+grep -Fq '"schema_test_v1_annotated_record_digest_fixed_bytes_check"' "$tmp_dir/inspected.sql"
+grep -Fq '"schema_test_v1_annotated_record_reference_oneof_check"' "$tmp_dir/inspected.sql"
 
 atlas schema diff \
   --from "$target_url" \

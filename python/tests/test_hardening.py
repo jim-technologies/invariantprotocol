@@ -561,6 +561,27 @@ async def test_set_max_unary_request_bytes_lifts_cap(basic_server):
         await basic_server._stop_http()
 
 
+async def test_projection_limits_reset_with_zero_and_reject_negative_values(basic_server):
+    basic_server.set_max_unary_request_bytes(1)
+    basic_server.set_max_unary_request_bytes(0)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        basic_server.set_max_unary_response_bytes(-1)
+    with pytest.raises(ValueError, match="non-negative"):
+        basic_server.configure_method(
+            "/greet.v1.GreetService/Greet",
+            MethodConfig(max_stream_response_bytes=-1),
+        )
+
+    port = await basic_server._start_http(port=0)
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            response = await client.post("/greet.v1.GreetService/Greet", json={"name": "reset"})
+        assert response.status_code == 200
+    finally:
+        await basic_server._stop_http()
+
+
 async def test_mcp_http_rejects_oversized_body(stream_server):
     from invariant.projections.http import HTTP_MAX_UNARY_REQUEST
 

@@ -89,3 +89,13 @@ def test_schema_nested_messages_and_descriptions():
 def test_unknown_message_returns_generic_object():
     s = _schema_gen().message_to_schema("does.not.Exist")
     assert s == {"type": "object"}
+
+
+def test_recursive_message_stays_finite():
+    schema = _schema_gen().message_to_schema("data.v1.RecursiveRecord")
+    parent = schema["properties"]["parent"]
+
+    assert parent["type"] == "object"
+    recursive_link = parent["properties"]["parent"]
+    assert recursive_link["type"] == "object"
+    assert "properties" not in recursive_link

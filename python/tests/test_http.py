@@ -14,8 +14,14 @@ from google.rpc import error_details_pb2
 from invariant import Server
 
 
-async def _call_asgi(app, path: str, headers: dict[str, str], receive) -> list[dict]:
+async def _call_asgi(
+    app,
+    path: str,
+    headers: dict[str, str] | list[tuple[str, str]],
+    receive,
+) -> list[dict]:
     sent: list[dict] = []
+    header_items = headers.items() if isinstance(headers, dict) else headers
 
     async def send(message):
         sent.append(message)
@@ -26,7 +32,7 @@ async def _call_asgi(app, path: str, headers: dict[str, str], receive) -> list[d
                 "type": "http",
                 "method": "POST",
                 "path": path,
-                "headers": [(key.encode(), value.encode()) for key, value in headers.items()],
+                "headers": [(key.encode(), value.encode()) for key, value in header_items],
                 "client": ("127.0.0.1", 12345),
             },
             receive,
@@ -242,6 +248,39 @@ async def test_greet_http_binary_proto(server):
         out = greet_pb2.GreetResponse()
         out.ParseFromString(resp.content)
         assert out.message == "Hi Binary"
+    finally:
+        await server._stop_http()
+
+
+async def test_greet_http_response_codec_follows_request_content_type(server):
+    port = await server._start_http(port=0)
+    try:
+        request = greet_pb2.GreetRequest(name="Codec")
+        async with httpx.AsyncClient() as client:
+            binary = await client.post(
+                f"http://localhost:{port}/greet.v1.GreetService/Greet",
+                content=request.SerializeToString(),
+                headers={
+                    "Content-Type": "application/proto",
+                    "Accept": "application/json",
+                },
+            )
+            json_response = await client.post(
+                f"http://localhost:{port}/greet.v1.GreetService/Greet",
+                content=b'{"name":"Codec"}',
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/proto",
+                },
+            )
+
+        assert binary.status_code == 200
+        assert binary.headers["content-type"] == "application/proto"
+        assert greet_pb2.GreetResponse.FromString(binary.content).message == "Hi Codec"
+
+        assert json_response.status_code == 200
+        assert json_response.headers["content-type"] == "application/json"
+        assert json_response.json()["message"] == "Hi Codec"
     finally:
         await server._stop_http()
 
@@ -771,6 +810,61 @@ async def test_http_projection_supplies_grpc_context_metadata_and_status():
         assert resp.headers["trailer-x-projection-trailer"] == "trailing"
     finally:
         await srv._stop_http()
+        await srv.stop()
+
+
+async def test_default_http_metadata_mapper_preserves_repeated_reviewed_values():
+    observed: list[tuple[str, str | bytes]] = []
+
+    class ContextServicer:
+        async def Greet(self, request, context):
+            observed.extend(context.invocation_metadata())
+            return greet_pb2.GreetResponse(message=request.name)
+
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    register_greet(srv, ContextServicer())
+    app = srv.asgi_app()
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {
+                "type": "http.request",
+                "body": b'{"name":"metadata"}',
+                "more_body": False,
+            }
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    try:
+        messages = await _call_asgi(
+            app,
+            "/greet.v1.GreetService/Greet",
+            [
+                ("content-type", "application/json"),
+                ("baggage", "tenant=one"),
+                ("baggage", "region=west"),
+                ("tracestate", "vendor=one"),
+                ("tracestate", "other=two"),
+                ("x-request-id", "request-one"),
+                ("x-request-id", "request-two"),
+                ("authorization", "Bearer untrusted"),
+                ("x-tenant-id", "untrusted"),
+            ],
+            receive,
+        )
+        assert next(message["status"] for message in messages if message["type"] == "http.response.start") == 200
+        assert observed == [
+            ("tracestate", "vendor=one"),
+            ("tracestate", "other=two"),
+            ("baggage", "tenant=one"),
+            ("baggage", "region=west"),
+            ("x-request-id", "request-one"),
+            ("x-request-id", "request-two"),
+        ]
+    finally:
         await srv.stop()
 
 

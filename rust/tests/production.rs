@@ -9,6 +9,7 @@ use prost::Message;
 use prost_reflect::DynamicMessage;
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Duration;
 
 fn dynamic_greet_request(server: &invariant::Server) -> DynamicMessage {
     let descriptor = server
@@ -79,6 +80,55 @@ async fn stream_setup_panics_become_internal_status() {
     };
     assert_eq!(status.code(), Code::Internal);
     assert!(status.message().contains("stream-kaboom"));
+    assert!(
+        status
+            .message()
+            .contains("/greet.v1.GreetService/StreamGreet")
+    );
+}
+
+#[tokio::test]
+async fn synchronous_shared_middleware_panics_become_internal_status() {
+    let unary = registered_server(TestGreetService::default());
+    unary
+        .use_shared_unary(Arc::new(|_: ErasedRequest, _, _| {
+            panic!("sync-unary-middleware")
+        }))
+        .unwrap();
+    let status = unary
+        .invoke(
+            "GreetService.Greet",
+            Request::new(dynamic_greet_request(&unary)),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), Code::Internal);
+    assert!(status.message().contains("sync-unary-middleware"));
+    assert!(status.message().contains("/greet.v1.GreetService/Greet"));
+
+    let streaming = registered_server(TestGreetService::default());
+    streaming
+        .use_shared_stream(Arc::new(|_: ErasedRequest, _, _| {
+            panic!("sync-stream-middleware")
+        }))
+        .unwrap();
+    let descriptor = streaming
+        .parsed()
+        .pool
+        .get_message_by_name("greet.v1.StreamGreetRequest")
+        .unwrap();
+    let status = match streaming
+        .invoke_stream(
+            "GreetService.StreamGreet",
+            Request::new(DynamicMessage::new(descriptor)),
+        )
+        .await
+    {
+        Ok(_) => panic!("panicking stream middleware unexpectedly started"),
+        Err(status) => status,
+    };
+    assert_eq!(status.code(), Code::Internal);
+    assert!(status.message().contains("sync-stream-middleware"));
     assert!(
         status
             .message()
@@ -360,25 +410,89 @@ async fn mcp_notifications_have_no_response_and_unknown_methods_are_json_rpc_err
 }
 
 #[tokio::test]
-async fn projection_runner_honors_cancellation() {
-    let server = registered_server(TestGreetService::default());
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let trigger = cancel.clone();
-    tokio::spawn(async move {
-        tokio::task::yield_now().await;
-        trigger.cancel();
+async fn projection_runner_drains_in_flight_http_requests_on_cancellation() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let service = TestGreetService::default().with_greet({
+        let started = started.clone();
+        let release = release.clone();
+        move |_| {
+            let started = started.clone();
+            let release = release.clone();
+            async move {
+                let released = release.notified();
+                started.notify_one();
+                released.await;
+                Ok(Response::new(greet::GreetResponse {
+                    message: "drained".into(),
+                    ..Default::default()
+                }))
+            }
+        }
     });
-    tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        invariant::projections::serve::serve(
-            server,
-            [invariant::projections::serve::Projection::Http(0)],
-            cancel,
-        ),
-    )
+    let server = registered_server(service);
+    let reserved = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = reserved.local_addr().unwrap().port();
+    drop(reserved);
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let runner = tokio::spawn(invariant::projections::serve::serve(
+        server,
+        [invariant::projections::serve::Projection::Http(port)],
+        cancel.clone(),
+    ));
+    let client = reqwest::Client::new();
+    let base_url = format!("http://127.0.0.1:{port}");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if client
+                .get(format!("{base_url}/healthz"))
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
     .await
-    .unwrap()
     .unwrap();
+
+    let request = tokio::spawn({
+        let client = client.clone();
+        async move {
+            client
+                .post(format!("{base_url}/greet.v1.GreetService/Greet"))
+                .json(&json!({"name": "graceful"}))
+                .send()
+                .await
+                .unwrap()
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(2), started.notified())
+        .await
+        .unwrap();
+
+    cancel.cancel();
+    tokio::time::sleep(Duration::from_millis(25)).await;
+    assert!(!runner.is_finished());
+
+    release.notify_one();
+    let response = tokio::time::timeout(Duration::from_secs(2), request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap()["message"],
+        "drained"
+    );
+    tokio::time::timeout(Duration::from_secs(2), runner)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
 }
 
 #[test]

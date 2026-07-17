@@ -63,9 +63,9 @@ class SchemaGenerator:
         msg = self.parsed.messages.get(full_name)
         if msg is None:
             return {"type": "object"}
-        return self._message_schema(msg)
+        return self._message_schema(msg, set())
 
-    def _message_schema(self, msg: invpb.MessageInfo) -> dict:
+    def _message_schema(self, msg: invpb.MessageInfo, visiting: set[str]) -> dict:
         properties: dict[str, dict] = {}
         required: list[str] = []
 
@@ -77,11 +77,11 @@ class SchemaGenerator:
         for field in msg.fields:
             if self._is_map_field(field):
                 map_msg = self.parsed.messages.get(field.type_name)
-                prop = self._map_schema(map_msg) if map_msg else {"type": "object"}
+                prop = self._map_schema(map_msg, visiting) if map_msg else {"type": "object"}
             elif field.label == LABEL_REPEATED:
-                prop = {"type": "array", "items": self._field_type_schema(field)}
+                prop = {"type": "array", "items": self._field_type_schema(field, visiting)}
             else:
-                prop = self._field_type_schema(field)
+                prop = self._field_type_schema(field, visiting)
 
             if field.comment:
                 prop["description"] = field.comment
@@ -105,7 +105,7 @@ class SchemaGenerator:
             schema["required"] = required
         return schema
 
-    def _field_type_schema(self, field: invpb.FieldInfo) -> dict:
+    def _field_type_schema(self, field: invpb.FieldInfo, visiting: set[str]) -> dict:
         t = field.type
 
         if t in (TYPE_DOUBLE, TYPE_FLOAT):
@@ -123,17 +123,22 @@ class SchemaGenerator:
         if t == TYPE_ENUM:
             return self._enum_schema(field.type_name)
         if t == TYPE_MESSAGE:
-            return self._message_type_schema(field.type_name)
+            return self._message_type_schema(field.type_name, visiting)
         return {}
 
-    def _message_type_schema(self, type_name: str) -> dict:
+    def _message_type_schema(self, type_name: str, visiting: set[str]) -> dict:
         if type_name in _WKT:
             return dict(_WKT[type_name])
 
+        if type_name in visiting:
+            return {"type": "object"}
         msg = self.parsed.messages.get(type_name)
         if msg is None:
             return {"type": "object"}
-        return self._message_schema(msg)
+        visiting.add(type_name)
+        schema = self._message_schema(msg, visiting)
+        visiting.remove(type_name)
+        return schema
 
     def _enum_schema(self, type_name: str) -> dict:
         enum = self.parsed.enums.get(type_name)
@@ -147,7 +152,7 @@ class SchemaGenerator:
         msg = self.parsed.messages.get(field.type_name)
         return msg is not None and msg.is_map_entry
 
-    def _map_schema(self, map_entry_msg: invpb.MessageInfo) -> dict:
+    def _map_schema(self, map_entry_msg: invpb.MessageInfo, visiting: set[str]) -> dict:
         value_field = None
         for f in map_entry_msg.fields:
             if f.name == "value":
@@ -157,5 +162,5 @@ class SchemaGenerator:
             return {"type": "object"}
         return {
             "type": "object",
-            "additionalProperties": self._field_type_schema(value_field),
+            "additionalProperties": self._field_type_schema(value_field, visiting),
         }

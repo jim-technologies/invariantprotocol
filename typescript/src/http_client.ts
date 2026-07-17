@@ -180,8 +180,8 @@ export class HTTPConnection {
 export class HTTPClientBinding {
   readonly method: string;
   readonly pattern: string;
-  readonly responseBody: string;
   body: string;
+  responseBody: string;
   private readonly template: PathTemplate;
 
   constructor(method: string, pattern: string, body: string, responseBody = "") {
@@ -192,14 +192,17 @@ export class HTTPClientBinding {
     this.template = PathTemplate.parse(pattern);
   }
 
-  resolveFields(descriptor: DescMessage): void {
+  resolveFields(input: DescMessage, output: DescMessage): void {
     for (const segment of this.template.segments) {
       if (segment.field) {
-        segment.field = jsonFieldPath(descriptor, segment.field);
+        segment.field = jsonFieldPath(input, segment.field);
       }
     }
     if (this.body && this.body !== "*") {
-      this.body = jsonFieldPath(descriptor, this.body);
+      this.body = jsonFieldPath(input, this.body);
+    }
+    if (this.responseBody && this.responseBody !== "*") {
+      this.responseBody = jsonFieldPath(output, this.responseBody);
     }
   }
 
@@ -290,7 +293,7 @@ export function httpProxyHandler(
   tool: Tool,
   methodPath: string,
 ): UnaryHandler {
-  binding.resolveFields(tool.inputDesc);
+  binding.resolveFields(tool.inputDesc, tool.outputDesc);
   return async (request, context) => {
     const args = toJson(tool.inputDesc, request, { registry: server.parsed.registry }) as Record<string, unknown>;
     const built = binding.build(args, connection.baseUrl);
@@ -460,13 +463,18 @@ function encodeQuery(prefix: string, value: unknown, out: Array<[string, string]
 }
 
 function responseBody(payload: unknown, selector: string): unknown {
-  if (!selector) {
+  if (!selector || selector === "*") {
     return payload;
   }
-  if (typeof payload !== "object" || payload === null) {
+  const parts = selector.split(".").filter(Boolean);
+  if (parts.length === 0) {
     return {};
   }
-  return getNested(payload as Record<string, unknown>, selector) ?? {};
+  let wrapped = payload;
+  for (const part of parts.reverse()) {
+    wrapped = { [part]: wrapped };
+  }
+  return wrapped;
 }
 
 function httpError(status: number, body: Uint8Array, metadata: Headers): InvariantError {

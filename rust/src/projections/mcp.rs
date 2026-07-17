@@ -18,6 +18,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
@@ -31,10 +32,28 @@ const JSONRPC_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 /// methods (`initialize`, `tools/list`, `ping`) run inline to keep response
 /// order deterministic. Mirrors Go's `mcpSession.run` and Python's `_StdioMCP`.
 pub async fn serve_mcp_stdio(server: Arc<Server>) -> std::io::Result<()> {
-    serve_mcp_session(server, tokio::io::stdin(), tokio::io::stdout()).await
+    serve_mcp_session(
+        server,
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        CancellationToken::new(),
+    )
+    .await
 }
 
-async fn serve_mcp_session<R, W>(server: Arc<Server>, input: R, output: W) -> std::io::Result<()>
+pub(crate) async fn serve_mcp_stdio_until_cancelled(
+    server: Arc<Server>,
+    shutdown: CancellationToken,
+) -> std::io::Result<()> {
+    serve_mcp_session(server, tokio::io::stdin(), tokio::io::stdout(), shutdown).await
+}
+
+async fn serve_mcp_session<R, W>(
+    server: Arc<Server>,
+    input: R,
+    output: W,
+    shutdown: CancellationToken,
+) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -46,10 +65,15 @@ where
         Arc::new(Mutex::new(HashMap::new()));
 
     let mut line = Vec::new();
-    loop {
+    let shutdown_requested = loop {
         line.clear();
-        if reader.read_until(b'\n', &mut line).await? == 0 {
-            break;
+        let bytes_read = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break true,
+            result = reader.read_until(b'\n', &mut line) => result?,
+        };
+        if bytes_read == 0 {
+            break false;
         }
         if line.last() == Some(&b'\n') {
             line.pop();
@@ -105,20 +129,49 @@ where
         let stdout_clone = stdout.clone();
         let inflight_clone = inflight.clone();
         let id_key_for_done = id_key.clone();
+        let (registered, registration) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
+            // A multi-threaded runtime may poll this task immediately. Wait
+            // until its handle is registered so fast calls cannot remove a
+            // not-yet-present entry and leave a completed handle behind.
+            let _ = registration.await;
             if let Some(resp) = mcp_dispatch(&server_clone, &msg).await {
                 let _ = write_response(&stdout_clone, &resp).await;
             }
             inflight_clone.lock().remove(&id_key_for_done);
         });
         inflight.lock().insert(id_key, task);
-    }
+        let _ = registered.send(());
+    };
 
     // On stdin EOF wait for in-flight tools/call tasks to finish so their
-    // responses still reach the client (matches Go's `wg.Wait()`).
-    let pending: Vec<JoinHandle<()>> = inflight.lock().drain().map(|(_, h)| h).collect();
-    for h in pending {
-        let _ = h.await;
+    // responses still reach the client (matches Go's `wg.Wait()`). Cooperative
+    // projection shutdown instead aborts and joins them before returning.
+    let mut pending: Vec<JoinHandle<()>> = inflight.lock().drain().map(|(_, h)| h).collect();
+    if shutdown_requested {
+        for task in &pending {
+            task.abort();
+        }
+    }
+    while let Some(mut task) = pending.pop() {
+        if shutdown_requested {
+            let _ = task.await;
+            continue;
+        }
+        tokio::select! {
+            _ = shutdown.cancelled() => {
+                task.abort();
+                for remaining in &pending {
+                    remaining.abort();
+                }
+                let _ = task.await;
+                for remaining in pending {
+                    let _ = remaining.await;
+                }
+                return Ok(());
+            }
+            _ = &mut task => {}
+        }
     }
     Ok(())
 }
@@ -511,7 +564,12 @@ mod tests {
         let server = test_server();
         let (mut input, session_input) = tokio::io::duplex(4096);
         let (session_output, mut output) = tokio::io::duplex(4096);
-        let session = tokio::spawn(serve_mcp_session(server, session_input, session_output));
+        let session = tokio::spawn(serve_mcp_session(
+            server,
+            session_input,
+            session_output,
+            CancellationToken::new(),
+        ));
 
         input.write_all(&[0xff, b'\n']).await.unwrap();
         for message in [
@@ -581,5 +639,93 @@ mod tests {
         );
         assert_eq!(responses[17]["id"], 11);
         assert_eq!(responses[17]["error"]["code"], -32602);
+    }
+
+    #[tokio::test]
+    async fn stdio_shutdown_aborts_and_joins_in_flight_tool_calls() {
+        struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                if let Some(signal) = self.0.take() {
+                    let _ = signal.send(());
+                }
+            }
+        }
+
+        let server = test_server();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        let dropped_tx = Arc::new(Mutex::new(Some(dropped_tx)));
+        server
+            .use_shared_unary(Arc::new({
+                let entered = entered.clone();
+                move |_, _, _| {
+                    let entered = entered.clone();
+                    let dropped_tx = dropped_tx
+                        .lock()
+                        .take()
+                        .expect("only one tool call is expected");
+                    Box::pin(async move {
+                        let _signal = DropSignal(Some(dropped_tx));
+                        entered.notify_one();
+                        futures::future::pending::<Result<crate::server::ErasedResponse, Status>>()
+                            .await
+                    })
+                }
+            }))
+            .unwrap();
+        server
+            .connect_http(
+                &reqwest::Client::new(),
+                reqwest::Url::parse("https://example.test").unwrap(),
+            )
+            .unwrap();
+
+        let (mut input, session_input) = tokio::io::duplex(4096);
+        let (session_output, mut output) = tokio::io::duplex(4096);
+        let shutdown = CancellationToken::new();
+        let session = tokio::spawn(serve_mcp_session(
+            server,
+            session_input,
+            session_output,
+            shutdown.clone(),
+        ));
+        input
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "GreetService.Greet",
+                            "arguments": {"name": "slow"},
+                        },
+                    })
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+            .await
+            .unwrap();
+
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(2), session)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), dropped_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mut bytes = Vec::new();
+        output.read_to_end(&mut bytes).await.unwrap();
+        assert!(bytes.is_empty());
     }
 }

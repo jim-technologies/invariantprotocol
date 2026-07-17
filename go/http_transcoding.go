@@ -11,7 +11,8 @@ import (
 )
 
 type pathTemplate struct {
-	segments []pathSegment
+	segments      []pathSegment
+	trailingSlash bool
 }
 
 type pathSegment struct {
@@ -25,6 +26,7 @@ func parsePathTemplate(pattern string) (*pathTemplate, error) {
 		return nil, errors.New("path must start with '/'")
 	}
 
+	trailingSlash := len(pattern) > 1 && strings.HasSuffix(pattern, "/")
 	trimmed := strings.Trim(pattern, "/")
 	if trimmed == "" {
 		return &pathTemplate{}, nil
@@ -65,5 +67,5 @@ func parsePathTemplate(pattern string) (*pathTemplate, error) {
 		segments = append(segments, pathSegment{literal: raw})
 	}
 
-	return &pathTemplate{segments: segments}, nil
+	return &pathTemplate{segments: segments, trailingSlash: trailingSlash}, nil
 }

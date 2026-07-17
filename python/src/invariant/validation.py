@@ -14,7 +14,7 @@ from invariant.errors import InvariantError, invalid_argument
 
 
 def validation() -> grpc.aio.ServerInterceptor:
-    """Return one standard aio interceptor for unary and server-streaming RPCs."""
+    """Return one standard aio interceptor covering every gRPC cardinality."""
     return _ValidationInterceptor()
 
 
@@ -30,8 +30,47 @@ class _ValidationInterceptor(grpc.aio.ServerInterceptor):
 
     async def intercept_service(self, continuation, handler_call_details):
         handler = await continuation(handler_call_details)
-        if handler is None or handler.request_streaming:
+        if handler is None:
             return handler
+
+        if handler.request_streaming:
+            if handler.response_streaming:
+                terminal = handler.stream_stream
+                if terminal is None:
+                    return handler
+
+                async def validated_bidi(request_iterator, context):
+                    async def validated_requests():
+                        async for request in request_iterator:
+                            self._validate(request)
+                            yield request
+
+                    async for response in terminal(validated_requests(), context):
+                        yield response
+
+                return grpc.stream_stream_rpc_method_handler(
+                    validated_bidi,
+                    request_deserializer=handler.request_deserializer,
+                    response_serializer=handler.response_serializer,
+                )
+
+            terminal = handler.stream_unary
+            if terminal is None:
+                return handler
+
+            async def validated_client_stream(request_iterator, context):
+                async def validated_requests():
+                    async for request in request_iterator:
+                        self._validate(request)
+                        yield request
+
+                return await terminal(validated_requests(), context)
+
+            return grpc.stream_unary_rpc_method_handler(
+                validated_client_stream,
+                request_deserializer=handler.request_deserializer,
+                response_serializer=handler.response_serializer,
+            )
 
         if handler.response_streaming:
             terminal = handler.unary_stream

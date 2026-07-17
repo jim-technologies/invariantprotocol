@@ -10,6 +10,52 @@ but never silent behaviour regressions.
 
 ## Unreleased
 
+## v0.8.2 — 2026-07-17
+
+### Added
+
+- **The authored annotation path is now tested end to end.** A real annotated
+  dataset is discovered without `--message` and rendered as Arrow, Parquet,
+  Iceberg, and PostgreSQL from one committed bundle; PostgreSQL/Atlas
+  integration exercises decimal, UUID, fixed-byte, and oneof mappings.
+- **Go concurrency and module metadata are maintained CI boundaries.** CI runs
+  the core runtime with the race detector, requires a tidy read-only module
+  graph, and requires behavioral evidence for build-tool parity declarations.
+
+### Fixed
+
+- **Outbound HTTP transcoding follows protobuf JSON rules.** Go now maps proto
+  selectors to canonical JSON names, including explicit and nested
+  `json_name` values, and preserves annotated trailing slashes. TypeScript now
+  applies `google.api.http` `response_body` in the correct wrapping direction
+  and resolves the response field's JSON name.
+- **Python's HTTP and validation boundaries now cover their complete
+  contracts.** Unary Connect responses use the request codec regardless of
+  `Accept`, repeated reviewed metadata values survive, and Protovalidate checks
+  every client-streaming and bidi request with rich `BadRequest` details.
+- **TypeScript rejects stale generated descriptor semantics and observes
+  cancellation centrally.** Registration compares the complete reachable file
+  graph and resolved field semantics; unary and every streaming poll honor
+  pre-cancellation and absolute deadlines. Recursive request schemas terminate
+  safely in both TypeScript and Python.
+- **Rust projection shutdown and recovery are deterministic.** Multi-projection
+  cancellation gracefully drains HTTP, aborts and joins MCP calls, synchronous
+  middleware panics become `internal`, fast MCP calls remain tracked, colliding
+  staged remote tools are rejected atomically, and unary Connect responses
+  follow the request codec.
+
+### Changed
+
+- **Projection byte-limit configuration is consistent across runtimes.** Zero
+  resets server limits or inherits per-method limits; invalid negative values
+  are rejected where the host integer type permits them.
+- **Rust test services are generated only for primary repository builds.**
+  Downstream consumers no longer generate repository-only greet and
+  cardinality fixtures.
+- **Compatible dependency locks were refreshed.** Go compression/columnar
+  transitive dependencies, Python filelock, Rust Tokio/cfg_aliases, and
+  TypeScript's Vite toolchain are at their latest compatible releases.
+
 ## v0.8.1 — 2026-07-17
 
 ### Added

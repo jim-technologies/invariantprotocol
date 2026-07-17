@@ -840,6 +840,7 @@ impl Server {
     ) -> Result<(), Status> {
         let mut registry = self.inner.registry.write();
         ensure_configuring(&registry, operation)?;
+        let mut staged_tools = BTreeSet::new();
         for registration in &registrations {
             if registry.services.contains(&registration.service_name) {
                 return Err(Status::already_exists(format!(
@@ -849,7 +850,8 @@ impl Server {
             }
             for tool in &registration.tools {
                 if should_project(&registry, &tool.service_full_name, &tool.method_name)
-                    && registry.tools.contains_key(&tool.name)
+                    && (registry.tools.contains_key(&tool.name)
+                        || !staged_tools.insert(tool.name.clone()))
                 {
                     return Err(Status::already_exists(format!(
                         "tool {} is already registered",
@@ -1211,6 +1213,7 @@ impl Server {
                 registry.shared_unary_middleware.clone()
             }
         };
+        let has_shared_middleware = !middleware.is_empty();
         let mut current = terminal;
         for middleware in middleware.into_iter().rev() {
             let next = current.clone();
@@ -1218,10 +1221,15 @@ impl Server {
             current = Arc::new(move |request| middleware(request, info.clone(), next.clone()));
         }
         let method = info.full_method;
-        match AssertUnwindSafe(current(ErasedRequest::new(request)))
-            .catch_unwind()
-            .await
-        {
+        let request = ErasedRequest::new(request);
+        let invocation = if has_shared_middleware {
+            std::panic::catch_unwind(AssertUnwindSafe(|| current(request))).map_err(|panic| {
+                Status::internal(format!("panic in {method}: {}", panic_message(&panic)))
+            })?
+        } else {
+            current(request)
+        };
+        match AssertUnwindSafe(invocation).catch_unwind().await {
             Ok(result) => result?.into_typed::<Resp>(),
             Err(panic) => Err(Status::internal(format!(
                 "panic in {method}: {}",

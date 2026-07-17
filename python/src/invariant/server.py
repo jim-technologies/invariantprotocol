@@ -298,7 +298,9 @@ class Server:
         16 MiB default. Mirrors Go's ``Server.SetMaxUnaryRequestBytes``.
         """
         self._require_configuration_open("HTTP unary request limit")
-        if n <= 0:
+        if n < 0:
+            raise ValueError("HTTP unary request limit must be non-negative")
+        if n == 0:
             from invariant.projections.http import HTTP_MAX_UNARY_REQUEST as _UNARY_DEFAULT
 
             n = _UNARY_DEFAULT
@@ -307,7 +309,9 @@ class Server:
     def set_max_unary_response_bytes(self, n: int) -> None:
         """Override the encoded HTTP unary response cap."""
         self._require_configuration_open("HTTP unary response limit")
-        if n <= 0:
+        if n < 0:
+            raise ValueError("HTTP unary response limit must be non-negative")
+        if n == 0:
             from invariant.projections.http import HTTP_MAX_UNARY_RESPONSE
 
             n = HTTP_MAX_UNARY_RESPONSE
@@ -319,7 +323,9 @@ class Server:
         ``Server.SetMaxStreamRequestBytes``.
         """
         self._require_configuration_open("HTTP stream request limit")
-        if n <= 0:
+        if n < 0:
+            raise ValueError("HTTP stream request limit must be non-negative")
+        if n == 0:
             from invariant.projections.http import CONNECT_STREAM_MAX_REQUEST as _STREAM_DEFAULT
 
             n = _STREAM_DEFAULT
@@ -328,7 +334,9 @@ class Server:
     def set_max_stream_response_bytes(self, n: int) -> None:
         """Override the per-message encoded Connect response cap."""
         self._require_configuration_open("HTTP stream response limit")
-        if n <= 0:
+        if n < 0:
+            raise ValueError("HTTP stream response limit must be non-negative")
+        if n == 0:
             from invariant.projections.http import CONNECT_STREAM_MAX_RESPONSE
 
             n = CONNECT_STREAM_MAX_RESPONSE
@@ -337,6 +345,16 @@ class Server:
     def configure_method(self, method_path: str, config: MethodConfig) -> None:
         """Override HTTP wire limits for one canonical full gRPC method."""
         self._require_configuration_open("method configuration")
+        if any(
+            value < 0
+            for value in (
+                config.max_unary_request_bytes,
+                config.max_unary_response_bytes,
+                config.max_stream_request_bytes,
+                config.max_stream_response_bytes,
+            )
+        ):
+            raise ValueError("Method byte limits must be non-negative")
         self._method_configs[method_path] = config
 
     def use_http_metadata_mapper(self, mapper: HTTPMetadataMapper | None) -> None:

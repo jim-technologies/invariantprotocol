@@ -319,8 +319,6 @@ async fn tool_handler(State(server): State<Arc<Server>>, req: Request) -> Respon
             Err(s) => return error_response_with_limit(&s, limits.unary_response),
         };
 
-    let wants_proto_response = is_proto(headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()));
-
     let dyn_req = match decode_request(&tool, proto_request, &body) {
         Ok(d) => d,
         Err(s) => return error_response_with_limit(&s, limits.unary_response),
@@ -330,7 +328,7 @@ async fn tool_handler(State(server): State<Arc<Server>>, req: Request) -> Respon
     let resp = until_projection_deadline(&projection, server.invoke(&tool.name, request)).await;
 
     match resp {
-        Ok(response) => encode_response(response, wants_proto_response, limits.unary_response),
+        Ok(response) => encode_response(response, proto_request, limits.unary_response),
         Err(s) => error_response_with_limit(&s, limits.unary_response),
     }
 }

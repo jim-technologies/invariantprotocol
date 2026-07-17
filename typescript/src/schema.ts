@@ -29,15 +29,15 @@ export class SchemaGenerator {
     if (!msg) {
       return { type: "object" };
     }
-    return this.messageSchema(msg);
+    return this.messageSchema(msg, new Set());
   }
 
-  private messageSchema(msg: DescMessage): JsonSchema {
+  private messageSchema(msg: DescMessage, visiting: Set<string>): JsonSchema {
     const properties: Record<string, JsonSchema> = {};
     const required: string[] = [];
 
     for (const field of msg.fields) {
-      const prop = this.fieldSchema(field);
+      const prop = this.fieldSchema(field, visiting);
       const comment = this.parsed.commentForField(msg.typeName, field);
       if (comment) {
         prop.description = comment;
@@ -60,48 +60,54 @@ export class SchemaGenerator {
     return schema;
   }
 
-  private fieldSchema(field: DescField): JsonSchema {
+  private fieldSchema(field: DescField, visiting: Set<string>): JsonSchema {
     switch (field.fieldKind) {
       case "list":
-        return { type: "array", items: this.listItemSchema(field) };
+        return { type: "array", items: this.listItemSchema(field, visiting) };
       case "map":
-        return { type: "object", additionalProperties: this.mapValueSchema(field) };
+        return { type: "object", additionalProperties: this.mapValueSchema(field, visiting) };
       case "scalar":
         return scalarSchema(field.scalar);
       case "enum":
         return this.enumSchema(field.enum.typeName);
       case "message":
-        return this.messageTypeSchema(field.message);
+        return this.messageTypeSchema(field.message, visiting);
     }
   }
 
-  private listItemSchema(field: DescField & { fieldKind: "list" }): JsonSchema {
+  private listItemSchema(field: DescField & { fieldKind: "list" }, visiting: Set<string>): JsonSchema {
     switch (field.listKind) {
       case "scalar":
         return scalarSchema(field.scalar);
       case "enum":
         return this.enumSchema(field.enum.typeName);
       case "message":
-        return this.messageTypeSchema(field.message);
+        return this.messageTypeSchema(field.message, visiting);
     }
   }
 
-  private mapValueSchema(field: DescField & { fieldKind: "map" }): JsonSchema {
+  private mapValueSchema(field: DescField & { fieldKind: "map" }, visiting: Set<string>): JsonSchema {
     switch (field.mapKind) {
       case "scalar":
         return scalarSchema(field.scalar);
       case "enum":
         return this.enumSchema(field.enum.typeName);
       case "message":
-        return this.messageTypeSchema(field.message);
+        return this.messageTypeSchema(field.message, visiting);
     }
   }
 
-  private messageTypeSchema(message: DescMessage): JsonSchema {
+  private messageTypeSchema(message: DescMessage, visiting: Set<string>): JsonSchema {
     if (WKT[message.typeName]) {
       return { ...WKT[message.typeName] };
     }
-    return this.messageSchema(message);
+    if (visiting.has(message.typeName)) {
+      return { type: "object" };
+    }
+    visiting.add(message.typeName);
+    const schema = this.messageSchema(message, visiting);
+    visiting.delete(message.typeName);
+    return schema;
   }
 
   private enumSchema(typeName: string): JsonSchema {

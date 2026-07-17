@@ -58,6 +58,7 @@ async fn unary_json_and_proto_use_the_registered_generated_implementation() {
 
     let response = client
         .post(format!("{url}/greet.v1.GreetService/Greet"))
+        .header("accept", "application/proto")
         .json(&serde_json::json!({
             "name": "JSON",
             "mood": "MOOD_HAPPY",
@@ -67,6 +68,7 @@ async fn unary_json_and_proto_use_the_registered_generated_implementation() {
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["content-type"], "application/json");
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["message"], "Projected JSON");
     assert_eq!(body["mood"], "MOOD_HAPPY");
@@ -75,7 +77,7 @@ async fn unary_json_and_proto_use_the_registered_generated_implementation() {
     let response = client
         .post(format!("{url}/greet.v1.GreetService/Greet"))
         .header("content-type", "application/proto")
-        .header("accept", "application/proto")
+        .header("accept", "application/json")
         .body(
             greet::GreetRequest {
                 name: "Proto".into(),
@@ -87,6 +89,7 @@ async fn unary_json_and_proto_use_the_registered_generated_implementation() {
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["content-type"], "application/proto");
     let response = greet::GreetResponse::decode(response.bytes().await.unwrap()).unwrap();
     assert_eq!(response.message, "Projected Proto");
     assert_eq!(calls.load(Ordering::SeqCst), 2);

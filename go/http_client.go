@@ -283,7 +283,13 @@ func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 			}
 
 			methodPath := fmt.Sprintf("/%s/%s", svcFullName, methodName)
-			binding, err := pickHTTPClientBinding(httpRules[methodPath], svcFullName, methodName)
+			binding, err := pickHTTPClientBinding(
+				httpRules[methodPath],
+				svcFullName,
+				methodName,
+				reqDesc,
+				respDesc,
+			)
 			if err != nil {
 				return fmt.Errorf("build HTTP binding for %s: %w", methodPath, err)
 			}
@@ -356,23 +362,76 @@ func (s *Server) httpRulesByMethodPath() (map[string]*annotationspb.HttpRule, er
 	return out, nil
 }
 
-func pickHTTPClientBinding(rule *annotationspb.HttpRule, svcFullName, methodName string) (*httpClientBinding, error) {
+func pickHTTPClientBinding(
+	rule *annotationspb.HttpRule,
+	svcFullName string,
+	methodName string,
+	requestDescriptor protoreflect.MessageDescriptor,
+	responseDescriptor protoreflect.MessageDescriptor,
+) (*httpClientBinding, error) {
 	if rule == nil {
 		pattern := fmt.Sprintf("/%s/%s", svcFullName, methodName)
-		return newHTTPClientBinding(http.MethodPost, pattern, "*", "")
+		return newHTTPClientBinding(
+			http.MethodPost,
+			pattern,
+			"*",
+			"",
+			requestDescriptor,
+			responseDescriptor,
+		)
 	}
 
 	method, pattern, err := httpMethodAndPattern(rule)
 	if err != nil {
 		return nil, err
 	}
-	return newHTTPClientBinding(method, pattern, rule.GetBody(), rule.GetResponseBody())
+	return newHTTPClientBinding(
+		method,
+		pattern,
+		rule.GetBody(),
+		rule.GetResponseBody(),
+		requestDescriptor,
+		responseDescriptor,
+	)
 }
 
-func newHTTPClientBinding(method, pattern, body, responseBody string) (*httpClientBinding, error) {
+func newHTTPClientBinding(
+	method string,
+	pattern string,
+	body string,
+	responseBody string,
+	requestDescriptor protoreflect.MessageDescriptor,
+	responseDescriptor protoreflect.MessageDescriptor,
+) (*httpClientBinding, error) {
 	template, err := parsePathTemplate(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("invalid route pattern %q: %w", pattern, err)
+	}
+	for i := range template.segments {
+		if template.segments[i].field == "" {
+			continue
+		}
+		template.segments[i].field, err = protobufJSONFieldPath(
+			requestDescriptor,
+			template.segments[i].field,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("invalid route pattern %q: %w", pattern, err)
+		}
+	}
+	if body != "" && body != "*" {
+		selector := body
+		body, err = protobufJSONFieldPath(requestDescriptor, selector)
+		if err != nil {
+			return nil, fmt.Errorf("invalid body selector %q: %w", selector, err)
+		}
+	}
+	if responseBody != "" && responseBody != "*" {
+		selector := responseBody
+		responseBody, err = protobufJSONFieldPath(responseDescriptor, selector)
+		if err != nil {
+			return nil, fmt.Errorf("invalid response body selector %q: %w", selector, err)
+		}
 	}
 	return &httpClientBinding{
 		method:       strings.ToUpper(method),
@@ -476,7 +535,11 @@ func (b *httpClientBinding) expandPath(args map[string]any) (string, []string, e
 		consumed = append(consumed, seg.field)
 	}
 
-	return "/" + strings.Join(parts, "/"), consumed, nil
+	path := "/" + strings.Join(parts, "/")
+	if b.template.trailingSlash {
+		path += "/"
+	}
+	return path, consumed, nil
 }
 
 func (b *httpClientBinding) encodeBody(args map[string]any) ([]byte, string, error) {
@@ -506,7 +569,7 @@ func (b *httpClientBinding) encodeBody(args map[string]any) ([]byte, string, err
 }
 
 func messageToMap(msg proto.Message) (map[string]any, error) {
-	raw, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(msg)
+	raw, err := protojson.Marshal(msg)
 	if err != nil {
 		return nil, err
 	}
@@ -524,6 +587,29 @@ func messageToMap(msg proto.Message) (map[string]any, error) {
 		return map[string]any{}, nil
 	}
 	return out, nil
+}
+
+func protobufJSONFieldPath(
+	message protoreflect.MessageDescriptor,
+	fieldPath string,
+) (string, error) {
+	parts := strings.Split(fieldPath, ".")
+	jsonParts := make([]string, 0, len(parts))
+	for i, part := range parts {
+		field := message.Fields().ByName(protoreflect.Name(part))
+		if field == nil {
+			return "", fmt.Errorf("field %q does not exist in %s", strings.Join(parts[:i+1], "."), message.FullName())
+		}
+		jsonParts = append(jsonParts, field.JSONName())
+		if i == len(parts)-1 {
+			continue
+		}
+		if field.Message() == nil {
+			return "", fmt.Errorf("field %q is not a message", strings.Join(parts[:i+1], "."))
+		}
+		message = field.Message()
+	}
+	return strings.Join(jsonParts, "."), nil
 }
 
 func cloneMap(in map[string]any) map[string]any {

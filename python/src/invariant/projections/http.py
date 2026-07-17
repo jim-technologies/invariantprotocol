@@ -189,7 +189,9 @@ def build_asgi_app(server: Server):
 
             response = await _run_with_deadline(invoke(), projection_context, timeout)
 
-            if _is_proto(headers.get("accept", "")):
+            # Connect unary responses use the request's codec. Accept does not
+            # negotiate a different response codec.
+            if proto_request:
                 payload = response.SerializeToString() if response is not None else b""
                 await _send_bytes(
                     send,
@@ -227,8 +229,25 @@ def build_asgi_app(server: Server):
     return app
 
 
-def _headers_dict(raw_headers: list) -> dict[str, str]:
-    out: dict[str, str] = {}
+class _HTTPHeaders(dict[str, str]):
+    """Case-normalized HTTP headers that retain repeated wire values."""
+
+    __slots__ = ("_all_values",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._all_values: dict[str, list[str]] = {}
+
+    def add(self, key: str, value: str) -> None:
+        self[key] = value
+        self._all_values.setdefault(key, []).append(value)
+
+    def values_for(self, key: str) -> Sequence[str]:
+        return self._all_values.get(key, ())
+
+
+def _headers_dict(raw_headers: list) -> _HTTPHeaders:
+    out = _HTTPHeaders()
     for k, v in raw_headers:
         try:
             key = k.decode("ascii").lower()
@@ -236,15 +255,19 @@ def _headers_dict(raw_headers: list) -> dict[str, str]:
             continue
         if not key or any(not (character.isalnum() or character in "!#$%&'*+-.^_`|~") for character in key):
             continue
-        out[key] = v.decode("latin-1")
+        out.add(key, v.decode("latin-1"))
     return out
 
 
 def default_http_metadata_mapper(headers: Mapping[str, str]) -> Sequence[tuple[str, str | bytes]]:
     """Forward only common tracing and correlation headers by default."""
-    return tuple(
-        (key, headers[key]) for key in ("traceparent", "tracestate", "baggage", "x-request-id") if key in headers
-    )
+    mapped: list[tuple[str, str]] = []
+    for key in ("traceparent", "tracestate", "baggage", "x-request-id"):
+        if isinstance(headers, _HTTPHeaders):
+            mapped.extend((key, value) for value in headers.values_for(key))
+        elif key in headers:
+            mapped.append((key, headers[key]))
+    return tuple(mapped)
 
 
 def _inbound_http_metadata(server: Server, headers: Mapping[str, str]) -> Metadata:

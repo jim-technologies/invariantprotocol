@@ -56,7 +56,7 @@ type Tool struct {
 
 const (
 	serverName    = "invariant-protocol"
-	serverVersion = "0.8.1"
+	serverVersion = "0.8.2"
 )
 
 // MethodConfig overrides per-server defaults for one RPC method. Zero-valued
@@ -144,7 +144,10 @@ func (s *Server) updateProjectionFilters(subject string, update func()) {
 // SetMaxUnaryRequestBytes overrides the HTTP unary body-size cap. Pass 0 to
 // reset to the default (16 MiB).
 func (s *Server) SetMaxUnaryRequestBytes(n int64) {
-	if n <= 0 {
+	if n < 0 {
+		panic("invariant: HTTP unary request limit must be non-negative")
+	}
+	if n == 0 {
 		n = defaultHTTPMaxUnaryRequest
 	}
 	s.updateConfiguration("HTTP unary request limit", func() { s.httpMaxUnaryRequest = n })
@@ -153,7 +156,10 @@ func (s *Server) SetMaxUnaryRequestBytes(n int64) {
 // SetMaxUnaryResponseBytes overrides the encoded HTTP unary response cap.
 // Pass 0 to reset to the default (16 MiB).
 func (s *Server) SetMaxUnaryResponseBytes(n int64) {
-	if n <= 0 {
+	if n < 0 {
+		panic("invariant: HTTP unary response limit must be non-negative")
+	}
+	if n == 0 {
 		n = defaultHTTPMaxUnaryResponse
 	}
 	s.updateConfiguration("HTTP unary response limit", func() { s.httpMaxUnaryResponse = n })
@@ -162,7 +168,10 @@ func (s *Server) SetMaxUnaryResponseBytes(n int64) {
 // SetMaxStreamRequestBytes overrides the Connect streaming request envelope
 // cap. Pass 0 to reset to the default (16 MiB).
 func (s *Server) SetMaxStreamRequestBytes(n int64) {
-	if n <= 0 {
+	if n < 0 {
+		panic("invariant: HTTP stream request limit must be non-negative")
+	}
+	if n == 0 {
 		n = defaultConnectStreamMaxRequest
 	}
 	s.updateConfiguration("HTTP stream request limit", func() { s.connectStreamMaxRequest = n })
@@ -171,7 +180,10 @@ func (s *Server) SetMaxStreamRequestBytes(n int64) {
 // SetMaxStreamResponseBytes overrides the per-message encoded Connect stream
 // response cap. Pass 0 to reset to the default (16 MiB).
 func (s *Server) SetMaxStreamResponseBytes(n int64) {
-	if n <= 0 {
+	if n < 0 {
+		panic("invariant: HTTP stream response limit must be non-negative")
+	}
+	if n == 0 {
 		n = defaultConnectStreamMaxResponse
 	}
 	s.updateConfiguration("HTTP stream response limit", func() { s.connectStreamMaxResponse = n })
@@ -195,6 +207,12 @@ func (s *Server) SetMaxStreamResponseBytes(n int64) {
 //
 // Last write wins; re-calling overrides the previous config for that method.
 func (s *Server) ConfigureMethod(methodPath string, cfg MethodConfig) {
+	if cfg.MaxUnaryRequestBytes < 0 ||
+		cfg.MaxUnaryResponseBytes < 0 ||
+		cfg.MaxStreamRequestBytes < 0 ||
+		cfg.MaxStreamResponseBytes < 0 {
+		panic("invariant: method byte limits must be non-negative")
+	}
 	s.updateConfiguration("method configuration", func() {
 		if s.methodConfigs == nil {
 			s.methodConfigs = make(map[string]MethodConfig)

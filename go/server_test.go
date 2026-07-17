@@ -1,6 +1,9 @@
 package invariant
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
@@ -124,6 +127,40 @@ func TestProjectionFiltersFreezeAtFirstRegistration(t *testing.T) {
 		"invariant: exclude filters must be configured before service registration",
 		func() { srv.Exclude("*.GreetGroup") },
 	)
+}
+
+func TestProjectionLimitsResetWithZeroAndRejectNegativeValues(t *testing.T) {
+	srv, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+
+	srv.SetMaxUnaryRequestBytes(1)
+	srv.SetMaxUnaryRequestBytes(0)
+
+	assert.PanicsWithValue(
+		t,
+		"invariant: HTTP unary response limit must be non-negative",
+		func() { srv.SetMaxUnaryResponseBytes(-1) },
+	)
+	assert.PanicsWithValue(
+		t,
+		"invariant: method byte limits must be non-negative",
+		func() {
+			srv.ConfigureMethod("/greet.v1.GreetService/Greet", MethodConfig{
+				MaxStreamResponseBytes: -1,
+			})
+		},
+	)
+
+	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
+	request := httptest.NewRequest(
+		http.MethodPost,
+		greetpb.GreetService_Greet_FullMethodName,
+		strings.NewReader(`{"name":"reset"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	srv.HTTPHandler().ServeHTTP(response, request)
+	assert.Equal(t, http.StatusNotImplemented, response.Code)
 }
 
 func TestIncludeEnvVar(t *testing.T) {
