@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
@@ -179,6 +181,30 @@ func TestServeContextCancelStopsGracefully(t *testing.T) {
 	case <-t.Context().Done():
 		t.Fatal("Serve did not return after context cancel")
 	}
+}
+
+func TestServeProjectionsCancelsAndWaitsForSiblingAfterError(t *testing.T) {
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := probe.Addr().(*net.TCPAddr).Port
+	require.NoError(t, probe.Close())
+
+	srv := streamServer(t, &streamServicer{})
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	err = srv.ServeProjections(ctx, HTTP(port), HTTP(port))
+	require.Error(t, err)
+	require.NotErrorIs(t, err, context.DeadlineExceeded)
+	var listenErr *net.OpError
+	require.ErrorAs(t, err, &listenErr)
+	assert.Equal(t, "listen", listenErr.Op)
+
+	// Returning means the projection that successfully acquired the port has
+	// observed sibling cancellation and completed graceful shutdown.
+	reused, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	require.NoError(t, err)
+	require.NoError(t, reused.Close())
 }
 
 // -- Stream edge cases. --

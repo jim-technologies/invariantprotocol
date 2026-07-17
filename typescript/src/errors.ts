@@ -1,5 +1,5 @@
-import { Code as ConnectCode, ConnectError } from "@connectrpc/connect";
 import { create, toBinary } from "@bufbuild/protobuf";
+import { Code as ConnectCode, ConnectError } from "@connectrpc/connect";
 
 export type Code =
   | "canceled"
@@ -132,7 +132,6 @@ export function httpStatusFor(code: Code): number {
     case "unknown":
     case "internal":
     case "data_loss":
-    default:
       return 500;
   }
 }
@@ -238,9 +237,7 @@ function connectDetailsForPayload(error: ConnectError): unknown[] {
     if ("desc" in detail) {
       return {
         type: detail.desc.typeName,
-        value: Buffer.from(
-          toBinary(detail.desc, create(detail.desc, detail.value)),
-        ).toString("base64"),
+        value: Buffer.from(toBinary(detail.desc, create(detail.desc, detail.value))).toString("base64"),
       };
     }
     return { type: detail.type, value: Buffer.from(detail.value).toString("base64") };

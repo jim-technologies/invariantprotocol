@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 // slowGreetServicer is used to exercise Connect-Timeout-Ms handling.
@@ -397,4 +398,19 @@ func TestHTTPToolCatalog(t *testing.T) {
 	}
 	assert.True(t, names["GreetService.Greet"])
 	assert.True(t, names["GreetService.GreetGroup"])
+}
+
+func TestHTTPDescriptorReturnsConstructionImage(t *testing.T) {
+	srv := streamServer(t, &streamServicer{})
+	request := httptest.NewRequest(http.MethodGet, "/__invariant/descriptor.binpb", nil)
+	response := httptest.NewRecorder()
+
+	srv.HTTPHandler().ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, protoContentType, response.Header().Get("Content-Type"))
+
+	var got descriptorpb.FileDescriptorSet
+	require.NoError(t, proto.Unmarshal(response.Body.Bytes(), &got))
+	assert.True(t, proto.Equal(srv.fds, &got), "descriptor endpoint must return the exact image used to construct the server")
 }

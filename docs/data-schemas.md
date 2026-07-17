@@ -269,10 +269,16 @@ an incomplete representation of the protobuf contract.
 
 ## PostgreSQL and Atlas
 
-Invariant emits complete, semicolon-terminated PostgreSQL DDL. Atlas can read
-that SQL directly through its external-schema data source, then own inspection,
-diffing, migration generation, and application. HCL is not an intermediate
-format and is not another source of truth.
+Invariant emits complete, semicolon-terminated PostgreSQL DDL. Atlas reads that
+`file://` SQL desired state directly and uses a PostgreSQL development database
+to interpret and diff it. Atlas then owns inspection, migration generation, and
+application. HCL is not an intermediate format and is not another source of
+truth.
+
+Repository integration runs `scripts/check_postgres_atlas.sh`: it renders the
+committed bundle, applies the result to disposable PostgreSQL 18.4, inspects
+the live schema, and requires Atlas to report a zero diff. This verifies the
+boundary without making production DDL application part of Invariant.
 
 SQL has no portable field-identity mechanism, so the compiler retains the
 committed storage name when a protobuf field is renamed under the same numeric
@@ -307,4 +313,4 @@ The format references behind these decisions are the
 [Parquet logical types](https://parquet.apache.org/docs/file-format/types/logicaltypes/),
 [Iceberg schema evolution rules](https://iceberg.apache.org/docs/latest/evolution/#schema-evolution),
 [protobuf field presence](https://protobuf.dev/programming-guides/field_presence/),
-and [Atlas external schemas](https://atlasgo.io/atlas-schema/projects).
+and [Atlas SQL schema sources](https://atlasgo.io/atlas-schema/sql).

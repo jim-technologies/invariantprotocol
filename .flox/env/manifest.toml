@@ -32,18 +32,30 @@ rustc.pkg-group = "rust-toolchain"
 cargo.pkg-path = "cargo"
 cargo.version = "1.96.1"
 cargo.pkg-group = "rust-toolchain"
+cargo-llvm-cov.pkg-path = "cargo-llvm-cov"
+cargo-llvm-cov.version = "0.8.5"
 clippy.pkg-path = "clippy"
 clippy.version = "1.96.1"
 clippy.pkg-group = "rust-toolchain"
 rustfmt.pkg-path = "rustfmt"
 rustfmt.version = "1.96.1"
 rustfmt.pkg-group = "rust-toolchain"
+# Match rustc's embedded LLVM so coverage profiles and reports use the same
+# instrumentation format on every supported development system.
+llvm.pkg-path = "llvm_21"
+llvm.version = "21.1.8"
 # rust-analyzer for editor integration; not used by CI but harmless.
 rust-analyzer.pkg-path = "rust-analyzer"
 gitleaks.pkg-path = "gitleaks"
 cargo-audit.pkg-path = "cargo-audit"
 govulncheck.pkg-path = "govulncheck"
 actionlint.pkg-path = "actionlint"
+shellcheck.pkg-path = "shellcheck"
+shellcheck.version = "0.11.0"
+# Atlas validates that emitted PostgreSQL desired-state SQL is accepted by the
+# real migration boundary documented by this project.
+atlas.pkg-path = "atlas"
+atlas.version = "1.2.3"
 
 [vars]
 # Keep uv on the same Python 3.14 interpreter as the reproducible Flox
@@ -52,6 +64,8 @@ UV_PYTHON_DOWNLOADS = "never"
 # Flox's catalog can lag a Go security patch. Select the exact release
 # explicitly instead of letting `auto` choose an unreviewed newer toolchain.
 GOTOOLCHAIN = "go1.26.5+auto"
+# Flox supplies llvm-cov and llvm-profdata directly rather than through rustup.
+CARGO_LLVM_COV_SETUP = "no"
 
 [hook]
 on-activate = '''

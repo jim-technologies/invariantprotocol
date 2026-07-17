@@ -1,6 +1,6 @@
-import { ScalarType, type DescField, type DescMessage } from "@bufbuild/protobuf";
+import { type DescField, type DescMessage, ScalarType } from "@bufbuild/protobuf";
 
-import { type ParsedDescriptor } from "./descriptor.js";
+import type { ParsedDescriptor } from "./descriptor.js";
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -140,5 +140,7 @@ function scalarSchema(type: ScalarType): JsonSchema {
 }
 
 function isRequired(field: DescField): boolean {
-  return field.fieldKind !== "list" && field.fieldKind !== "map" && field.oneof === undefined && !field.proto.proto3Optional;
+  return (
+    field.fieldKind !== "list" && field.fieldKind !== "map" && field.oneof === undefined && !field.proto.proto3Optional
+  );
 }

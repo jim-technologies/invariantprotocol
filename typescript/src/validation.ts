@@ -13,7 +13,13 @@ export function validation(): Interceptor {
   const validator = createValidator();
   return (next) => async (request) => {
     if (!request.stream) {
-      validateMessage(validator, request.method.input, request.message, request.method.parent.typeName, request.method.name);
+      validateMessage(
+        validator,
+        request.method.input,
+        request.message,
+        request.method.parent.typeName,
+        request.method.name,
+      );
       return next(request);
     }
     return next({
@@ -49,18 +55,13 @@ function validateMessage(
     description: violation.message,
   }));
   const detail = create(BadRequestSchema, { fieldViolations });
-  const messageText = fieldViolations
-    .map((violation) => `${violation.field}: ${violation.description}`)
-    .join("; ");
+  const messageText = fieldViolations.map((violation) => `${violation.field}: ${violation.description}`).join("; ");
   throw new ConnectError(messageText || result.error.message, Code.InvalidArgument, undefined, [
     { desc: BadRequestSchema, value: detail },
   ]);
 }
 
-async function* validatedMessages(
-  validator: ReturnType<typeof createValidator>,
-  request: StreamRequest,
-) {
+async function* validatedMessages(validator: ReturnType<typeof createValidator>, request: StreamRequest) {
   for await (const message of request.message) {
     validateMessage(validator, request.method.input, message, request.method.parent.typeName, request.method.name);
     yield message;

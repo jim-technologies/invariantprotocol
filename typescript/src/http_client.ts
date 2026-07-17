@@ -1,9 +1,9 @@
-import { fromJson, getOption, toJson, type DescField, type DescMessage, type JsonValue } from "@bufbuild/protobuf";
+import { type DescField, type DescMessage, fromJson, getOption, type JsonValue, toJson } from "@bufbuild/protobuf";
 import { ConnectError } from "@connectrpc/connect";
 
 import { monotonicDeadlineAfter, scheduleAbsoluteDeadline } from "./deadline.js";
-import { asInvariantError, codeFromHttpStatus, InvariantError, invalidArgument, type Code } from "./errors.js";
-import { type HandlerContext, type Server, type Tool, type UnaryHandler } from "./server.js";
+import { asInvariantError, type Code, codeFromHttpStatus, InvariantError, invalidArgument } from "./errors.js";
+import type { HandlerContext, Server, Tool, UnaryHandler } from "./server.js";
 
 export type OutboundHTTPRequest = {
   methodPath: string;
@@ -22,8 +22,12 @@ export type OutboundHTTPResponse = {
   request: OutboundHTTPRequest;
 };
 
-export type HTTPHeaderProvider = (request: OutboundHTTPRequest) => Record<string, string> | undefined | Promise<Record<string, string> | undefined>;
-export type HTTPQueryProvider = (request: OutboundHTTPRequest) => Record<string, string> | undefined | Promise<Record<string, string> | undefined>;
+export type HTTPHeaderProvider = (
+  request: OutboundHTTPRequest,
+) => Record<string, string> | undefined | Promise<Record<string, string> | undefined>;
+export type HTTPQueryProvider = (
+  request: OutboundHTTPRequest,
+) => Record<string, string> | undefined | Promise<Record<string, string> | undefined>;
 export type HTTPResponseObserver = (response: OutboundHTTPResponse) => void | Promise<void>;
 
 export type HTTPAuth = {
@@ -53,10 +57,7 @@ export class HTTPConnection {
 
   constructor(baseUrl: string, options: ConnectHttpOptions = {}) {
     this.baseUrl = validateBaseUrl(baseUrl);
-    this.auth =
-      typeof options.auth === "function"
-        ? { headerProvider: options.auth }
-        : (options.auth ?? {});
+    this.auth = typeof options.auth === "function" ? { headerProvider: options.auth } : (options.auth ?? {});
     this.options = {
       maxReceiveMessageSize: options.channelOptions?.maxReceiveMessageSize ?? 16 * 1024 * 1024,
       connectTimeoutMs: options.channelOptions?.connectTimeoutMs ?? 10_000,
@@ -269,7 +270,12 @@ export function clientBindingForMethod(rule: unknown, serviceName: string, metho
   const patternCase = httpRule.pattern?.case;
   const patternValue = httpRule.pattern?.value;
   if (patternCase === "custom" && typeof patternValue === "object") {
-    return new HTTPClientBinding(patternValue.kind || "POST", patternValue.path || `/${serviceName}/${methodName}`, httpRule.body || "", httpRule.responseBody || "");
+    return new HTTPClientBinding(
+      patternValue.kind || "POST",
+      patternValue.path || `/${serviceName}/${methodName}`,
+      httpRule.body || "",
+      httpRule.responseBody || "",
+    );
   }
   if (patternCase && typeof patternValue === "string") {
     return new HTTPClientBinding(patternCase, patternValue, httpRule.body || "", httpRule.responseBody || "");
@@ -290,7 +296,9 @@ export function httpProxyHandler(
     const built = binding.build(args, connection.baseUrl);
     const bytes = await connection.send(methodPath, binding.method, built.url, built.body, context);
     const payload = bytes.length === 0 ? {} : JSON.parse(Buffer.from(bytes).toString("utf8"));
-    return fromJson(tool.outputDesc, responseBody(payload, binding.responseBody) as JsonValue, { registry: server.parsed.registry });
+    return fromJson(tool.outputDesc, responseBody(payload, binding.responseBody) as JsonValue, {
+      registry: server.parsed.registry,
+    });
   };
 }
 
@@ -308,7 +316,10 @@ class PathTemplate {
 
   static parse(pattern: string): PathTemplate {
     const trailingSlash = pattern.length > 1 && pattern.endsWith("/");
-    const parts = pattern.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+    const parts = pattern
+      .replace(/^\/+|\/+$/g, "")
+      .split("/")
+      .filter(Boolean);
     const segments = parts.map((part) => {
       const match = /^\{([^}=]+)(?:=([^}]+))?\}$/.exec(part);
       if (!match) {
@@ -521,9 +532,7 @@ function outboundRequestScope(
   const callerTimeoutMs = context.timeoutMs();
   const timeoutMs = Math.max(
     0,
-    callerTimeoutMs === undefined
-      ? configuredTimeoutMs
-      : Math.min(configuredTimeoutMs, callerTimeoutMs),
+    callerTimeoutMs === undefined ? configuredTimeoutMs : Math.min(configuredTimeoutMs, callerTimeoutMs),
   );
   const cleanupDeadline = scheduleAbsoluteDeadline(monotonicDeadlineAfter(timeoutMs), () => {
     controller.abort(new InvariantError("deadline_exceeded", `HTTP request exceeded ${timeoutMs}ms`));
@@ -586,7 +595,9 @@ function outboundResponseMetadata(headers: Headers): Headers {
 }
 
 function appendHeaders(target: Headers, source: Headers): void {
-  source.forEach((value, name) => target.append(name, value));
+  source.forEach((value, name) => {
+    target.append(name, value);
+  });
 }
 
 function validMetadataName(name: string): boolean {

@@ -2,19 +2,19 @@ import { readFileSync } from "node:fs";
 
 import {
   createFileRegistry,
-  fromBinary,
   type DescEnum,
   type DescField,
   type DescMessage,
   type DescMethod,
   type DescService,
   type FileRegistry,
+  fromBinary,
 } from "@bufbuild/protobuf";
 import {
   type DescriptorProto,
   type EnumDescriptorProto,
-  FileDescriptorSetSchema,
   type FileDescriptorSet,
+  FileDescriptorSetSchema,
 } from "@bufbuild/protobuf/wkt";
 
 export type MethodInfo = {

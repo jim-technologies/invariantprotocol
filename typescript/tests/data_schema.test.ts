@@ -7,11 +7,11 @@ import { describe, expect, test } from "vitest";
 
 import {
   findDataset,
-  parseSchemaBundle,
   Presence,
+  parseSchemaBundle,
   SchemaBundleSchema,
-  serializeSchemaBundle,
   SyntheticRole,
+  serializeSchemaBundle,
 } from "../src/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -75,7 +75,9 @@ describe("canonical data schema", () => {
     if (version === "ir") bundle.irVersion = 1;
     else bundle.mappingVersion = 1;
 
-    expect(() => parseSchemaBundle(serializeSchemaBundle(bundle))).toThrow(`unsupported SchemaBundle ${version}_version`);
+    expect(() => parseSchemaBundle(serializeSchemaBundle(bundle))).toThrow(
+      `unsupported SchemaBundle ${version}_version`,
+    );
   });
 
   test("round-trips portable refined types", () => {
@@ -96,7 +98,10 @@ describe("canonical data schema", () => {
     });
 
     const fields = parseSchemaBundle(serializeSchemaBundle(bundle)).datasets[0]?.fields;
-    expect(fields?.[0]?.type?.kind).toEqual({ case: "decimal", value: expect.objectContaining({ precision: 18, scale: 4 }) });
+    expect(fields?.[0]?.type?.kind).toEqual({
+      case: "decimal",
+      value: expect.objectContaining({ precision: 18, scale: 4 }),
+    });
     expect(fields?.[1]?.type?.kind.case).toBe("uuid");
     expect(fields?.[2]?.type?.kind).toEqual({ case: "fixedBytes", value: expect.objectContaining({ byteLength: 32 }) });
   });

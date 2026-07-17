@@ -317,6 +317,46 @@ func TestHTTPProjectionStreamingSendHeaderFlushesImmediately(t *testing.T) {
 	require.NoError(t, response.Body.Close())
 }
 
+func TestHTTPProjectionStreamingMetadataFollowsGRPCSemantics(t *testing.T) {
+	var setHeaderAfterSendErr, sendHeaderAfterSendErr error
+	handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{
+		stream: func(_ *greetpb.StreamGreetRequest, stream grpc.ServerStreamingServer[greetpb.GreetResponse]) error {
+			ctx := stream.Context()
+			if err := grpc.SetHeader(ctx, metadata.Pairs("x-stream-header", "leading")); err != nil {
+				return err
+			}
+			if err := grpc.SetTrailer(ctx, metadata.Pairs(
+				"x-stream-trailer", "trailing",
+				"payload-bin", string([]byte{0, 0xff}),
+			)); err != nil {
+				return err
+			}
+			if err := stream.Send(&greetpb.GreetResponse{Message: "metadata"}); err != nil {
+				return err
+			}
+			setHeaderAfterSendErr = grpc.SetHeader(ctx, metadata.Pairs("x-too-late", "ignored"))
+			sendHeaderAfterSendErr = grpc.SendHeader(ctx, metadata.Pairs("x-too-late", "ignored"))
+			return nil
+		},
+	}, nil)
+
+	response := serveHTTPProjectionStream(t, handler)
+	require.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "leading", response.Header().Get("X-Stream-Header"))
+	require.ErrorContains(t, setHeaderAfterSendErr, "cannot set header after SendHeader")
+	require.ErrorContains(t, sendHeaderAfterSendErr, "SendHeader called multiple times")
+
+	frames := readAllEnvelopes(t, bytes.NewReader(response.Body.Bytes()))
+	require.Len(t, frames, 2, "one message plus one end-stream envelope")
+	assert.Equal(t, connectEndStreamFlag, frames[1].flags)
+	var end struct {
+		Metadata map[string][]string `json:"metadata"`
+	}
+	require.NoError(t, json.Unmarshal(frames[1].payload, &end))
+	assert.Equal(t, []string{"trailing"}, end.Metadata["x-stream-trailer"])
+	assert.Equal(t, []string{"AP8"}, end.Metadata["payload-bin"])
+}
+
 func TestHTTPProjectionBoundsErrorControlPayloads(t *testing.T) {
 	t.Run("unary", func(t *testing.T) {
 		handler := newHTTPProjectionHandler(t, &httpProjectionTestServicer{

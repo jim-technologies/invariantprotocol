@@ -1,8 +1,4 @@
-import {
-  Code,
-  ConnectError,
-  createHandlerContext,
-} from "@connectrpc/connect";
+import { Code, ConnectError, createHandlerContext } from "@connectrpc/connect";
 
 export const MAX_NODE_TIMER_DELAY_MS = 2_147_483_647;
 
@@ -26,9 +22,8 @@ export function createDeadlineHandlerContext(
   const cleanupDeadline = scheduleAbsoluteDeadline(deadlineAt, () => {
     deadline.abort(new ConnectError("the operation timed out", Code.DeadlineExceeded));
   });
-  const requestSignal = init.requestSignal === undefined
-    ? deadline.signal
-    : AbortSignal.any([init.requestSignal, deadline.signal]);
+  const requestSignal =
+    init.requestSignal === undefined ? deadline.signal : AbortSignal.any([init.requestSignal, deadline.signal]);
   const context = createHandlerContext({
     ...init,
     timeoutMs: undefined,
@@ -44,10 +39,7 @@ export function createDeadlineHandlerContext(
   });
 }
 
-export function scheduleAbsoluteDeadline(
-  deadlineAt: number | undefined,
-  expire: () => void,
-): () => void {
+export function scheduleAbsoluteDeadline(deadlineAt: number | undefined, expire: () => void): () => void {
   if (deadlineAt === undefined) {
     return () => undefined;
   }

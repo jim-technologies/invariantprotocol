@@ -10,6 +10,32 @@ but never silent behaviour regressions.
 
 ## Unreleased
 
+## v0.8.1 — 2026-07-17
+
+### Added
+
+- **Maintained coverage gates for every runtime.** Go, Python, Rust, and
+  TypeScript now run authored-source coverage in the normal CI test matrix and
+  reject regressions below measured repository floors.
+- **A real PostgreSQL/Atlas compatibility boundary.** Integration renders the
+  committed canonical schema bundle, applies it to disposable PostgreSQL 18.4,
+  inspects the live schema, and requires Atlas to report a zero diff.
+- **Focused projection and code-generation regression evidence.** Go now
+  exercises sibling projection shutdown, the exact served descriptor image,
+  and Connect stream header/trailer semantics. Rust codegen now exercises
+  custom output/runtime paths and every native RPC cardinality. TypeScript
+  status and rich-detail conversions now cover the complete canonical matrix.
+
+### Changed
+
+- **TypeScript quality checks use Biome.** Biome owns formatting and linting,
+  while `tsc` remains the separate static type checker. Vitest and its V8
+  coverage provider are pinned together.
+- **Reproducible quality tooling is part of the development environment.**
+  Flox now supplies Atlas, cargo-llvm-cov, matching LLVM tools, and ShellCheck;
+  Python and TypeScript lock their coverage and formatting dependencies
+  normally.
+
 ## v0.8.0 — 2026-07-16
 
 ### Added

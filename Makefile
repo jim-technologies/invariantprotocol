@@ -1,15 +1,15 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help check quality version-check parity parity-release git-install-check integration lint fmt fmt-check test test-go test-python test-rust test-typescript typecheck proto-comments public-surface security bench generate deps verify-generate breaking
+.PHONY: help check quality version-check parity parity-release git-install-check data-integration integration lint fmt fmt-check test test-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
 help: ## Show available make targets.
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-# Single local entry point. CI runs quality and language tests as separate jobs
-# so failures are easy to identify and the four test suites execute in parallel.
-check: quality test ## Run deterministic quality checks and all tests.
+# Single local entry point. CI runs quality and language coverage as separate
+# jobs so failures are easy to identify and the four suites execute in parallel.
+check: quality coverage ## Run deterministic quality checks, tests, and coverage gates.
 
 quality: version-check parity fmt-check lint typecheck proto-comments public-surface ## Run formatting, lint, type, schema, and policy checks.
 
@@ -28,26 +28,32 @@ parity-release: ## Reject a release while any core feature lacks four-language s
 git-install-check: ## Install every language package from the current Git commit.
 	scripts/check_git_installs.sh
 
-integration: git-install-check ## Exercise downstream Git installation for every language.
+data-integration: ## Apply and round-trip generated SQL through PostgreSQL and Atlas.
+	scripts/check_postgres_atlas.sh
 
-fmt-check: ## Verify formatting without modifying files.
+integration: git-install-check data-integration ## Exercise Git installation and external data boundaries.
+
+fmt-check: node_modules/.package-lock.json ## Verify formatting without modifying files.
 	test -z "$$(gofmt -l go)" || { echo "gofmt: files need formatting:"; gofmt -l go; exit 1; }
 	cd python && ruff format --check src/ tests/ ../scripts/
 	cd rust && cargo fmt --all --check
 	cd proto && buf format --diff --exit-code
 	cd conformance/proto && buf format --diff --exit-code
+	npm run format:check
 
-lint: ## Run Go, Python, Rust, and proto linters.
+lint: node_modules/.package-lock.json ## Run Go, Python, Rust, and proto linters.
 	actionlint
+	shellcheck scripts/*.sh
 	golangci-lint run ./...
 	cd python && ruff check src/ tests/ ../scripts/
 	cd rust && cargo clippy --workspace --all-targets --locked -- -D warnings
 	cd proto && buf lint
 	cd conformance/proto && buf lint
+	npm run lint
 
 typecheck: node_modules/.package-lock.json ## Run Python and TypeScript static type checks.
 	cd python && uv run ty check
-	npm run lint
+	npm run typecheck
 
 proto-comments: ## Verify projected proto comments are complete.
 	cd python && uv run invariant-check-proto-comments tests/proto/descriptor.binpb
@@ -64,12 +70,13 @@ security: node_modules/.package-lock.json ## Scan secrets and verify/audit every
 	npm audit --audit-level=moderate
 	cd rust && cargo fetch --locked && cargo audit
 
-fmt: ## Format code and apply safe linter fixes.
+fmt: node_modules/.package-lock.json ## Format code and apply safe linter fixes.
 	gofmt -w go && golangci-lint run --fix ./...
 	cd python && ruff format src/ tests/ ../scripts/ && ruff check --fix src/ tests/ ../scripts/
 	cd rust && cargo fmt --all
 	cd proto && buf format -w
 	cd conformance/proto && buf format -w
+	npm run format
 
 test: test-go test-python test-rust test-typescript ## Run all language test suites.
 
@@ -84,6 +91,27 @@ test-rust: ## Run Rust unit and transport-integration tests.
 
 test-typescript: node_modules/.package-lock.json ## Run TypeScript unit and transport-integration tests.
 	npm test
+
+coverage: coverage-go coverage-python coverage-rust coverage-typescript ## Run tests with maintained coverage floors.
+
+coverage-go: ## Run Go tests and enforce authored-code statement coverage.
+	@set -eu; \
+	all_packages="$$(go list ./go/...)"; \
+	packages="$$(printf '%s\n' "$$all_packages" | grep -Ev '/go/(gen/|tests/(gen|manual)$$)')"; \
+	profile="$$(mktemp)"; \
+	trap 'rm -f "$$profile"' EXIT; \
+	go test -count=1 -covermode=atomic -coverprofile="$$profile" $$packages; \
+	total="$$(go tool cover -func="$$profile" | awk '/^total:/ {gsub("%", "", $$3); print $$3}')"; \
+	awk -v total="$$total" 'BEGIN { printf "Go authored statement coverage: %.1f%% (required: 80.0%%)\n", total; exit !(total >= 80.0) }'
+
+coverage-python: ## Run Python tests with branch coverage.
+	cd python && uv run python -m pytest --cov=invariant --cov-branch --cov-report=term-missing tests/
+
+coverage-rust: ## Run Rust tests with LLVM source coverage.
+	cd rust && LLVM_COV="$$(command -v llvm-cov)" LLVM_PROFDATA="$$(command -v llvm-profdata)" cargo llvm-cov --workspace --locked --ignore-filename-regex '/target/' --fail-under-lines 80
+
+coverage-typescript: node_modules/.package-lock.json ## Run TypeScript tests with V8 coverage.
+	npm run test:coverage
 
 bench: ## Run Go, Python, and Rust benchmarks.
 	go test -bench=. -benchtime=2s -run=^$$ ./...

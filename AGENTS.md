@@ -10,8 +10,9 @@ One protobuf definition → all protocols. Write a `.proto` file with comments, 
 - **CLI** — humans and shell-based agents call RPCs from the terminal
 - **HTTP** — Connect endpoints over the canonical gRPC method paths
 - **gRPC** — native generated-service registration and language-standard serving
-- **Data schemas** — explicitly selected messages compile once into a versioned
-  logical bundle rendered as Arrow, Parquet, Iceberg, or PostgreSQL
+- **Data schemas** — annotated dataset roots compile once into a versioned
+  logical bundle rendered as Arrow, Parquet, Iceberg, or PostgreSQL; explicit
+  `--message` selection is the controlled-build override
 
 The core idea: proto comments become tool descriptions, field comments become JSON Schema descriptions, enums become constrained choices. Zero glue code.
 
@@ -367,9 +368,9 @@ and runtime projections are derived from the exact same compiled graph.
 ```bash
 flox activate
 make generate        # regenerate proto stubs and descriptor artifacts
-make check           # deterministic quality checks and all four test suites
+make check           # quality checks and maintained coverage floors for all four languages
 make security        # secrets, integrity, and vulnerability checks
-make integration     # clean Git installs for all four languages
+make integration     # Git installs plus disposable PostgreSQL/Atlas; requires Docker
 make parity-release  # strict portable-feature gate before one root tag
 ```
 
@@ -394,14 +395,15 @@ Dependency roots and lockfiles:
 
 - **`.flox/env/manifest.toml`** — language toolchains and CLI tools (`python3`,
   `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`,
-  `protoc-gen-go-grpc`). Flox
+  `protoc-gen-go-grpc`, `cargo-llvm-cov`, matching LLVM tools, ShellCheck, and
+  Atlas). Flox
   may provide a bootstrap Go command while `GOTOOLCHAIN` selects the exact
   checksum-verified patch release required by `go.mod` when the Flox catalog
   lags a security release.
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev
-  dep. `uv run` resolves against this. PyArrow belongs in the optional `data`
-  extra and the dev test group; importing the core RPC package must not import
-  PyArrow.
+  dep, including pytest-cov. `uv run` resolves against this. PyArrow belongs in
+  the optional `data` extra and the dev test group; importing the core RPC
+  package must not import PyArrow.
 - **`go.mod` + `go.sum`** — every Go dep. The root module keeps Go packages in
   `go/` while allowing one repository-wide `vX.Y.Z` release tag. Consumers run
   `go get github.com/jim-technologies/invariantprotocol/go@vX.Y.Z` and import
@@ -413,8 +415,12 @@ Dependency roots and lockfiles:
 - **`rust/Cargo.toml` + `rust/Cargo.lock`** — the Rust runtime and codegen
   workspace. Commit the lockfile and use `--locked` in integrity checks.
 - **`package.json` + `package-lock.json`** — every TypeScript runtime and dev
-  dep. TypeScript source remains in `typescript/`; `npm ci` resolves from the
-  repository root.
+  dep, including Biome and Vitest V8 coverage. TypeScript source remains in
+  `typescript/`; `npm ci` resolves from the repository root.
+
+The Atlas integration uses the pinned PostgreSQL 18.4 Docker image and requires
+a host Docker daemon. It verifies the generated desired state; it is not a
+production DDL-application API.
 
 CI (`.github/workflows/ci.yml`) runs everything inside `flox activate`, so contributors and CI hit the same toolchain by construction.
 

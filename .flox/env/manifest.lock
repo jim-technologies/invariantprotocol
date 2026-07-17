@@ -6,6 +6,10 @@
       "actionlint": {
         "pkg-path": "actionlint"
       },
+      "atlas": {
+        "pkg-path": "atlas",
+        "version": "1.2.3"
+      },
       "buf": {
         "pkg-path": "buf"
       },
@@ -16,6 +20,10 @@
       },
       "cargo-audit": {
         "pkg-path": "cargo-audit"
+      },
+      "cargo-llvm-cov": {
+        "pkg-path": "cargo-llvm-cov",
+        "version": "0.8.5"
       },
       "clippy": {
         "pkg-path": "clippy",
@@ -37,6 +45,10 @@
       },
       "govulncheck": {
         "pkg-path": "govulncheck"
+      },
+      "llvm": {
+        "pkg-path": "llvm_21",
+        "version": "21.1.8"
       },
       "nodejs": {
         "pkg-path": "nodejs_24",
@@ -73,12 +85,17 @@
         "pkg-group": "rust-toolchain",
         "version": "1.96.1"
       },
+      "shellcheck": {
+        "pkg-path": "shellcheck",
+        "version": "0.11.0"
+      },
       "uv": {
         "pkg-path": "uv",
         "version": ">=0.11.26"
       }
     },
     "vars": {
+      "CARGO_LLVM_COV_SETUP": "no",
       "GOTOOLCHAIN": "go1.26.5+auto",
       "UV_PYTHON_DOWNLOADS": "never"
     },
@@ -460,13 +477,13 @@
       "description": "Static checker for GitHub Actions workflow files",
       "install_id": "actionlint",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "actionlint-1.7.12",
       "pname": "actionlint",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:53:40.774470Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:32.096226Z",
       "stabilities": [
         "unstable"
       ],
@@ -489,13 +506,13 @@
       "description": "Static checker for GitHub Actions workflow files",
       "install_id": "actionlint",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "actionlint-1.7.12",
       "pname": "actionlint",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:52:41.974407Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:21:45.575900Z",
       "stabilities": [
         "unstable"
       ],
@@ -518,13 +535,13 @@
       "description": "Static checker for GitHub Actions workflow files",
       "install_id": "actionlint",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "actionlint-1.7.12",
       "pname": "actionlint",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:56:20.996790Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:54:54.812788Z",
       "stabilities": [
         "unstable"
       ],
@@ -541,19 +558,106 @@
       "priority": 5
     },
     {
+      "attr_path": "atlas",
+      "broken": false,
+      "derivation": "/nix/store/b1f6w6910pssfwfx2gp1lz89ik1bz5gv-atlas-1.2.3.drv",
+      "description": "Manage your database schema as code",
+      "install_id": "atlas",
+      "license": "Apache-2.0",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "atlas-1.2.3",
+      "pname": "atlas",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:32.227942Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "1.2.3",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/rdvb5b2k2cpgm5bghh5fn9p8nmnipgfr-atlas-1.2.3"
+      },
+      "system": "aarch64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "atlas",
+      "broken": false,
+      "derivation": "/nix/store/wl2crnzd9pnyzxsr8szq2s6564g87f4k-atlas-1.2.3.drv",
+      "description": "Manage your database schema as code",
+      "install_id": "atlas",
+      "license": "Apache-2.0",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "atlas-1.2.3",
+      "pname": "atlas",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:21:45.734192Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "1.2.3",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/za0g6x8kbxs6d4i6a61r3ikdgplwwqb5-atlas-1.2.3"
+      },
+      "system": "aarch64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "atlas",
+      "broken": false,
+      "derivation": "/nix/store/3fm5cv83d1qr8cn7x45aymg539v4kgra-atlas-1.2.3.drv",
+      "description": "Manage your database schema as code",
+      "install_id": "atlas",
+      "license": "Apache-2.0",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "atlas-1.2.3",
+      "pname": "atlas",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:54:54.975314Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "1.2.3",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/s3zspsn0w4yrp78yq1s883jmmzdwxh1k-atlas-1.2.3"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
       "attr_path": "buf",
       "broken": false,
       "derivation": "/nix/store/vr42691ck8mlpvqbb4hws6jxdhbzc5kh-buf-1.71.0.drv",
       "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
       "install_id": "buf",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "buf-1.71.0",
       "pname": "buf",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:53:41.225384Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:32.412884Z",
       "stabilities": [
         "unstable"
       ],
@@ -576,13 +680,13 @@
       "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
       "install_id": "buf",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "buf-1.71.0",
       "pname": "buf",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:52:42.285108Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:21:45.910557Z",
       "stabilities": [
         "unstable"
       ],
@@ -605,13 +709,13 @@
       "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
       "install_id": "buf",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "buf-1.71.0",
       "pname": "buf",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:56:21.360808Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:54:55.167333Z",
       "stabilities": [
         "unstable"
       ],
@@ -634,13 +738,13 @@
       "description": "Audit Cargo.lock files for crates with security vulnerabilities",
       "install_id": "cargo-audit",
       "license": "[ MIT, Apache-2.0 ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "cargo-audit-0.22.2",
       "pname": "cargo-audit",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:53:41.251733Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:32.439347Z",
       "stabilities": [
         "unstable"
       ],
@@ -663,13 +767,13 @@
       "description": "Audit Cargo.lock files for crates with security vulnerabilities",
       "install_id": "cargo-audit",
       "license": "[ MIT, Apache-2.0 ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "cargo-audit-0.22.2",
       "pname": "cargo-audit",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:52:42.326759Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:21:45.952725Z",
       "stabilities": [
         "unstable"
       ],
@@ -692,13 +796,13 @@
       "description": "Audit Cargo.lock files for crates with security vulnerabilities",
       "install_id": "cargo-audit",
       "license": "[ MIT, Apache-2.0 ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "cargo-audit-0.22.2",
       "pname": "cargo-audit",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:56:21.406856Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:54:55.212997Z",
       "stabilities": [
         "unstable"
       ],
@@ -715,19 +819,106 @@
       "priority": 5
     },
     {
+      "attr_path": "cargo-llvm-cov",
+      "broken": false,
+      "derivation": "/nix/store/l54vaw1w7abf2z3lpr8274jjj2y7h6bj-cargo-llvm-cov-0.8.5.drv",
+      "description": "Cargo subcommand to easily use LLVM source-based code coverage",
+      "install_id": "cargo-llvm-cov",
+      "license": "[ Apache-2.0, MIT ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "cargo-llvm-cov-0.8.5",
+      "pname": "cargo-llvm-cov",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:32.447877Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "0.8.5",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/dc952kfqh7gks5f9ibmby9av9d6chqks-cargo-llvm-cov-0.8.5"
+      },
+      "system": "aarch64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cargo-llvm-cov",
+      "broken": false,
+      "derivation": "/nix/store/cvjyrgbry8fkkm1smcrcpww5lpkjb4p2-cargo-llvm-cov-0.8.5.drv",
+      "description": "Cargo subcommand to easily use LLVM source-based code coverage",
+      "install_id": "cargo-llvm-cov",
+      "license": "[ Apache-2.0, MIT ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "cargo-llvm-cov-0.8.5",
+      "pname": "cargo-llvm-cov",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:21:45.962551Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "0.8.5",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/4sslc2l3nsa3xmy1cxbi30r72wz2fnaa-cargo-llvm-cov-0.8.5"
+      },
+      "system": "aarch64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "cargo-llvm-cov",
+      "broken": false,
+      "derivation": "/nix/store/yvslywxnsf5g7yrwj89946i4i6w1i77k-cargo-llvm-cov-0.8.5.drv",
+      "description": "Cargo subcommand to easily use LLVM source-based code coverage",
+      "install_id": "cargo-llvm-cov",
+      "license": "[ Apache-2.0, MIT ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "cargo-llvm-cov-0.8.5",
+      "pname": "cargo-llvm-cov",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:54:55.223652Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "0.8.5",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/yv0gwfm8xh6szh1q2slpxgl7ghshllqy-cargo-llvm-cov-0.8.5"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
       "attr_path": "gcc16",
       "broken": false,
       "derivation": "/nix/store/dn78zg0r2h1mqn6mka3vwsz8dbm2js8z-gcc-wrapper-16.1.0.drv",
       "description": "GNU Compiler Collection, version 16.1.0 (wrapper script)",
       "install_id": "gcc",
       "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "gcc-wrapper-16.1.0",
       "pname": "gcc16",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:53:42.296546Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:33.448922Z",
       "stabilities": [
         "unstable"
       ],
@@ -753,13 +944,13 @@
       "description": "GNU Compiler Collection, version 16.1.0 (wrapper script)",
       "install_id": "gcc",
       "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "gcc-wrapper-16.1.0",
       "pname": "gcc16",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:52:44.649407Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:21:47.416807Z",
       "stabilities": [
         "unstable"
       ],
@@ -785,13 +976,13 @@
       "description": "GNU Compiler Collection, version 16.1.0 (wrapper script)",
       "install_id": "gcc",
       "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "gcc-wrapper-16.1.0",
       "pname": "gcc16",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:56:23.049842Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:54:56.867229Z",
       "stabilities": [
         "unstable"
       ],
@@ -817,13 +1008,13 @@
       "description": "Scan git repos (or files) for secrets",
       "install_id": "gitleaks",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "gitleaks-8.30.1",
       "pname": "gitleaks",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:53:42.463711Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:33.603479Z",
       "stabilities": [
         "unstable"
       ],
@@ -846,13 +1037,13 @@
       "description": "Scan git repos (or files) for secrets",
       "install_id": "gitleaks",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "gitleaks-8.30.1",
       "pname": "gitleaks",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:52:44.860315Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:21:47.631729Z",
       "stabilities": [
         "unstable"
       ],
@@ -875,13 +1066,13 @@
       "description": "Scan git repos (or files) for secrets",
       "install_id": "gitleaks",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "gitleaks-8.30.1",
       "pname": "gitleaks",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:56:23.285503Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:54:57.094913Z",
       "stabilities": [
         "unstable"
       ],
@@ -904,13 +1095,13 @@
       "description": "Go Programming language",
       "install_id": "go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "go-1.26.4",
       "pname": "go",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:53:42.572868Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:33.707967Z",
       "stabilities": [
         "unstable"
       ],
@@ -933,13 +1124,13 @@
       "description": "Go Programming language",
       "install_id": "go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "go-1.26.4",
       "pname": "go",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:52:45.510133Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:21:48.283822Z",
       "stabilities": [
         "unstable"
       ],
@@ -962,13 +1153,13 @@
       "description": "Go Programming language",
       "install_id": "go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "go-1.26.4",
       "pname": "go",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:56:23.999056Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:54:57.791802Z",
       "stabilities": [
         "unstable"
       ],
@@ -991,13 +1182,13 @@
       "description": "Fast linters Runner for Go",
       "install_id": "golangci-lint",
       "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "golangci-lint-2.12.2",
       "pname": "golangci-lint",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:53:42.644916Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:33.775862Z",
       "stabilities": [
         "unstable"
       ],
@@ -1020,13 +1211,13 @@
       "description": "Fast linters Runner for Go",
       "install_id": "golangci-lint",
       "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "golangci-lint-2.12.2",
       "pname": "golangci-lint",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:52:45.614964Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:21:48.387847Z",
       "stabilities": [
         "unstable"
       ],
@@ -1049,13 +1240,13 @@
       "description": "Fast linters Runner for Go",
       "install_id": "golangci-lint",
       "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "golangci-lint-2.12.2",
       "pname": "golangci-lint",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:56:24.114552Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:54:57.900597Z",
       "stabilities": [
         "unstable"
       ],
@@ -1078,13 +1269,13 @@
       "description": "Database client and tools for the Go vulnerability database, also known as vuln",
       "install_id": "govulncheck",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "govulncheck-1.6.0",
       "pname": "govulncheck",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:53:42.689411Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:33.819564Z",
       "stabilities": [
         "unstable"
       ],
@@ -1107,13 +1298,13 @@
       "description": "Database client and tools for the Go vulnerability database, also known as vuln",
       "install_id": "govulncheck",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "govulncheck-1.6.0",
       "pname": "govulncheck",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:52:45.681747Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:21:48.454951Z",
       "stabilities": [
         "unstable"
       ],
@@ -1136,13 +1327,13 @@
       "description": "Database client and tools for the Go vulnerability database, also known as vuln",
       "install_id": "govulncheck",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "govulncheck-1.6.0",
       "pname": "govulncheck",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:56:24.187915Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:54:57.974007Z",
       "stabilities": [
         "unstable"
       ],
@@ -1159,25 +1350,122 @@
       "priority": 5
     },
     {
+      "attr_path": "llvm_21",
+      "broken": false,
+      "derivation": "/nix/store/k45j28s2p260hlni7ynpkgx76wcvr195-llvm-21.1.8.drv",
+      "description": "Collection of modular and reusable compiler and toolchain technologies",
+      "install_id": "llvm",
+      "license": "[ NCSA, [ Apache-2.0 LLVM-exception ] ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "llvm-21.1.8",
+      "pname": "llvm_21",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:53.006474Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "21.1.8",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "dev": "/nix/store/4794whg1dqb2bcjj2wf19kb3m5xv75fi-llvm-21.1.8-dev",
+        "lib": "/nix/store/nksw9rfazw7r4nj66jdlmrf7j4qy5rcd-llvm-21.1.8-lib",
+        "out": "/nix/store/pvmfyg2yyvx0p17aqh272h8735zv4i87-llvm-21.1.8",
+        "python": "/nix/store/dwyfimag6k6d0a0v4rnpziig9pvp9kmk-llvm-21.1.8-python"
+      },
+      "system": "aarch64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "llvm_21",
+      "broken": false,
+      "derivation": "/nix/store/zlr9kkqc9z0ys4bm05qj6zbbsvs759gh-llvm-21.1.8.drv",
+      "description": "Collection of modular and reusable compiler and toolchain technologies",
+      "install_id": "llvm",
+      "license": "[ NCSA, [ Apache-2.0 LLVM-exception ] ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "llvm-21.1.8",
+      "pname": "llvm_21",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:22:17.520827Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "21.1.8",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "dev": "/nix/store/2780gg9xwwrnbz1456gb08j24gdwyxgj-llvm-21.1.8-dev",
+        "lib": "/nix/store/n4vfkjnly9mp9vsl42wbj3prh3kn0zbg-llvm-21.1.8-lib",
+        "out": "/nix/store/6r65yjz3r9vy7hv81kzymcrax3waj7z8-llvm-21.1.8",
+        "python": "/nix/store/py1rxnl5q4ckdjhgng2rlj17pw55zg6j-llvm-21.1.8-python"
+      },
+      "system": "aarch64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "llvm_21",
+      "broken": false,
+      "derivation": "/nix/store/pfhrksiabi1x5rmlkvdsax2rrhk2bi9m-llvm-21.1.8.drv",
+      "description": "Collection of modular and reusable compiler and toolchain technologies",
+      "install_id": "llvm",
+      "license": "[ NCSA, [ Apache-2.0 LLVM-exception ] ]",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "llvm-21.1.8",
+      "pname": "llvm_21",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:55:28.879378Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "21.1.8",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "dev": "/nix/store/4768r0pa7fswbi0mdjalqc9pm56fh2vm-llvm-21.1.8-dev",
+        "lib": "/nix/store/kcmpd1h0097k50v3hjpvd1acyj46j3p5-llvm-21.1.8-lib",
+        "out": "/nix/store/l25n688gmqircnpypip13wy99ndycwbj-llvm-21.1.8",
+        "python": "/nix/store/54zsmkm9ad3ghnfikx25mkg4zm923qlc-llvm-21.1.8-python"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
       "attr_path": "nodejs_24",
       "broken": false,
       "derivation": "/nix/store/cr8w869qmg1yb021mnpzgrfsy6hj2lxk-nodejs-24.18.0.drv",
       "description": "Event-driven I/O framework for the V8 JavaScript engine",
       "install_id": "nodejs",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "nodejs-24.18.0",
       "pname": "nodejs_24",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:54:07.421238Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:52:57.881642Z",
       "stabilities": [
         "unstable"
       ],
       "unfree": false,
       "version": "24.18.0",
       "outputs_to_install": [
+        "out",
         "out"
       ],
       "outputs": {
@@ -1194,19 +1482,20 @@
       "description": "Event-driven I/O framework for the V8 JavaScript engine",
       "install_id": "nodejs",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "nodejs-24.18.0",
       "pname": "nodejs_24",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:53:21.515951Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:22:25.106841Z",
       "stabilities": [
         "unstable"
       ],
       "unfree": false,
       "version": "24.18.0",
       "outputs_to_install": [
+        "out",
         "out"
       ],
       "outputs": {
@@ -1223,19 +1512,20 @@
       "description": "Event-driven I/O framework for the V8 JavaScript engine",
       "install_id": "nodejs",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "nodejs-24.18.0",
       "pname": "nodejs_24",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:57:04.352613Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:55:37.216292Z",
       "stabilities": [
         "unstable"
       ],
       "unfree": false,
       "version": "24.18.0",
       "outputs_to_install": [
+        "out",
         "out"
       ],
       "outputs": {
@@ -1252,13 +1542,13 @@
       "description": "Google's data interchange format",
       "install_id": "protoc",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "protobuf-35.1",
       "pname": "protobuf",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:54:24.719803Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:53:14.087227Z",
       "stabilities": [
         "unstable"
       ],
@@ -1281,13 +1571,13 @@
       "description": "Google's data interchange format",
       "install_id": "protoc",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "protobuf-35.1",
       "pname": "protobuf",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:53:42.368388Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:22:46.953710Z",
       "stabilities": [
         "unstable"
       ],
@@ -1312,13 +1602,13 @@
       "description": "Google's data interchange format",
       "install_id": "protoc",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "protobuf-35.1",
       "pname": "protobuf",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:57:27.245243Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:55:59.463078Z",
       "stabilities": [
         "unstable"
       ],
@@ -1343,13 +1633,13 @@
       "description": "Go support for Google's protocol buffers",
       "install_id": "protoc-gen-go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "protoc-gen-go-1.36.11",
       "pname": "protoc-gen-go",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:54:24.757482Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:53:14.128143Z",
       "stabilities": [
         "unstable"
       ],
@@ -1372,13 +1662,13 @@
       "description": "Go support for Google's protocol buffers",
       "install_id": "protoc-gen-go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "protoc-gen-go-1.36.11",
       "pname": "protoc-gen-go",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:53:42.411981Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:22:47.000448Z",
       "stabilities": [
         "unstable"
       ],
@@ -1401,13 +1691,13 @@
       "description": "Go support for Google's protocol buffers",
       "install_id": "protoc-gen-go",
       "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "protoc-gen-go-1.36.11",
       "pname": "protoc-gen-go",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:57:27.292326Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:55:59.509459Z",
       "stabilities": [
         "unstable"
       ],
@@ -1430,13 +1720,13 @@
       "description": "Go language implementation of gRPC. HTTP/2 based RPC",
       "install_id": "protoc-gen-go-grpc",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "protoc-gen-go-grpc-1.6.2",
       "pname": "protoc-gen-go-grpc",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:54:24.759315Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:53:14.129957Z",
       "stabilities": [
         "unstable"
       ],
@@ -1459,13 +1749,13 @@
       "description": "Go language implementation of gRPC. HTTP/2 based RPC",
       "install_id": "protoc-gen-go-grpc",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "protoc-gen-go-grpc-1.6.2",
       "pname": "protoc-gen-go-grpc",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:53:42.414119Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:22:47.003261Z",
       "stabilities": [
         "unstable"
       ],
@@ -1488,13 +1778,13 @@
       "description": "Go language implementation of gRPC. HTTP/2 based RPC",
       "install_id": "protoc-gen-go-grpc",
       "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "protoc-gen-go-grpc-1.6.2",
       "pname": "protoc-gen-go-grpc",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:57:27.294858Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:55:59.511773Z",
       "stabilities": [
         "unstable"
       ],
@@ -1517,13 +1807,13 @@
       "description": "High-level dynamically-typed programming language",
       "install_id": "python3",
       "license": "Python-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "python3-3.14.6",
       "pname": "python314",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:54:50.461696Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:53:36.990561Z",
       "stabilities": [
         "unstable"
       ],
@@ -1546,13 +1836,13 @@
       "description": "High-level dynamically-typed programming language",
       "install_id": "python3",
       "license": "Python-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "python3-3.14.6",
       "pname": "python314",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:54:10.486276Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:23:16.176054Z",
       "stabilities": [
         "unstable"
       ],
@@ -1577,13 +1867,13 @@
       "description": "High-level dynamically-typed programming language",
       "install_id": "python3",
       "license": "Python-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "python3-3.14.6",
       "pname": "python314",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:57:57.745105Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:56:28.316598Z",
       "stabilities": [
         "unstable"
       ],
@@ -1608,13 +1898,13 @@
       "description": "Extremely fast Python linter and code formatter",
       "install_id": "ruff",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "ruff-0.15.20",
       "pname": "ruff",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:55:26.599571Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:54:12.086074Z",
       "stabilities": [
         "unstable"
       ],
@@ -1637,13 +1927,13 @@
       "description": "Extremely fast Python linter and code formatter",
       "install_id": "ruff",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "ruff-0.15.20",
       "pname": "ruff",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:54:53.753133Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:23:59.745728Z",
       "stabilities": [
         "unstable"
       ],
@@ -1666,13 +1956,13 @@
       "description": "Extremely fast Python linter and code formatter",
       "install_id": "ruff",
       "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "ruff-0.15.20",
       "pname": "ruff",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:58:44.279288Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:57:10.592688Z",
       "stabilities": [
         "unstable"
       ],
@@ -1695,13 +1985,13 @@
       "description": "Language server for the Rust language",
       "install_id": "rust-analyzer",
       "license": "[ MIT, Apache-2.0 ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "rust-analyzer-2026-06-15",
       "pname": "rust-analyzer",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:55:26.691308Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:54:12.175492Z",
       "stabilities": [
         "unstable"
       ],
@@ -1724,13 +2014,13 @@
       "description": "Language server for the Rust language",
       "install_id": "rust-analyzer",
       "license": "[ MIT, Apache-2.0 ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "rust-analyzer-2026-06-15",
       "pname": "rust-analyzer",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:54:53.880673Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:23:59.875634Z",
       "stabilities": [
         "unstable"
       ],
@@ -1753,13 +2043,13 @@
       "description": "Language server for the Rust language",
       "install_id": "rust-analyzer",
       "license": "[ MIT, Apache-2.0 ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "rust-analyzer-2026-06-15",
       "pname": "rust-analyzer",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T18:58:44.418490Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:57:10.720049Z",
       "stabilities": [
         "unstable"
       ],
@@ -1776,19 +2066,121 @@
       "priority": 5
     },
     {
+      "attr_path": "shellcheck",
+      "broken": false,
+      "derivation": "/nix/store/mjfp73rv615i5w28adxqy5cl4y2cqan4-shellcheck-0.11.0.drv",
+      "description": "Shell script analysis tool",
+      "install_id": "shellcheck",
+      "license": "GPL-3.0-only",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "shellcheck-0.11.0",
+      "pname": "shellcheck",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:54:27.448157Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "0.11.0",
+      "outputs_to_install": [
+        "bin",
+        "doc",
+        "man"
+      ],
+      "outputs": {
+        "bin": "/nix/store/6bnyxfxm379qzy729rccmdpj9ci4b0a4-shellcheck-0.11.0-bin",
+        "doc": "/nix/store/vk8c4kdn7nxk0kq27ys1pbqlf0cifh86-shellcheck-0.11.0-doc",
+        "man": "/nix/store/3iamy9j7p92vv7v8aqy2vr7c31hbd2sw-shellcheck-0.11.0-man",
+        "out": "/nix/store/nf5dcfq8q0cfivxw7qarg3pb3zv3h81q-shellcheck-0.11.0"
+      },
+      "system": "aarch64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "shellcheck",
+      "broken": false,
+      "derivation": "/nix/store/j7sgaw4rnpn2q889dd878zra99lb947x-shellcheck-0.11.0.drv",
+      "description": "Shell script analysis tool",
+      "install_id": "shellcheck",
+      "license": "GPL-3.0-only",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "shellcheck-0.11.0",
+      "pname": "shellcheck",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:24:18.806777Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "0.11.0",
+      "outputs_to_install": [
+        "bin",
+        "doc",
+        "man"
+      ],
+      "outputs": {
+        "bin": "/nix/store/633if18ssvxv786m23ay2k86p9llh6sf-shellcheck-0.11.0-bin",
+        "doc": "/nix/store/ak8rvfzsi2qw90ncp6vgbdr6m5flhji3-shellcheck-0.11.0-doc",
+        "man": "/nix/store/3aqgx1qxydl4cisjgl2lizx0ygniisfr-shellcheck-0.11.0-man",
+        "out": "/nix/store/h0wd2b38pm38jvin1z3hswv7j2dbq4w9-shellcheck-0.11.0"
+      },
+      "system": "aarch64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "shellcheck",
+      "broken": false,
+      "derivation": "/nix/store/k60yl5yh3wm8bid994cvg6j061lz83xq-shellcheck-0.11.0.drv",
+      "description": "Shell script analysis tool",
+      "install_id": "shellcheck",
+      "license": "GPL-3.0-only",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "name": "shellcheck-0.11.0",
+      "pname": "shellcheck",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:57:29.089945Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "0.11.0",
+      "outputs_to_install": [
+        "bin",
+        "doc",
+        "man"
+      ],
+      "outputs": {
+        "bin": "/nix/store/ixvpvkr2s92pbi6si1ki8yk3fs1gvlf2-shellcheck-0.11.0-bin",
+        "doc": "/nix/store/xd6y28b5cg1jyp9cjnnrwc0s0h55lz6r-shellcheck-0.11.0-doc",
+        "man": "/nix/store/8klljnbvqzp6j2f4f8njipxf4h2hyyra-shellcheck-0.11.0-man",
+        "out": "/nix/store/brkafranc7dph4p1brbnx8z70b0yl6l6-shellcheck-0.11.0"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
       "attr_path": "uv",
       "broken": false,
       "derivation": "/nix/store/c3a2nkn6r77mljbz2idjb11yvffak6rl-uv-0.11.26.drv",
       "description": "Extremely fast Python package installer and resolver, written in Rust",
       "install_id": "uv",
       "license": "[ Apache-2.0, MIT ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "uv-0.11.26",
       "pname": "uv",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T16:56:32.647084Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T04:55:15.048993Z",
       "stabilities": [
         "unstable"
       ],
@@ -1811,13 +2203,13 @@
       "description": "Extremely fast Python package installer and resolver, written in Rust",
       "install_id": "uv",
       "license": "[ Apache-2.0, MIT ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "uv-0.11.26",
       "pname": "uv",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T17:56:13.295419Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:25:26.514736Z",
       "stabilities": [
         "unstable"
       ],
@@ -1840,13 +2232,13 @@
       "description": "Extremely fast Python package installer and resolver, written in Rust",
       "install_id": "uv",
       "license": "[ Apache-2.0, MIT ]",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=18b9261cb3294b6d2a06d03f96872827b8fe2698",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
       "name": "uv-0.11.26",
       "pname": "uv",
-      "rev": "18b9261cb3294b6d2a06d03f96872827b8fe2698",
-      "rev_count": 1034379,
-      "rev_date": "2026-07-14T05:44:30Z",
-      "scrape_date": "2026-07-15T19:00:18.532070Z",
+      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
+      "rev_count": 1035164,
+      "rev_date": "2026-07-15T13:07:34Z",
+      "scrape_date": "2026-07-17T05:58:32.082724Z",
       "stabilities": [
         "unstable"
       ],

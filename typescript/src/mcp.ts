@@ -1,7 +1,7 @@
 import { fromJson, type JsonValue, toJsonString } from "@bufbuild/protobuf";
 
 import { asInvariantError } from "./errors.js";
-import { serverInternal, type ProjectionContextOptions, type Server } from "./server.js";
+import { type ProjectionContextOptions, type Server, serverInternal } from "./server.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-11-25";
 
@@ -68,10 +68,7 @@ export async function mcpDispatch(
   }
 
   if (method === "tools/call") {
-    if (
-      typeof params.name !== "string" ||
-      ("arguments" in params && !isJsonRpcObject(params.arguments))
-    ) {
+    if (typeof params.name !== "string" || ("arguments" in params && !isJsonRpcObject(params.arguments))) {
       return err(id, -32602, "Invalid params");
     }
     return mcpCallTool(server, id, params, contextOptions);
@@ -182,7 +179,10 @@ export async function serveMcpStdio(
       try {
         line = decoder.decode(bytes);
       } catch (error) {
-        writeMcpResponse(output, err(null, -32700, `Parse error: ${error instanceof Error ? error.message : String(error)}`));
+        writeMcpResponse(
+          output,
+          err(null, -32700, `Parse error: ${error instanceof Error ? error.message : String(error)}`),
+        );
         continue;
       }
       if (line.trim().length === 0) {
@@ -193,7 +193,10 @@ export async function serveMcpStdio(
       try {
         parsed = JSON.parse(line);
       } catch (error) {
-        writeMcpResponse(output, err(null, -32700, `Parse error: ${error instanceof Error ? error.message : String(error)}`));
+        writeMcpResponse(
+          output,
+          err(null, -32700, `Parse error: ${error instanceof Error ? error.message : String(error)}`),
+        );
         continue;
       }
       const invalid = invalidRequestResponse(parsed);
@@ -280,11 +283,7 @@ export function invalidRequestResponse(msg: unknown): Record<string, unknown> | 
   if (isClientResponse(msg)) {
     return undefined;
   }
-  if (
-    msg.jsonrpc !== "2.0" ||
-    typeof msg.method !== "string" ||
-    ("id" in msg && !validJsonRpcId(msg.id))
-  ) {
+  if (msg.jsonrpc !== "2.0" || typeof msg.method !== "string" || ("id" in msg && !validJsonRpcId(msg.id))) {
     return err(null, -32600, "Invalid Request");
   }
   return undefined;
@@ -324,10 +323,7 @@ function canonicalJsonRpcId(value: string | number | undefined): string | number
 async function* lines(input: McpStdioInput): AsyncIterable<Uint8Array> {
   let pending = Buffer.alloc(0);
   for await (const chunk of input) {
-    pending = Buffer.concat([
-      pending,
-      typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk),
-    ]);
+    pending = Buffer.concat([pending, typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk)]);
     for (;;) {
       const newline = pending.indexOf(0x0a);
       if (newline < 0) {

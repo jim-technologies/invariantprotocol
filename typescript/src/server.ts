@@ -1,18 +1,19 @@
 import {
   create,
-  equals,
-  fromJson,
   type DescEnum,
   type DescMessage,
   type DescMethod,
   type DescService,
+  equals,
+  fromJson,
   type JsonValue,
   type MessageShape,
   toJson,
 } from "@bufbuild/protobuf";
+import { DescriptorProtoSchema, EnumDescriptorProtoSchema, ServiceDescriptorProtoSchema } from "@bufbuild/protobuf/wkt";
 import {
-  createServiceImplSpec,
   type HandlerContext as ConnectHandlerContext,
+  createServiceImplSpec,
   type Interceptor,
   type ServiceImpl,
   type ServiceImplSpec,
@@ -21,29 +22,21 @@ import {
   type UnaryRequest,
   type UnaryResponse,
 } from "@connectrpc/connect";
-import {
-  DescriptorProtoSchema,
-  EnumDescriptorProtoSchema,
-  ServiceDescriptorProtoSchema,
-} from "@bufbuild/protobuf/wkt";
 import type * as grpc from "@grpc/grpc-js";
 
 import { createDeadlineHandlerContext } from "./deadline.js";
 import { ParsedDescriptor, type ServiceInfo } from "./descriptor.js";
 import { failedPrecondition, InvariantError, normalizeHandlerError, notFound } from "./errors.js";
-import {
-  createGrpcServer,
-  grpcProxyHandler,
-} from "./grpc.js";
+import { createGrpcServer, grpcProxyHandler } from "./grpc.js";
 import { httpHandler as buildHttpHandler, serveHttp as serveHttpProjection } from "./http.js";
 import {
+  type ConnectHttpOptions,
   clientBindingForMethod,
   HTTPConnection,
   httpProxyHandler,
   httpRulesByMethodPath,
-  type ConnectHttpOptions,
 } from "./http_client.js";
-import { SchemaGenerator, type JsonSchema } from "./schema.js";
+import { type JsonSchema, SchemaGenerator } from "./schema.js";
 
 export type HandlerContext = ConnectHandlerContext;
 export type ManagedHandlerContext = HandlerContext & { abort(reason?: unknown): void };
@@ -56,14 +49,8 @@ export type ProjectionContextOptions = {
   requestHeader?: HeadersInit;
 };
 export type HttpMetadataMapper = (requestHeaders: Readonly<Headers>) => HeadersInit;
-export type UnaryHandler = (
-  request: MessageShape<DescMessage>,
-  context: HandlerContext,
-) => Promise<unknown> | unknown;
-export type StreamHandler = (
-  request: MessageShape<DescMessage>,
-  context: HandlerContext,
-) => AsyncIterable<unknown>;
+export type UnaryHandler = (request: MessageShape<DescMessage>, context: HandlerContext) => Promise<unknown> | unknown;
+export type StreamHandler = (request: MessageShape<DescMessage>, context: HandlerContext) => AsyncIterable<unknown>;
 export type RemoteServiceSpec = {
   service: DescService;
   handlers: ReadonlyMap<string, UnaryHandler>;
@@ -99,7 +86,7 @@ export type ToolCatalogEntry = {
 };
 
 export const SERVER_NAME = "invariant-protocol";
-export const SERVER_VERSION = "0.8.0";
+export const SERVER_VERSION = "0.8.1";
 const DEFAULT_HTTP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_HTTP_METADATA_KEYS = ["traceparent", "tracestate", "baggage", "x-request-id"] as const;
 
@@ -155,19 +142,13 @@ export class Server {
     ) => this.invokeServerStreamMethod(method, handler, request, context),
     invokeClientStreamMethod: (
       method: DescMethod,
-      handler: (
-        requests: AsyncIterable<MessageShape<DescMessage>>,
-        context: HandlerContext,
-      ) => Promise<unknown>,
+      handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => Promise<unknown>,
       requests: AsyncIterable<MessageShape<DescMessage>>,
       context: HandlerContext,
     ) => this.invokeClientStreamMethod(method, handler, requests, context),
     invokeBidiStreamMethod: (
       method: DescMethod,
-      handler: (
-        requests: AsyncIterable<MessageShape<DescMessage>>,
-        context: HandlerContext,
-      ) => AsyncIterable<unknown>,
+      handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => AsyncIterable<unknown>,
       requests: AsyncIterable<MessageShape<DescMessage>>,
       context: HandlerContext,
     ) => this.invokeBidiStreamMethod(method, handler, requests, context),
@@ -296,11 +277,7 @@ export class Server {
     }
   }
 
-  connectGrpc<T extends DescService>(
-    service: T,
-    client: grpc.Client,
-    defaultCallOptions: grpc.CallOptions = {},
-  ): void {
+  connectGrpc<T extends DescService>(service: T, client: grpc.Client, defaultCallOptions: grpc.CallOptions = {}): void {
     this.assertMutable("gRPC proxy registration");
     const descriptorService = this.validateGeneratedService(service);
     if (this.services.has(service.typeName) || this.remoteServices.has(service.typeName)) {
@@ -536,7 +513,10 @@ export class Server {
     this.freezeConfiguration();
     const fullMethod = `/${method.parent.typeName}/${method.name}`;
     const ownedContext = context === undefined ? this.createContext(method, { protocolName: "in-process" }) : undefined;
-    const callContext = context ?? ownedContext!;
+    const callContext = ownedContext ?? context;
+    if (callContext === undefined) {
+      throw new InvariantError("internal", `could not create a handler context for ${fullMethod}`);
+    }
     try {
       const response = await this.interceptUnary(method, request, callContext, handler);
       return this.coerceMessage(method.output, response.message);
@@ -566,10 +546,7 @@ export class Server {
 
   private async invokeClientStreamMethod(
     method: DescMethod,
-    handler: (
-      requests: AsyncIterable<MessageShape<DescMessage>>,
-      context: HandlerContext,
-    ) => Promise<unknown>,
+    handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => Promise<unknown>,
     requests: AsyncIterable<MessageShape<DescMessage>>,
     context?: HandlerContext,
   ): Promise<MessageShape<DescMessage>> {
@@ -588,10 +565,7 @@ export class Server {
 
   private async *invokeBidiStreamMethod(
     method: DescMethod,
-    handler: (
-      requests: AsyncIterable<MessageShape<DescMessage>>,
-      context: HandlerContext,
-    ) => AsyncIterable<unknown>,
+    handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => AsyncIterable<unknown>,
     requests: AsyncIterable<MessageShape<DescMessage>>,
     context?: HandlerContext,
   ): AsyncIterable<MessageShape<DescMessage>> {
@@ -600,17 +574,17 @@ export class Server {
 
   private async *invokeStreamingMethod(
     method: DescMethod,
-    handler: (
-      requests: AsyncIterable<MessageShape<DescMessage>>,
-      context: HandlerContext,
-    ) => AsyncIterable<unknown>,
+    handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => AsyncIterable<unknown>,
     requests: AsyncIterable<MessageShape<DescMessage>>,
     context?: HandlerContext,
   ): AsyncIterable<MessageShape<DescMessage>> {
     this.freezeConfiguration();
     const fullMethod = `/${method.parent.typeName}/${method.name}`;
     const ownedContext = context === undefined ? this.createContext(method, { protocolName: "in-process" }) : undefined;
-    const callContext = context ?? ownedContext!;
+    const callContext = ownedContext ?? context;
+    if (callContext === undefined) {
+      throw new InvariantError("internal", `could not create a handler context for ${fullMethod}`);
+    }
     try {
       const response = await this.interceptStream(method, requests, callContext, handler);
       copyHeaders(response.header, callContext.responseHeader);
@@ -743,10 +717,7 @@ export class Server {
     method: DescMethod,
     messages: AsyncIterable<MessageShape<DescMessage>>,
     context: HandlerContext,
-    handler: (
-      requests: AsyncIterable<MessageShape<DescMessage>>,
-      context: HandlerContext,
-    ) => AsyncIterable<unknown>,
+    handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => AsyncIterable<unknown>,
   ): Promise<StreamResponse> {
     let next = async (request: StreamRequest): Promise<StreamResponse> => {
       const output = handler(request.message, handlerContextForRequest(context, request));
@@ -783,7 +754,9 @@ export class Server {
   private serviceByName(serviceName: string): Map<string, ServiceInfo> {
     const service = this.parsed.services.get(serviceName);
     if (!service) {
-      throw new Error(`Service '${serviceName}' not found in descriptor. Available: ${JSON.stringify([...this.parsed.services.keys()])}`);
+      throw new Error(
+        `Service '${serviceName}' not found in descriptor. Available: ${JSON.stringify([...this.parsed.services.keys()])}`,
+      );
     }
     return new Map([[serviceName, service]]);
   }
@@ -874,7 +847,12 @@ function globMatch(pattern: string, value: string): boolean {
 }
 
 function isMessageFor(desc: DescMessage, value: unknown): boolean {
-  return typeof value === "object" && value !== null && "$typeName" in value && (value as { $typeName?: string }).$typeName === desc.typeName;
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "$typeName" in value &&
+    (value as { $typeName?: string }).$typeName === desc.typeName
+  );
 }
 
 function reservedInboundMetadata(key: string): boolean {
@@ -957,10 +935,7 @@ function readOnlyMap<K, V>(source: Map<K, V>): ReadonlyMap<K, V> {
   });
 }
 
-function handlerContextForRequest(
-  context: HandlerContext,
-  request: UnaryRequest | StreamRequest,
-): HandlerContext {
+function handlerContextForRequest(context: HandlerContext, request: UnaryRequest | StreamRequest): HandlerContext {
   return Object.assign({}, context, {
     service: request.service,
     method: request.method,
@@ -996,6 +971,10 @@ function copyHeaders(source: Headers, target: Headers): void {
   if (source === target) {
     return;
   }
-  target.forEach((_value, key) => target.delete(key));
-  source.forEach((value, key) => target.set(key, value));
+  target.forEach((_value, key) => {
+    target.delete(key);
+  });
+  source.forEach((value, key) => {
+    target.set(key, value);
+  });
 }

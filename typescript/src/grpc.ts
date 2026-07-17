@@ -1,27 +1,27 @@
-import * as grpc from "@grpc/grpc-js";
-import { ReflectionService } from "@grpc/reflection";
 import {
   create,
-  fromBinary,
-  fromJson,
-  toBinary,
   type DescMessage,
   type DescMethod,
   type DescService,
+  fromBinary,
+  fromJson,
   type JsonValue,
   type MessageShape,
+  toBinary,
 } from "@bufbuild/protobuf";
-import { Code as ConnectCode, ConnectError, type ServiceImplSpec } from "@connectrpc/connect";
 import { anyPack, FileDescriptorProtoSchema } from "@bufbuild/protobuf/wkt";
+import { Code as ConnectCode, ConnectError, type ServiceImplSpec } from "@connectrpc/connect";
+import * as grpc from "@grpc/grpc-js";
 import type { PackageDefinition } from "@grpc/proto-loader";
+import { ReflectionService } from "@grpc/reflection";
 
-import { normalizeHandlerError, toConnectError } from "./errors.js";
+import { InvariantError, normalizeHandlerError, toConnectError } from "./errors.js";
 import { StatusSchema } from "./gen/google/rpc/status_pb.js";
 import {
-  serverInternal,
   type ManagedHandlerContext,
   type RemoteServiceSpec,
   type Server,
+  serverInternal,
   type UnaryHandler,
 } from "./server.js";
 
@@ -45,9 +45,7 @@ export function createGrpcServer(server: Server, options?: grpc.ServerOptions): 
     reflectedMethods.set(
       spec.service.typeName,
       new Set(
-        spec.service.methods
-          .filter((method) => spec.handlers.has(method.localName))
-          .map((method) => method.name),
+        spec.service.methods.filter((method) => spec.handlers.has(method.localName)).map((method) => method.name),
       ),
     );
   }
@@ -83,7 +81,12 @@ function grpcMethodDefinition(
 }
 
 function messageForBinary(desc: DescMessage, value: unknown): MessageShape<DescMessage> {
-  if (typeof value === "object" && value !== null && "$typeName" in value && (value as { $typeName?: string }).$typeName === desc.typeName) {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "$typeName" in value &&
+    (value as { $typeName?: string }).$typeName === desc.typeName
+  ) {
     return value as MessageShape<DescMessage>;
   }
   try {
@@ -100,7 +103,17 @@ export function grpcProxyHandler(
 ): UnaryHandler {
   return (request, context) =>
     new Promise((resolve, reject) => {
-      const fn = (client as unknown as Record<string, Function>)[methodName];
+      type UnaryClientMethod = (
+        request: MessageShape<DescMessage>,
+        metadata: grpc.Metadata,
+        options: grpc.CallOptions,
+        callback: (error: grpc.ServiceError | null, response: MessageShape<DescMessage>) => void,
+      ) => grpc.ClientUnaryCall;
+      const fn = (client as unknown as Record<string, UnaryClientMethod | undefined>)[methodName];
+      if (fn === undefined) {
+        reject(new InvariantError("internal", `gRPC client method ${methodName} is unavailable`));
+        return;
+      }
       const metadata = grpcMetadataFromHeaders(context.requestHeader);
       const timeoutMs = context.timeoutMs();
       const callOptions: grpc.CallOptions = { ...defaultCallOptions };
@@ -138,7 +151,11 @@ export function grpcProxyHandler(
           reject(connectErrorFromGrpc(callbackError));
           return;
         }
-        resolve(response!);
+        if (response === undefined) {
+          reject(new InvariantError("internal", `gRPC client method ${methodName} returned no response`));
+          return;
+        }
+        resolve(response);
       };
 
       const call = fn.call(
@@ -174,7 +191,9 @@ function grpcImplementation(server: Server, spec: ServiceImplSpec): grpc.Untyped
   for (const method of spec.service.methods) {
     const methodSpec = spec.methods[method.localName];
     if (method.methodKind === "server_streaming") {
-      out[method.localName] = (call: grpc.ServerWritableStream<MessageShape<DescMessage>, MessageShape<DescMessage>>) => {
+      out[method.localName] = (
+        call: grpc.ServerWritableStream<MessageShape<DescMessage>, MessageShape<DescMessage>>,
+      ) => {
         void (async () => {
           const scope = grpcHandlerContext(server, method, call);
           let headerSent = false;
@@ -221,11 +240,7 @@ function grpcImplementation(server: Server, spec: ServiceImplSpec): grpc.Untyped
               scope.context,
             );
             call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader, ConnectCode.Internal));
-            callback(
-              null,
-              response,
-              grpcMetadataFromHeaders(scope.context.responseTrailer, ConnectCode.Internal),
-            );
+            callback(null, response, grpcMetadataFromHeaders(scope.context.responseTrailer, ConnectCode.Internal));
           } catch (e) {
             call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader, null));
             callback(toGrpcError(e, scope.context.responseTrailer, methodPath(method)));
@@ -235,9 +250,7 @@ function grpcImplementation(server: Server, spec: ServiceImplSpec): grpc.Untyped
         })();
       };
     } else {
-      out[method.localName] = (
-        call: grpc.ServerDuplexStream<MessageShape<DescMessage>, MessageShape<DescMessage>>,
-      ) => {
+      out[method.localName] = (call: grpc.ServerDuplexStream<MessageShape<DescMessage>, MessageShape<DescMessage>>) => {
         void (async () => {
           const scope = grpcHandlerContext(server, method, call);
           let headerSent = false;
@@ -305,12 +318,7 @@ function grpcUnaryImplementation(
     void (async () => {
       const scope = grpcHandlerContext(server, method, call);
       try {
-        const response = await server[serverInternal].invokeUnaryMethod(
-          method,
-          handler,
-          call.request,
-          scope.context,
-        );
+        const response = await server[serverInternal].invokeUnaryMethod(method, handler, call.request, scope.context);
         call.sendMetadata(grpcMetadataFromHeaders(scope.context.responseHeader, ConnectCode.Internal));
         callback(null, response, grpcMetadataFromHeaders(scope.context.responseTrailer, ConnectCode.Internal));
       } catch (e) {
@@ -413,9 +421,7 @@ function grpcCancellationError(signal: AbortSignal): unknown {
 function toGrpcError(err: unknown, responseTrailer: Headers | undefined, fullMethod: string): grpc.ServiceError {
   let connect = toConnectError(normalizeHandlerError(err, fullMethod));
   const trailerHeaders =
-    responseTrailer instanceof GrpcMetadataHeaders
-      ? responseTrailer.clone()
-      : new GrpcMetadataHeaders(responseTrailer);
+    responseTrailer instanceof GrpcMetadataHeaders ? responseTrailer.clone() : new GrpcMetadataHeaders(responseTrailer);
   connect.metadata.forEach((value, key) => {
     if (!trailerHeaders.has(key)) {
       trailerHeaders.append(key, value);
@@ -479,7 +485,9 @@ class GrpcMetadataHeaders extends Headers {
   constructor(init?: HeadersInit) {
     super();
     if (init !== undefined) {
-      new Headers(init).forEach((value, key) => this.append(key, value));
+      new Headers(init).forEach((value, key) => {
+        this.append(key, value);
+      });
     }
   }
 
@@ -562,10 +570,7 @@ function grpcMetadataFromHeaders(
           const decoded = decodeGrpcBinaryMetadata(item);
           if (decoded === undefined) {
             if (invalidBinaryCode !== null) {
-              throw new ConnectError(
-                `binary gRPC metadata '${key}' is not valid base64`,
-                invalidBinaryCode,
-              );
+              throw new ConnectError(`binary gRPC metadata '${key}' is not valid base64`, invalidBinaryCode);
             }
             continue;
           }
@@ -622,10 +627,7 @@ function reflectionPackageDefinition(
 ): PackageDefinition {
   const out: Record<string, unknown> = {};
   for (const file of server.parsed.fds.file) {
-    const reflectedFile = fromBinary(
-      FileDescriptorProtoSchema,
-      toBinary(FileDescriptorProtoSchema, file),
-    );
+    const reflectedFile = fromBinary(FileDescriptorProtoSchema, toBinary(FileDescriptorProtoSchema, file));
     reflectedFile.service = reflectedFile.service.filter((service) => {
       const serviceName = file.package ? `${file.package}.${service.name}` : service.name;
       const methods = reflectedMethods.get(serviceName);

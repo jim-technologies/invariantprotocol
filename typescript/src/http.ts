@@ -1,21 +1,16 @@
-import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
+import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 
+import type { DescMessage, MessageShape } from "@bufbuild/protobuf";
 import {
   Code as ConnectCode,
   ConnectError,
+  createConnectRouter,
   createContextKey,
   createContextValues,
-  createConnectRouter,
   type HandlerContext,
 } from "@connectrpc/connect";
-import {
-  universalRequestFromNodeRequest,
-  universalResponseToNodeResponse,
-} from "@connectrpc/connect-node";
-import type {
-  UniversalServerRequest,
-  UniversalServerResponse,
-} from "@connectrpc/connect/protocol";
+import type { UniversalServerRequest, UniversalServerResponse } from "@connectrpc/connect/protocol";
+import { universalRequestFromNodeRequest, universalResponseToNodeResponse } from "@connectrpc/connect-node";
 
 import {
   MAX_NODE_TIMER_DELAY_MS,
@@ -24,30 +19,22 @@ import {
   scheduleAbsoluteDeadline,
 } from "./deadline.js";
 import { asInvariantError, httpStatusFor, InvariantError, notFound, toConnectError } from "./errors.js";
-import {
-  invalidRequestResponse,
-  isClientResponse,
-  MCP_PROTOCOL_VERSION,
-  mcpDispatch,
-} from "./mcp.js";
-import { serverInternal, type Server, type Tool } from "./server.js";
+import { invalidRequestResponse, isClientResponse, MCP_PROTOCOL_VERSION, mcpDispatch } from "./mcp.js";
+import { type Server, serverInternal, type Tool } from "./server.js";
 
 export const PROTO_CONTENT_TYPE = "application/proto";
 export const CONNECT_STREAM_JSON = "application/connect+json";
 export const CONNECT_STREAM_PROTO = "application/connect+proto";
 const CONNECT_END_STREAM_FLAG = 0x02;
 const CONNECT_CONTROL_MAX_BYTES = 1024 * 1024;
-const RESOURCE_EXHAUSTED_END_STREAM = Buffer.from(
-  '{"error":{"code":"resource_exhausted"}}',
-);
+const RESOURCE_EXHAUSTED_END_STREAM = Buffer.from('{"error":{"code":"resource_exhausted"}}');
 type LongConnectDeadline = {
   deadlineAt: number;
   timeoutHeader: string;
 };
-const longConnectDeadlineKey = createContextKey<LongConnectDeadline | undefined>(
-  undefined,
-  { description: "Invariant long Connect deadline" },
-);
+const longConnectDeadlineKey = createContextKey<LongConnectDeadline | undefined>(undefined, {
+  description: "Invariant long Connect deadline",
+});
 
 export function httpHandler(server: Server): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   server[serverInternal].freeze();
@@ -68,45 +55,49 @@ export function httpHandler(server: Server): (req: IncomingMessage, res: ServerR
     }
     rpcTools.set(`/${tool.serviceFullName}/${tool.methodName}`, tool);
     if (tool.serverStreaming) {
-      router.rpc(method as never, (async function* (request: any, context: any) {
-        try {
-          restoreLongConnectDeadline(context);
-          assertPositiveConnectTimeout(context.requestHeader);
-          const mappedContext = server[serverInternal].mapHTTPContext(context);
-          yield* invokeStreamBeforeDeadline(
-            mappedContext,
-            server.invokeStreamTool(tool, request, mappedContext),
-          );
-        } catch (e) {
-          throw toConnectError(e);
-        }
-      }) as never, {
-        connect: true,
-        grpc: false,
-        grpcWeb: false,
-        readMaxBytes: server.maxStreamRequestBytes(tool),
-        writeMaxBytes: server.maxStreamResponseBytes(tool),
-      } as never);
+      router.rpc(
+        method as never,
+        async function* (request: MessageShape<DescMessage>, context: HandlerContext) {
+          try {
+            restoreLongConnectDeadline(context);
+            assertPositiveConnectTimeout(context.requestHeader);
+            const mappedContext = server[serverInternal].mapHTTPContext(context);
+            yield* invokeStreamBeforeDeadline(mappedContext, server.invokeStreamTool(tool, request, mappedContext));
+          } catch (e) {
+            throw toConnectError(e);
+          }
+        } as never,
+        {
+          connect: true,
+          grpc: false,
+          grpcWeb: false,
+          readMaxBytes: server.maxStreamRequestBytes(tool),
+          writeMaxBytes: server.maxStreamResponseBytes(tool),
+        } as never,
+      );
     } else {
-      router.rpc(method as never, (async (request: any, context: any) => {
-        try {
-          restoreLongConnectDeadline(context);
-          assertPositiveConnectTimeout(context.requestHeader);
-          const mappedContext = server[serverInternal].mapHTTPContext(context);
-          return await invokeUnaryBeforeDeadline(
-            mappedContext,
-            () => server.invokeTool(tool, request, mappedContext),
-          );
-        } catch (e) {
-          throw toConnectError(e);
-        }
-      }) as never, {
-        connect: true,
-        grpc: false,
-        grpcWeb: false,
-        readMaxBytes: server.maxUnaryRequestBytes(tool),
-        writeMaxBytes: server.maxUnaryResponseBytes(tool),
-      } as never);
+      router.rpc(
+        method as never,
+        (async (request: MessageShape<DescMessage>, context: HandlerContext) => {
+          try {
+            restoreLongConnectDeadline(context);
+            assertPositiveConnectTimeout(context.requestHeader);
+            const mappedContext = server[serverInternal].mapHTTPContext(context);
+            return await invokeUnaryBeforeDeadline(mappedContext, () =>
+              server.invokeTool(tool, request, mappedContext),
+            );
+          } catch (e) {
+            throw toConnectError(e);
+          }
+        }) as never,
+        {
+          connect: true,
+          grpc: false,
+          grpcWeb: false,
+          readMaxBytes: server.maxUnaryRequestBytes(tool),
+          writeMaxBytes: server.maxUnaryResponseBytes(tool),
+        } as never,
+      );
     }
   }
   const rpcHandlers = new Map(router.handlers.map((handler) => [handler.requestPath, handler]));
@@ -117,22 +108,14 @@ export function httpHandler(server: Server): (req: IncomingMessage, res: ServerR
       sendError(res, notFound("Not found"), server.maxUnaryResponseBytes());
       return;
     }
-    const deadlineScope = longConnectDeadlineScope(
-      universalRequestFromNodeRequest(req, res, undefined, undefined),
-    );
+    const deadlineScope = longConnectDeadlineScope(universalRequestFromNodeRequest(req, res, undefined, undefined));
     try {
       let universalResponse = await handler(deadlineScope.request);
       const tool = rpcTools.get(path);
       if (tool && !tool.serverStreaming) {
-        universalResponse = await boundUnaryResponse(
-          universalResponse,
-          server.maxUnaryResponseBytes(tool),
-        );
+        universalResponse = await boundUnaryResponse(universalResponse, server.maxUnaryResponseBytes(tool));
       } else if (tool?.serverStreaming) {
-        universalResponse = boundStreamingResponse(
-          universalResponse,
-          server.maxStreamResponseBytes(tool),
-        );
+        universalResponse = boundStreamingResponse(universalResponse, server.maxStreamResponseBytes(tool));
       }
       await universalResponseToNodeResponse(universalResponse, res);
     } catch (error) {
@@ -209,9 +192,14 @@ export function serveHttp(server: Server, port: number, host = "127.0.0.1"): Pro
 async function serveMcpHttp(server: Server, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const maxResponseBytes = server.maxUnaryResponseBytes();
   if (!acceptsMcpResponse(req.headers.accept)) {
-    sendJsonWithLimit(res, 406, {
-      error: "Accept must list both application/json and text/event-stream.",
-    }, maxResponseBytes);
+    sendJsonWithLimit(
+      res,
+      406,
+      {
+        error: "Accept must list both application/json and text/event-stream.",
+      },
+      maxResponseBytes,
+    );
     return;
   }
   if (!matchesContentType(req.headers["content-type"], "application/json")) {
@@ -244,11 +232,16 @@ async function serveMcpHttp(server: Server, req: IncomingMessage, res: ServerRes
       msg = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
     } catch (e) {
       assertAbsoluteDeadline(deadlineAt, cancellation.signal, expireDeadline);
-      sendJsonWithLimit(res, 200, {
-        jsonrpc: "2.0",
-        id: null,
-        error: { code: -32700, message: `Parse error: ${String(e)}` },
-      }, maxResponseBytes);
+      sendJsonWithLimit(
+        res,
+        200,
+        {
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32700, message: `Parse error: ${String(e)}` },
+        },
+        maxResponseBytes,
+      );
       return;
     }
     const invalid = invalidRequestResponse(msg);
@@ -264,9 +257,14 @@ async function serveMcpHttp(server: Server, req: IncomingMessage, res: ServerRes
     const unsupportedProtocol = protocolVersion !== undefined && protocolVersion !== MCP_PROTOCOL_VERSION;
     if ((!isInitialize && protocolVersion !== MCP_PROTOCOL_VERSION) || unsupportedProtocol) {
       assertAbsoluteDeadline(deadlineAt, cancellation.signal, expireDeadline);
-      sendJsonWithLimit(res, 400, {
-        error: `MCP-Protocol-Version must be ${MCP_PROTOCOL_VERSION}.`,
-      }, maxResponseBytes);
+      sendJsonWithLimit(
+        res,
+        400,
+        {
+          error: `MCP-Protocol-Version must be ${MCP_PROTOCOL_VERSION}.`,
+        },
+        maxResponseBytes,
+      );
       return;
     }
     res.setHeader("mcp-protocol-version", MCP_PROTOCOL_VERSION);
@@ -278,18 +276,18 @@ async function serveMcpHttp(server: Server, req: IncomingMessage, res: ServerRes
       return;
     }
 
-    const remainingTimeoutMs =
-      deadlineAt === undefined ? undefined : Math.max(0, remainingDeadlineMs(deadlineAt));
+    const remainingTimeoutMs = deadlineAt === undefined ? undefined : Math.max(0, remainingDeadlineMs(deadlineAt));
     const response = await withAbsoluteDeadline(
-      () => mcpDispatch(server, message, {
-        protocolName: "mcp",
-        requestMethod: req.method ?? "POST",
-        url: new URL(req.url ?? "/mcp", "http://localhost").toString(),
-        timeoutMs: remainingTimeoutMs,
-        requestSignal: cancellation.signal,
-        requestHeader: requestHeaders(req),
-        mapHTTPMetadata: true,
-      }),
+      () =>
+        mcpDispatch(server, message, {
+          protocolName: "mcp",
+          requestMethod: req.method ?? "POST",
+          url: new URL(req.url ?? "/mcp", "http://localhost").toString(),
+          timeoutMs: remainingTimeoutMs,
+          requestSignal: cancellation.signal,
+          requestHeader: requestHeaders(req),
+          mapHTTPMetadata: true,
+        }),
       cancellation.signal,
       deadlineAt,
       expireDeadline,
@@ -323,15 +321,12 @@ function methodDesc(tool: Tool) {
   return tool.methodDesc;
 }
 
-function longConnectDeadlineScope(
-  request: UniversalServerRequest,
-): { request: UniversalServerRequest; cleanup: () => void } {
+function longConnectDeadlineScope(request: UniversalServerRequest): {
+  request: UniversalServerRequest;
+  cleanup: () => void;
+} {
   const timeoutHeader = request.header.get("connect-timeout-ms");
-  if (
-    timeoutHeader === null ||
-    !/^\d{1,10}$/.test(timeoutHeader) ||
-    timeoutHeader === "0"
-  ) {
+  if (timeoutHeader === null || !/^\d{1,10}$/.test(timeoutHeader) || timeoutHeader === "0") {
     return { request, cleanup: () => undefined };
   }
   const timeoutMs = Number(timeoutHeader);
@@ -410,10 +405,7 @@ async function boundUnaryResponse(
   };
 }
 
-function boundStreamingResponse(
-  response: UniversalServerResponse,
-  maxResponseBytes: number,
-): UniversalServerResponse {
+function boundStreamingResponse(response: UniversalServerResponse, maxResponseBytes: number): UniversalServerResponse {
   if (!response.body) {
     return response;
   }
@@ -438,7 +430,7 @@ async function* boundConnectStreamBody(
       }
       const frame = pending.subarray(0, frameLength);
       pending = pending.subarray(frameLength);
-      if ((frame[0]! & CONNECT_END_STREAM_FLAG) !== 0) {
+      if (((frame[0] ?? 0) & CONNECT_END_STREAM_FLAG) !== 0) {
         if (payloadLength > CONNECT_CONTROL_MAX_BYTES) {
           yield resourceExhaustedEndStreamFrame();
         } else {
@@ -493,20 +485,14 @@ function assertHandlerDeadline(context: HandlerContext): void {
   }
 }
 
-async function invokeUnaryBeforeDeadline<T>(
-  context: HandlerContext,
-  operation: () => Promise<T>,
-): Promise<T> {
+async function invokeUnaryBeforeDeadline<T>(context: HandlerContext, operation: () => Promise<T>): Promise<T> {
   assertHandlerDeadline(context);
   const result = await withAbort(operation(), context.signal);
   assertHandlerDeadline(context);
   return result;
 }
 
-async function* invokeStreamBeforeDeadline<T>(
-  context: HandlerContext,
-  stream: AsyncIterable<T>,
-): AsyncIterable<T> {
+async function* invokeStreamBeforeDeadline<T>(context: HandlerContext, stream: AsyncIterable<T>): AsyncIterable<T> {
   const iterator = stream[Symbol.asyncIterator]();
   try {
     for (;;) {
@@ -558,11 +544,7 @@ async function withAbsoluteDeadline<T>(
   return result;
 }
 
-function assertAbsoluteDeadline(
-  deadlineAt: number | undefined,
-  signal: AbortSignal,
-  expireDeadline: () => void,
-): void {
+function assertAbsoluteDeadline(deadlineAt: number | undefined, signal: AbortSignal, expireDeadline: () => void): void {
   if (deadlineAt !== undefined && remainingDeadlineMs(deadlineAt) <= 0) {
     expireDeadline();
     throw signal.reason;
@@ -587,12 +569,7 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   sendBytes(res, status, "application/json", Buffer.from(JSON.stringify(payload)));
 }
 
-function sendJsonWithLimit(
-  res: ServerResponse,
-  status: number,
-  payload: unknown,
-  maxResponseBytes: number,
-): void {
+function sendJsonWithLimit(res: ServerResponse, status: number, payload: unknown, maxResponseBytes: number): void {
   const body = Buffer.from(JSON.stringify(payload));
   if (maxResponseBytes > 0 && body.length > maxResponseBytes) {
     sendError(

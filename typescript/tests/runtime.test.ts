@@ -1,44 +1,32 @@
-import { createServer, request as httpRequest } from "node:http";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { createServer, request as httpRequest } from "node:http";
 import { dirname, resolve } from "node:path";
-
-import * as grpc from "@grpc/grpc-js";
-import {
-  ServerDuplexStreamImpl,
-  ServerWritableStreamImpl,
-} from "@grpc/grpc-js/build/src/server-call.js";
-import * as protoLoader from "@grpc/proto-loader";
+import { fileURLToPath } from "node:url";
 import { create, createFileRegistry, fromBinary, toBinary } from "@bufbuild/protobuf";
 import {
   DescriptorProtoSchema,
-  FieldDescriptorProtoSchema,
   FieldDescriptorProto_Label,
   FieldDescriptorProto_Type,
+  FieldDescriptorProtoSchema,
   FileDescriptorProtoSchema,
   FileDescriptorSetSchema,
   MethodDescriptorProtoSchema,
   ServiceDescriptorProtoSchema,
 } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
+import * as grpc from "@grpc/grpc-js";
+import { ServerDuplexStreamImpl, ServerWritableStreamImpl } from "@grpc/grpc-js/build/src/server-call.js";
+import * as protoLoader from "@grpc/proto-loader";
 import { afterEach, describe, expect, test } from "vitest";
-
-import {
-  CONNECT_STREAM_JSON,
-  ParsedDescriptor,
-  SchemaGenerator,
-  Server,
-  httpHandler,
-  runCli,
-} from "../src/index.js";
-import { grpcServiceDefinitionForService } from "../src/grpc.js";
-import { mcpDispatch } from "../src/mcp.js";
 import { codeFromGrpcStatus, codeFromHttpStatus, grpcStatusFor, InvariantError } from "../src/errors.js";
+import { grpcServiceDefinitionForService } from "../src/grpc.js";
+import { CONNECT_STREAM_JSON, httpHandler, ParsedDescriptor, runCli, SchemaGenerator, Server } from "../src/index.js";
+import { mcpDispatch } from "../src/mcp.js";
 import {
-  GreetResponseSchema,
-  GreetService,
   type GreetGroupRequest,
   type GreetRequest,
+  GreetResponseSchema,
+  GreetService,
   type StreamGreetRequest,
 } from "./gen/greet_pb.js";
 
@@ -98,7 +86,9 @@ describe("descriptor parsing", () => {
 
 describe("schema generation", () => {
   test("matches the existing JSON Schema shape", () => {
-    const schema = new SchemaGenerator(ParsedDescriptor.fromFile(descriptorPath)).messageToSchema("greet.v1.GreetRequest");
+    const schema = new SchemaGenerator(ParsedDescriptor.fromFile(descriptorPath)).messageToSchema(
+      "greet.v1.GreetRequest",
+    );
     const props = schema.properties as Record<string, any>;
 
     expect(schema.type).toBe("object");
@@ -129,9 +119,7 @@ describe("server dispatch", () => {
 
   test("uses Connect's HTTP status fallback mapping", () => {
     expect(
-      [400, 401, 403, 404, 429, 502, 503, 504, 418, 409, 499, 500, 501].map((status) =>
-        codeFromHttpStatus(status),
-      ),
+      [400, 401, 403, 404, 429, 502, 503, 504, 418, 409, 499, 500, 501].map((status) => codeFromHttpStatus(status)),
     ).toEqual([
       "internal",
       "unauthenticated",
@@ -234,15 +222,16 @@ describe("server dispatch", () => {
     const fds = fromBinary(FileDescriptorSetSchema, readFileSync(descriptorPath));
     const greetFile = fds.file.find((file) => file.name === "greet.proto");
     const request = greetFile?.messageType.find((message) => message.name === "GreetRequest");
-    if (!request?.field[0]) {
+    const firstField = request?.field[0];
+    if (firstField === undefined) {
       throw new Error("missing greet request descriptor");
     }
-    request.field[0].name = "drifted_name";
+    firstField.name = "drifted_name";
     const registry = createFileRegistry(fds);
     const driftedService = [...registry].find(
       (desc) => desc.kind === "service" && desc.typeName === GreetService.typeName,
     );
-    if (!driftedService || driftedService.kind !== "service") {
+    if (driftedService?.kind !== "service") {
       throw new Error("missing drifted service");
     }
 
@@ -254,7 +243,9 @@ describe("server dispatch", () => {
     const server = registeredServer();
     await server.invoke("GreetService.Greet", { name: "Ada" });
 
-    expect(() => server.register(GreetService, new GreetServicer())).toThrow(/cannot be changed after execution begins/);
+    expect(() => server.register(GreetService, new GreetServicer())).toThrow(
+      /cannot be changed after execution begins/,
+    );
     expect(() => server.use((next) => next)).toThrow(/cannot be changed after execution begins/);
     expect(() => server.include("*")).toThrow(/cannot be changed after execution begins/);
     expect(() => server.setMaxUnaryRequestBytes(1024)).toThrow(/cannot be changed after execution begins/);
@@ -263,16 +254,14 @@ describe("server dispatch", () => {
     );
 
     const grpcBuilt = registeredServer();
-    const grpcServer = grpcBuilt.grpcServer();
+    grpcBuilt.grpcServer();
     expect(() => grpcBuilt.exclude("*")).toThrow(/cannot be changed after execution begins/);
     expect(() => grpcBuilt.grpcServer()).toThrow(/already been created/);
     grpcBuilt.forceStop();
 
     const httpBuilt = registeredServer();
     httpHandler(httpBuilt);
-    expect(() => httpBuilt.use((next) => next)).toThrow(
-      /cannot be changed after execution begins/,
-    );
+    expect(() => httpBuilt.use((next) => next)).toThrow(/cannot be changed after execution begins/);
   });
 
   test("requires projection filters before service registration", () => {
@@ -287,9 +276,9 @@ describe("server dispatch", () => {
     expect(() => server.setMaxUnaryResponseBytes(-1)).toThrow(/positive integer/);
     expect(() => server.setMaxStreamRequestBytes(Number.NaN)).toThrow(/positive integer/);
     expect(() => server.setMaxStreamResponseBytes(1.5)).toThrow(/positive integer/);
-    expect(() =>
-      server.configureMethod("/greet.v1.GreetService/Greet", { maxUnaryResponseBytes: 0 }),
-    ).toThrow(/positive integer/);
+    expect(() => server.configureMethod("/greet.v1.GreetService/Greet", { maxUnaryResponseBytes: 0 })).toThrow(
+      /positive integer/,
+    );
   });
 
   test("serves native client-streaming and bidi methods through the shared Connect interceptor", async () => {
@@ -568,12 +557,9 @@ describe("server dispatch", () => {
       ServerWritableStreamImpl.prototype as unknown as WritablePrototype,
       () => undefined,
     );
-    const restoreDuplex = patchFirstWrite(
-      ServerDuplexStreamImpl.prototype as unknown as WritablePrototype,
-      (call) => {
-        blockedDuplexCall = call;
-      },
-    );
+    const restoreDuplex = patchFirstWrite(ServerDuplexStreamImpl.prototype as unknown as WritablePrototype, (call) => {
+      blockedDuplexCall = call;
+    });
 
     try {
       const fanout = (client as any).fanout({
@@ -651,7 +637,10 @@ describe("projections", () => {
       method: "tools/call",
       params: { name: "GreetService.Greet", arguments: { name: "Ada" } },
     });
-    expect((mcp?.result as any).content[0].text).toContain("Hi Ada");
+    if (mcp === undefined) {
+      throw new Error("MCP tool call returned no response");
+    }
+    expect((mcp.result as any).content[0].text).toContain("Hi Ada");
   });
 
   test("serves Connect-style HTTP JSON and descriptor endpoints", async () => {
@@ -689,6 +678,22 @@ describe("projections", () => {
       body: Buffer.alloc(5),
     });
     expect(grpcWeb.status).not.toBe(200);
+  });
+
+  test("returns a listening caller-owned HTTP server from the public host wrapper", async () => {
+    const invariant = registeredServer();
+    const nodeServer = await invariant.serveHttp(0, "127.0.0.1");
+    servers.push(nodeServer);
+
+    expect(nodeServer.listening).toBe(true);
+    const address = nodeServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing test server address");
+    }
+    const health = await fetch(`http://127.0.0.1:${address.port}/healthz`);
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ status: "ok" });
+    expect(() => invariant.setMaxUnaryRequestBytes(1024)).toThrow(/cannot be changed after execution begins/);
   });
 
   test("serves Connect streaming envelopes over HTTP", async () => {
@@ -790,12 +795,9 @@ describe("projections", () => {
       server.setMaxUnaryResponseBytes(maxResponseBytes);
       server.register(GreetService, {
         greet() {
-          throw new ConnectError(
-            "invalid",
-            Code.InvalidArgument,
-            undefined,
-            [{ desc: GreetResponseSchema, value: { message: "x".repeat(4096) } }],
-          );
+          throw new ConnectError("invalid", Code.InvalidArgument, undefined, [
+            { desc: GreetResponseSchema, value: { message: "x".repeat(4096) } },
+          ]);
         },
       });
       return server;
@@ -828,10 +830,7 @@ describe("projections", () => {
     const requestLimited = registeredServer();
     requestLimited.setMaxStreamRequestBytes(32);
     const requestBase = await startHttp(requestLimited, servers);
-    const oversizedRequest = connectEnvelope(
-      0,
-      Buffer.from(JSON.stringify({ name: "x".repeat(64), count: 1 })),
-    );
+    const oversizedRequest = connectEnvelope(0, Buffer.from(JSON.stringify({ name: "x".repeat(64), count: 1 })));
     const requestResponse = await fetch(`${requestBase}/greet.v1.GreetService/StreamGreet`, {
       method: "POST",
       headers: { "content-type": CONNECT_STREAM_JSON },
@@ -872,15 +871,13 @@ describe("projections", () => {
     richError.setMaxStreamResponseBytes(64);
     richError.register(GreetService, {
       streamGreet: () =>
+        // biome-ignore lint/correctness/useYield: This stream intentionally fails before its first message.
         (async function* () {
           throw new ConnectError("x".repeat(4096), Code.InvalidArgument);
         })(),
     });
     const richBase = await startHttp(richError, servers);
-    const requestBody = connectEnvelope(
-      0,
-      Buffer.from(JSON.stringify({ name: "Ada", count: 1 })),
-    );
+    const requestBody = connectEnvelope(0, Buffer.from(JSON.stringify({ name: "Ada", count: 1 })));
     const response = await fetch(`${richBase}/greet.v1.GreetService/StreamGreet`, {
       method: "POST",
       headers: { "content-type": CONNECT_STREAM_JSON },
@@ -914,6 +911,7 @@ describe("projections", () => {
     hugeError.setMaxStreamResponseBytes(1);
     hugeError.register(GreetService, {
       streamGreet: () =>
+        // biome-ignore lint/correctness/useYield: This stream intentionally fails before its first message.
         (async function* () {
           throw new ConnectError("x".repeat(2 * 1024 * 1024), Code.InvalidArgument);
         })(),
@@ -1014,9 +1012,7 @@ describe("projections", () => {
       code: "deadline_exceeded",
     });
 
-    const streamBody = Buffer.from(
-      connectEnvelope(0, Buffer.from(JSON.stringify({ name: "delayed", count: 1 }))),
-    );
+    const streamBody = Buffer.from(connectEnvelope(0, Buffer.from(JSON.stringify({ name: "delayed", count: 1 }))));
     const delayedStream = await delayedPost(
       `${base}/greet.v1.GreetService/StreamGreet`,
       {
@@ -1189,7 +1185,10 @@ describe("projections", () => {
     const started = await startGrpc(server);
     grpcServers.push(started.server);
 
-    const protoPath = resolve(here, "../../node_modules/@grpc/reflection/build/proto/grpc/reflection/v1/reflection.proto");
+    const protoPath = resolve(
+      here,
+      "../../node_modules/@grpc/reflection/build/proto/grpc/reflection/v1/reflection.proto",
+    );
     const pkgDef = protoLoader.loadSync(protoPath, { oneofs: true });
     const pkg = grpc.loadPackageDefinition(pkgDef) as any;
     const client = new pkg.grpc.reflection.v1.ServerReflection(started.address, grpc.credentials.createInsecure());
@@ -1229,7 +1228,10 @@ describe("projections", () => {
     const started = await startGrpc(server);
     grpcServers.push(started.server);
 
-    const protoPath = resolve(here, "../../node_modules/@grpc/reflection/build/proto/grpc/reflection/v1/reflection.proto");
+    const protoPath = resolve(
+      here,
+      "../../node_modules/@grpc/reflection/build/proto/grpc/reflection/v1/reflection.proto",
+    );
     const pkgDef = protoLoader.loadSync(protoPath, { oneofs: true });
     const pkg = grpc.loadPackageDefinition(pkgDef) as any;
     const client = new pkg.grpc.reflection.v1.ServerReflection(started.address, grpc.credentials.createInsecure());
@@ -1278,7 +1280,10 @@ describe("projections", () => {
     const native = await unaryCall(proxyClient, "greet", { name: "Grace" });
     expect(proxy.toJson(proxy.tools.get("GreetService.Greet")!, native)).toEqual({ message: "Hi Grace" });
 
-    const protoPath = resolve(here, "../../node_modules/@grpc/reflection/build/proto/grpc/reflection/v1/reflection.proto");
+    const protoPath = resolve(
+      here,
+      "../../node_modules/@grpc/reflection/build/proto/grpc/reflection/v1/reflection.proto",
+    );
     const pkgDef = protoLoader.loadSync(protoPath, { oneofs: true });
     const pkg = grpc.loadPackageDefinition(pkgDef) as any;
     const reflection = new pkg.grpc.reflection.v1.ServerReflection(
@@ -1299,10 +1304,7 @@ describe("projections", () => {
     const reflectedGreet = files
       .flatMap((file: { service: { name: string; method: { name: string }[] }[] }) => file.service)
       .find((service: { name: string }) => service.name === "GreetService");
-    expect(reflectedGreet?.method.map((method: { name: string }) => method.name)).toEqual([
-      "Greet",
-      "GreetGroup",
-    ]);
+    expect(reflectedGreet?.method.map((method: { name: string }) => method.name)).toEqual(["Greet", "GreetGroup"]);
     const hiddenStream = await reflectionCall(stream, {
       fileContainingSymbol: `${GreetService.typeName}.StreamGreet`,
     });
@@ -1321,7 +1323,9 @@ describe("projections", () => {
       if (req.method === "GET" && url.pathname === "/v1/greet/Ada") {
         expect(req.headers["x-test-auth"]).toBe("yes");
         res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ message: `REST ${url.pathname.split("/").at(-1)}`, mood: url.searchParams.get("mood") }));
+        res.end(
+          JSON.stringify({ message: `REST ${url.pathname.split("/").at(-1)}`, mood: url.searchParams.get("mood") }),
+        );
         return;
       }
       if (req.method === "GET" && url.pathname === "/v1/greet/Bad") {
@@ -1389,10 +1393,7 @@ async function startGrpc(server: Server): Promise<{ server: grpc.Server; address
   return { server: grpcServer, address: `127.0.0.1:${port}` };
 }
 
-async function startHttp(
-  server: Server,
-  servers: Array<ReturnType<typeof createServer>>,
-): Promise<string> {
+async function startHttp(server: Server, servers: Array<ReturnType<typeof createServer>>): Promise<string> {
   const nodeServer = createServer((req, res) => {
     void httpHandler(server)(req, res);
   });
@@ -1412,22 +1413,26 @@ async function delayedPost(
   delayMs: number,
 ): Promise<{ status: number; body: Buffer }> {
   return new Promise((resolveResponse, rejectResponse) => {
-    const request = httpRequest(url, {
-      method: "POST",
-      headers: {
-        ...headers,
-        "content-length": String(body.length),
+    const request = httpRequest(
+      url,
+      {
+        method: "POST",
+        headers: {
+          ...headers,
+          "content-length": String(body.length),
+        },
       },
-    }, (response) => {
-      const chunks: Buffer[] = [];
-      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-      response.on("end", () => {
-        resolveResponse({
-          status: response.statusCode ?? 0,
-          body: Buffer.concat(chunks),
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => {
+          resolveResponse({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks),
+          });
         });
-      });
-    });
+      },
+    );
     request.on("error", rejectResponse);
     const split = Math.max(1, Math.floor(body.length / 2));
     request.write(body.subarray(0, split));

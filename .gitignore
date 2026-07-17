@@ -12,6 +12,9 @@ coverage/
 # Caches
 .pytest_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Claude Code
 .claude/

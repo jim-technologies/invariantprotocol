@@ -4,7 +4,7 @@ import { extname } from "node:path";
 import { fromBinary, fromJsonString, toJsonString } from "@bufbuild/protobuf";
 
 import { invalidArgument } from "./errors.js";
-import { serverInternal, type Server, type Tool } from "./server.js";
+import { type Server, serverInternal, type Tool } from "./server.js";
 
 export async function runCli(server: Server, args: string[]): Promise<string> {
   server[serverInternal].freeze();
@@ -109,7 +109,9 @@ function resolveTool(server: Server, serviceName: string, methodName: string): T
       return tool;
     }
   }
-  throw new Error(`Unknown service/method: ${serviceName} ${methodName}. Available: ${JSON.stringify([...server.tools.keys()])}`);
+  throw new Error(
+    `Unknown service/method: ${serviceName} ${methodName}. Available: ${JSON.stringify([...server.tools.keys()])}`,
+  );
 }
 
 function loadRequest(tool: Tool, value: string | undefined, server: Server) {

@@ -1,6 +1,6 @@
 {
   "name": "@jim-technologies/invariant-protocol",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "Project gRPC services into MCP, CLI, HTTP/Connect, and gRPC interfaces from proto descriptors",
   "type": "module",
@@ -20,8 +20,12 @@
   ],
   "scripts": {
     "build": "tsc -p typescript/tsconfig.json",
-    "lint": "tsc -p typescript/tsconfig.json --noEmit && tsc -p typescript/tsconfig.test.json",
+    "format": "biome format --write typescript",
+    "format:check": "biome format typescript",
+    "lint": "biome lint typescript",
     "test": "vitest run --root typescript",
+    "test:coverage": "vitest run --root typescript --coverage",
+    "typecheck": "tsc -p typescript/tsconfig.json --noEmit && tsc -p typescript/tsconfig.test.json",
     "prepare": "npm run build"
   },
   "keywords": [
@@ -47,10 +51,12 @@
     "@grpc/reflection": "^1.0.4"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.4",
     "@bufbuild/protoc-gen-es": "^2.12.1",
     "@grpc/proto-loader": "^0.8.1",
     "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "4.1.10",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "4.1.10"
   }
 }

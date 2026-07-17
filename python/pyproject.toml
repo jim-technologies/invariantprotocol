@@ -1,6 +1,6 @@
 [project]
 name = "invariant-protocol"
-version = "0.8.0"
+version = "0.8.1"
 description = "Project protobuf/gRPC services into MCP, CLI, HTTP, and logical data schemas"
 requires-python = ">=3.14"
 classifiers = ["Private :: Do Not Upload"]
@@ -26,6 +26,7 @@ dev = [
     "pyarrow>=25.0.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
     "ty>=0.0.59",
     "pip-audit>=2.10.1",
 ]
@@ -97,3 +98,14 @@ unresolved-attribute = "ignore"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["invariant"]
+omit = ["src/invariant/gen/*"]
+
+[tool.coverage.report]
+fail_under = 80
+precision = 1
+show_missing = true
+skip_covered = true

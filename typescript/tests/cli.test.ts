@@ -7,12 +7,12 @@ import { create, toBinary } from "@bufbuild/protobuf";
 import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { Server, runCli } from "../src/index.js";
+import { runCli, Server } from "../src/index.js";
 import {
-  GreetRequestSchema,
-  GreetService,
   type GreetGroupRequest,
   type GreetRequest,
+  GreetRequestSchema,
+  GreetService,
   type StreamGreetRequest,
 } from "./gen/greet_pb.js";
 
@@ -70,10 +70,12 @@ afterEach(() => {
 
 describe("CLI projection", () => {
   test("loads JSON, .binpb, and .pb request files with canonical decoding", async () => {
-    const jsonOutput = await runCli(
-      registeredServer(),
-      ["GreetService", "Greet", "-r", requestFile(".json", '{"name":"JsonFile"}')],
-    );
+    const jsonOutput = await runCli(registeredServer(), [
+      "GreetService",
+      "Greet",
+      "-r",
+      requestFile(".json", '{"name":"JsonFile"}'),
+    ]);
     expect(JSON.parse(jsonOutput)).toMatchObject({ message: "Hi JsonFile" });
 
     const encoded = Buffer.concat([
@@ -82,10 +84,7 @@ describe("CLI projection", () => {
     ]);
 
     for (const extension of [".binpb", ".pb"]) {
-      const output = await runCli(
-        registeredServer(),
-        ["GreetService", "Greet", "-r", requestFile(extension, encoded)],
-      );
+      const output = await runCli(registeredServer(), ["GreetService", "Greet", "-r", requestFile(extension, encoded)]);
       expect(JSON.parse(output)).toMatchObject({ message: "Hi BinaryFile" });
     }
   });
@@ -118,19 +117,11 @@ describe("CLI projection", () => {
       message: "Hi Unary",
     });
 
-    const stream = await runCli(
-      server,
-      ["GreetService", "StreamGreet", "-r", '{"name":"Stream","count":2}'],
-    );
-    expect(stream.split("\n").map((line) => JSON.parse(line).message)).toEqual([
-      "Hi Stream #0",
-      "Hi Stream #1",
-    ]);
+    const stream = await runCli(server, ["GreetService", "StreamGreet", "-r", '{"name":"Stream","count":2}']);
+    expect(stream.split("\n").map((line) => JSON.parse(line).message)).toEqual(["Hi Stream #0", "Hi Stream #1"]);
     expect(streamInterceptors).toEqual(["invariant-cli:///greet.v1.GreetService/StreamGreet"]);
 
-    await expect(
-      runCli(server, ["GreetService", "Greet", "-r", '{"name":"status"}']),
-    ).rejects.toMatchObject({
+    await expect(runCli(server, ["GreetService", "Greet", "-r", '{"name":"status"}'])).rejects.toMatchObject({
       code: Code.FailedPrecondition,
       rawMessage: "cli status",
     });

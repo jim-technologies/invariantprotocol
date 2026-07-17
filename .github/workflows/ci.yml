@@ -27,7 +27,7 @@ jobs:
           command: make quality
 
   test:
-    name: Test (${{ matrix.language }})
+    name: Test and coverage (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -35,13 +35,13 @@ jobs:
       matrix:
         include:
           - language: Go
-            command: make test-go
+            command: make coverage-go
           - language: Python
-            command: make test-python
+            command: make coverage-python
           - language: Rust
-            command: make test-rust
+            command: make coverage-rust
           - language: TypeScript
-            command: make test-typescript
+            command: make coverage-typescript
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
@@ -74,7 +74,7 @@ jobs:
           command: make verify-generate
 
   integration:
-    name: Integration (Git installs)
+    name: Integration (Git installs, PostgreSQL, Atlas)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

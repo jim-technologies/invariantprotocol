@@ -1,29 +1,16 @@
-import { createServer, request as httpRequest, type Server as HTTPServer } from "node:http";
-import { fileURLToPath } from "node:url";
+import { createServer, type Server as HTTPServer, request as httpRequest } from "node:http";
 import { dirname, resolve } from "node:path";
-
-import * as grpc from "@grpc/grpc-js";
-import { Code, ConnectError, createHandlerContext, type HandlerContext } from "@connectrpc/connect";
+import { fileURLToPath } from "node:url";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { Code, ConnectError, createHandlerContext, type HandlerContext } from "@connectrpc/connect";
+import * as grpc from "@grpc/grpc-js";
 import { afterEach, describe, expect, test } from "vitest";
-
-import {
-  Server,
-  InvariantError,
-  httpHandler,
-  runCli,
-  serveMcpStdio,
-  validation,
-} from "../src/index.js";
-import { grpcServiceDefinitionForService } from "../src/grpc.js";
-import { mcpDispatch } from "../src/mcp.js";
 import { BadRequestSchema } from "../src/gen/google/rpc/error_details_pb.js";
 import { StatusSchema } from "../src/gen/google/rpc/status_pb.js";
-import {
-  GreetResponseSchema,
-  GreetService,
-  type GreetRequest,
-} from "./gen/greet_pb.js";
+import { grpcServiceDefinitionForService } from "../src/grpc.js";
+import { httpHandler, InvariantError, runCli, Server, serveMcpStdio, validation } from "../src/index.js";
+import { mcpDispatch } from "../src/mcp.js";
+import { type GreetRequest, GreetResponseSchema, GreetService } from "./gen/greet_pb.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const descriptorPath = resolve(here, "../../python/tests/proto/descriptor.binpb");
@@ -192,13 +179,9 @@ describe("cross-projection HandlerContext semantics", () => {
     expect(callResult.trailer.get("x-comma-trailer")).toEqual(["left,right"]);
     expect(callResult.trailer.get("x-repeat-trailer")).toEqual(["third, fourth"]);
     expect(callResult.trailer.get("x-repeat-trailer-bin")).toEqual([Buffer.from([5]), Buffer.from([6])]);
-    const invalidMetadataError = await unaryError(
-      client,
-      "greet",
-      { name: "invalid-metadata" },
-      metadata,
-      { deadline: new Date(Date.now() + 10_000) },
-    );
+    const invalidMetadataError = await unaryError(client, "greet", { name: "invalid-metadata" }, metadata, {
+      deadline: new Date(Date.now() + 10_000),
+    });
     expect(invalidMetadataError.code).toBe(grpc.status.INTERNAL);
 
     const canceledCall = (client as any).greet(
@@ -572,32 +555,38 @@ describe("cross-projection HandlerContext semantics", () => {
       },
     });
     const base = await startHTTP(server, httpServers);
-    const payload = Buffer.from(JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: { name: "GreetService.Greet", arguments: { name: "Ada" } },
-    }));
+    const payload = Buffer.from(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "GreetService.Greet", arguments: { name: "Ada" } },
+      }),
+    );
     const response = await new Promise<{ status: number; body: string }>((resolveResponse, rejectResponse) => {
-      const request = httpRequest(`${base}/mcp`, {
-        method: "POST",
-        headers: {
-          accept: "application/json, text/event-stream",
-          "content-type": "application/json",
-          "content-length": String(payload.length),
-          "connect-timeout-ms": "1000",
-          "mcp-protocol-version": "2025-11-25",
+      const request = httpRequest(
+        `${base}/mcp`,
+        {
+          method: "POST",
+          headers: {
+            accept: "application/json, text/event-stream",
+            "content-type": "application/json",
+            "content-length": String(payload.length),
+            "connect-timeout-ms": "1000",
+            "mcp-protocol-version": "2025-11-25",
+          },
         },
-      }, (incoming) => {
-        const chunks: Buffer[] = [];
-        incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        incoming.on("end", () => {
-          resolveResponse({
-            status: incoming.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString("utf8"),
+        (incoming) => {
+          const chunks: Buffer[] = [];
+          incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+          incoming.on("end", () => {
+            resolveResponse({
+              status: incoming.statusCode ?? 0,
+              body: Buffer.concat(chunks).toString("utf8"),
+            });
           });
-        });
-      });
+        },
+      );
       request.on("error", rejectResponse);
       const split = Math.floor(payload.length / 2);
       request.write(payload.subarray(0, split));
@@ -610,25 +599,29 @@ describe("cross-projection HandlerContext semantics", () => {
     expect(observedTimeoutMs).toBeLessThan(900);
 
     const expired = await new Promise<{ status: number; body: string }>((resolveResponse, rejectResponse) => {
-      const request = httpRequest(`${base}/mcp`, {
-        method: "POST",
-        headers: {
-          accept: "application/json, text/event-stream",
-          "content-type": "application/json",
-          "content-length": String(payload.length),
-          "connect-timeout-ms": "10",
-          "mcp-protocol-version": "2025-11-25",
+      const request = httpRequest(
+        `${base}/mcp`,
+        {
+          method: "POST",
+          headers: {
+            accept: "application/json, text/event-stream",
+            "content-type": "application/json",
+            "content-length": String(payload.length),
+            "connect-timeout-ms": "10",
+            "mcp-protocol-version": "2025-11-25",
+          },
         },
-      }, (incoming) => {
-        const chunks: Buffer[] = [];
-        incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        incoming.on("end", () => {
-          resolveResponse({
-            status: incoming.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString("utf8"),
+        (incoming) => {
+          const chunks: Buffer[] = [];
+          incoming.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+          incoming.on("end", () => {
+            resolveResponse({
+              status: incoming.statusCode ?? 0,
+              body: Buffer.concat(chunks).toString("utf8"),
+            });
           });
-        });
-      });
+        },
+      );
       request.on("error", rejectResponse);
       const split = Math.floor(payload.length / 2);
       request.write(payload.subarray(0, split));
@@ -662,12 +655,9 @@ describe("cross-projection HandlerContext semantics", () => {
         context.responseTrailer.append("x-upstream-repeat-trailer-bin", Buffer.from([5]).toString("base64"));
         context.responseTrailer.append("x-upstream-repeat-trailer-bin", Buffer.from([6]).toString("base64"));
         if (request.name === "status") {
-          throw new ConnectError(
-            "upstream status",
-            Code.FailedPrecondition,
-            { "x-error-meta": "once" },
-            [{ desc: GreetResponseSchema, value: { message: "proxy detail" } }],
-          );
+          throw new ConnectError("upstream status", Code.FailedPrecondition, { "x-error-meta": "once" }, [
+            { desc: GreetResponseSchema, value: { message: "proxy detail" } },
+          ]);
         }
         return { message: `Hi ${request.name}` };
       },
@@ -726,13 +716,9 @@ describe("cross-projection HandlerContext semantics", () => {
     metadata.add("x-repeat-bin", Buffer.from([1]));
     metadata.add("x-repeat-bin", Buffer.from([2]));
     metadata.add("x-comma", "left,right");
-    const nativeResponse = await unaryWithMetadata(
-      proxyClient,
-      "greet",
-      { name: "native" },
-      metadata,
-      { deadline: new Date(Date.now() + 10_000) },
-    );
+    const nativeResponse = await unaryWithMetadata(proxyClient, "greet", { name: "native" }, metadata, {
+      deadline: new Date(Date.now() + 10_000),
+    });
     expect(nativeResponse.response.message).toBe("Hi native");
     expect(nativeResponse.header.get("x-upstream-header")).toEqual(["present"]);
     expect(nativeResponse.header.get("x-upstream-comma")).toEqual(["left,right"]);
@@ -740,23 +726,13 @@ describe("cross-projection HandlerContext semantics", () => {
     expect(nativeResponse.header.get("x-upstream-repeat-bin")).toEqual([Buffer.from([3]), Buffer.from([4])]);
     expect(nativeResponse.trailer.get("x-upstream-trailer")).toEqual(["present"]);
     expect(nativeResponse.trailer.get("x-upstream-repeat-trailer")).toEqual(["third, fourth"]);
-    expect(nativeResponse.trailer.get("x-upstream-repeat-trailer-bin")).toEqual([
-      Buffer.from([5]),
-      Buffer.from([6]),
-    ]);
-    const nativeError = await unaryError(
-      proxyClient,
-      "greet",
-      { name: "status" },
-      metadata,
-      { deadline: new Date(Date.now() + 10_000) },
-    );
+    expect(nativeResponse.trailer.get("x-upstream-repeat-trailer-bin")).toEqual([Buffer.from([5]), Buffer.from([6])]);
+    const nativeError = await unaryError(proxyClient, "greet", { name: "status" }, metadata, {
+      deadline: new Date(Date.now() + 10_000),
+    });
     expect(nativeError.code).toBe(grpc.status.FAILED_PRECONDITION);
     expect(nativeError.metadata.get("x-error-meta")).toEqual(["once"]);
-    const nativeRich = fromBinary(
-      StatusSchema,
-      nativeError.metadata.get("grpc-status-details-bin")[0] as Buffer,
-    );
+    const nativeRich = fromBinary(StatusSchema, nativeError.metadata.get("grpc-status-details-bin")[0] as Buffer);
     expect(fromBinary(GreetResponseSchema, nativeRich.details[0]!.value).message).toBe("proxy detail");
 
     context.abort();
@@ -786,11 +762,13 @@ describe("cross-projection HandlerContext semantics", () => {
         response.statusCode = 400;
         response.setHeader("content-type", "application/json");
         response.setHeader("x-error-meta", "present");
-        response.end(JSON.stringify({
-          code: "failed_precondition",
-          message: "remote status",
-          details: [{ type: GreetResponseSchema.typeName, value: detail }],
-        }));
+        response.end(
+          JSON.stringify({
+            code: "failed_precondition",
+            message: "remote status",
+            details: [{ type: GreetResponseSchema.typeName, value: detail }],
+          }),
+        );
         return;
       }
       response.statusCode = 404;
@@ -857,29 +835,18 @@ describe("cross-projection HandlerContext semantics", () => {
     nativeMetadata.set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01");
     nativeMetadata.set("authorization", "Bearer caller");
     nativeMetadata.set("x-tenant-id", "tenant-a");
-    const nativeResponse = await unaryWithMetadata(
-      nativeClient,
-      "greet",
-      { name: "Ada" },
-      nativeMetadata,
-      { deadline: new Date(Date.now() + 10_000) },
-    );
+    const nativeResponse = await unaryWithMetadata(nativeClient, "greet", { name: "Ada" }, nativeMetadata, {
+      deadline: new Date(Date.now() + 10_000),
+    });
     expect(nativeResponse.response.message).toBe("Hi Ada");
     expect(nativeResponse.header.get("x-upstream-header")).toEqual(["present"]);
     expect(nativeResponse.header.get("set-cookie")).toEqual([]);
-    const nativeError = await unaryError(
-      nativeClient,
-      "greet",
-      { name: "status" },
-      nativeMetadata,
-      { deadline: new Date(Date.now() + 10_000) },
-    );
+    const nativeError = await unaryError(nativeClient, "greet", { name: "status" }, nativeMetadata, {
+      deadline: new Date(Date.now() + 10_000),
+    });
     expect(nativeError.code).toBe(grpc.status.FAILED_PRECONDITION);
     expect(nativeError.metadata.get("x-error-meta")).toEqual(["present"]);
-    const nativeRich = fromBinary(
-      StatusSchema,
-      nativeError.metadata.get("grpc-status-details-bin")[0] as Buffer,
-    );
+    const nativeRich = fromBinary(StatusSchema, nativeError.metadata.get("grpc-status-details-bin")[0] as Buffer);
     expect(fromBinary(GreetResponseSchema, nativeRich.details[0]!.value).message).toBe("remote detail");
     nativeClient.close();
 
@@ -900,7 +867,7 @@ describe("cross-projection HandlerContext semantics", () => {
     });
     expect(projectedError.status).toBe(400);
     expect(projectedError.headers.get("x-error-meta")).toBe("present");
-    const payload = await projectedError.json() as {
+    const payload = (await projectedError.json()) as {
       code: string;
       details: Array<{ type: string; value: string }>;
     };
@@ -1047,20 +1014,17 @@ describe("cross-projection HandlerContext semantics", () => {
           throw new Error("broken");
         }
         context.responseHeader.set("x-before-error", "present");
-        throw new ConnectError(
-          "not ready",
-          Code.FailedPrecondition,
-          { "x-error-meta": "present" },
-          [{ desc: GreetResponseSchema, value: { message: "detail" } }],
-        );
+        throw new ConnectError("not ready", Code.FailedPrecondition, { "x-error-meta": "present" }, [
+          { desc: GreetResponseSchema, value: { message: "detail" } },
+        ]);
       },
     });
-    const mcpError = await mcpDispatch(server, {
+    const mcpError = (await mcpDispatch(server, {
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
       params: { name: "GreetService.Greet", arguments: { name: "status" } },
-    }) as {
+    })) as {
       result: {
         error: {
           details: Array<{ type: string; value: string }>;
@@ -1069,10 +1033,7 @@ describe("cross-projection HandlerContext semantics", () => {
     };
     expect(mcpError.result.error.details[0]?.type).toBe(GreetResponseSchema.typeName);
     expect(
-      fromBinary(
-        GreetResponseSchema,
-        Buffer.from(mcpError.result.error.details[0]!.value, "base64"),
-      ).message,
+      fromBinary(GreetResponseSchema, Buffer.from(mcpError.result.error.details[0]!.value, "base64")).message,
     ).toBe("detail");
 
     const base = await startHTTP(server, httpServers);
@@ -1082,7 +1043,7 @@ describe("cross-projection HandlerContext semantics", () => {
       body: JSON.stringify({ name: "status" }),
     });
     expect(httpError.status).toBe(400);
-    const httpPayload = await httpError.json() as {
+    const httpPayload = (await httpError.json()) as {
       code: string;
       message: string;
       details: Array<{ type: string; value: string }>;
@@ -1109,12 +1070,9 @@ describe("cross-projection HandlerContext semantics", () => {
     const native = Server.fromDescriptor(descriptorPath);
     native.register(GreetService, {
       greet() {
-        throw new ConnectError(
-          "not ready",
-          Code.FailedPrecondition,
-          { "x-error-meta": "present" },
-          [{ desc: GreetResponseSchema, value: { message: "detail" } }],
-        );
+        throw new ConnectError("not ready", Code.FailedPrecondition, { "x-error-meta": "present" }, [
+          { desc: GreetResponseSchema, value: { message: "detail" } },
+        ]);
       },
     });
     const started = await startGrpc(native);
@@ -1164,11 +1122,13 @@ describe("MCP stdio", () => {
     expect(negativeZero?.id).toBe(0);
     expect(Object.is(negativeZero?.id, -0)).toBe(false);
     for (const id of [Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER]) {
-      await expect(mcpDispatch(server, {
-        jsonrpc: "2.0",
-        id,
-        method: "ping",
-      })).resolves.toMatchObject({ id, result: {} });
+      await expect(
+        mcpDispatch(server, {
+          jsonrpc: "2.0",
+          id,
+          method: "ping",
+        }),
+      ).resolves.toMatchObject({ id, result: {} });
     }
     for (const message of [
       { jsonrpc: "2.0", id: 7, result: {} },
@@ -1216,12 +1176,14 @@ describe("MCP stdio", () => {
         clientInfo: { name: "test", version: 1 },
       },
     ].entries()) {
-      await expect(mcpDispatch(server, {
-        jsonrpc: "2.0",
-        id: index + 20,
-        method: "initialize",
-        ...(params === undefined ? {} : { params }),
-      })).resolves.toMatchObject({
+      await expect(
+        mcpDispatch(server, {
+          jsonrpc: "2.0",
+          id: index + 20,
+          method: "initialize",
+          ...(params === undefined ? {} : { params }),
+        }),
+      ).resolves.toMatchObject({
         id: index + 20,
         error: { code: -32602 },
       });

@@ -412,8 +412,11 @@ and other writers must validate at their own boundary. The options do not
 encode keys, indexes, partitions, placement, or migration policy.
 
 The PostgreSQL renderer emits desired-state DDL directly for Atlas; HCL is not
-another source format. Invariant does not infer keys, indexes, partitions,
-catalog operations, file layout, or migrations.
+another source format. Atlas consumes the generated `file://` SQL desired state
+using a PostgreSQL development database. CI applies that SQL to disposable
+PostgreSQL 18.4, inspects the result, and requires a zero diff. Invariant does
+not infer keys, indexes, partitions, catalog operations, file layout, or
+migrations, and it does not apply production database changes.
 
 Python's optional data adapter converts a bundle dataset and matching generated
 messages into a real `pyarrow.Table`:
@@ -438,12 +441,12 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.8.0`; new releases do not create language-prefixed tags.
+tag `v0.8.1`; new releases do not create language-prefixed tags.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.8.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.8.1
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -453,26 +456,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.1#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.0#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.1#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.1" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.0" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.1" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.8.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.8.1"
 ```
 
 For reproducible production builds, replace the tag with a full commit
@@ -488,9 +491,9 @@ dependency, or a `protoc -I` path) so
 ```bash
 flox activate
 make generate
-make check
+make check        # quality checks and coverage-gated suites for all four languages
 make security
-make integration
+make integration  # Git-install and PostgreSQL/Atlas boundaries; requires Docker
 make parity-release
 make bench
 ```
@@ -502,8 +505,9 @@ Build tools and language-specific ecosystem bridges are classified separately
 instead of being duplicated for artificial symmetry. See
 [feature parity](docs/feature-parity.md) and [runtime stack policy](docs/runtime-stacks.md).
 
-CI runs quality checks, the four test suites, dependency and secret audits,
-generated-code checks, clean Git-install integration, and protobuf breaking
+CI runs quality checks, four coverage-gated suites, dependency and secret
+audits, generated-code checks, clean Git installs, and PostgreSQL/Atlas
+apply-inspect-diff integration. Pull requests also run protobuf breaking
 checks. Dependency upgrades are intentional and review-driven; the repository
 does not require a scheduled dependency job.
 

@@ -1,11 +1,6 @@
 import { fromBinary, toBinary } from "@bufbuild/protobuf";
 
-import {
-  DatasetSchemaSchema,
-  SchemaBundleSchema,
-  type DatasetSchema,
-  type SchemaBundle,
-} from "./gen/invariant/data/v1/schema_pb.js";
+import { type DatasetSchema, type SchemaBundle, SchemaBundleSchema } from "./gen/invariant/data/v1/schema_pb.js";
 
 export * from "./gen/invariant/data/v1/schema_pb.js";
 
