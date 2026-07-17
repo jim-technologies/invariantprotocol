@@ -95,7 +95,7 @@ export type ToolCatalogEntry = {
 };
 
 export const SERVER_NAME = "invariant-protocol";
-export const SERVER_VERSION = "0.8.2";
+export const SERVER_VERSION = "0.8.3";
 const DEFAULT_HTTP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_HTTP_METADATA_KEYS = ["traceparent", "tracestate", "baggage", "x-request-id"] as const;
 

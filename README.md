@@ -447,12 +447,12 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.8.2`; new releases do not create language-prefixed tags.
+tag `v0.8.3`; new releases do not create language-prefixed tags.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.8.2
+go get github.com/jim-technologies/invariantprotocol/go@v0.8.3
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -462,26 +462,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.2#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.3#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.2#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.3#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.2" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.3" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.2" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.3" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.8.2"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.8.3"
 ```
 
 For reproducible production builds, replace the tag with a full commit

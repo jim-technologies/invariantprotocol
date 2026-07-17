@@ -538,13 +538,16 @@ function outboundRequestScope(
 ): { signal: AbortSignal; cleanup: () => void } {
   const controller = new AbortController();
   const callerTimeoutMs = context.timeoutMs();
-  const timeoutMs = Math.max(
-    0,
-    callerTimeoutMs === undefined ? configuredTimeoutMs : Math.min(configuredTimeoutMs, callerTimeoutMs),
+  const transportTimeoutMs =
+    callerTimeoutMs === undefined || configuredTimeoutMs < callerTimeoutMs
+      ? Math.max(0, configuredTimeoutMs)
+      : undefined;
+  const cleanupDeadline = scheduleAbsoluteDeadline(
+    transportTimeoutMs === undefined ? undefined : monotonicDeadlineAfter(transportTimeoutMs),
+    () => {
+      controller.abort(new InvariantError("deadline_exceeded", `HTTP request exceeded ${transportTimeoutMs}ms`));
+    },
   );
-  const cleanupDeadline = scheduleAbsoluteDeadline(monotonicDeadlineAfter(timeoutMs), () => {
-    controller.abort(new InvariantError("deadline_exceeded", `HTTP request exceeded ${timeoutMs}ms`));
-  });
   const cancel = () => controller.abort(contextAbortError(context));
   if (context.signal.aborted) {
     cancel();

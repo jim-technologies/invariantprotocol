@@ -10,7 +10,7 @@ but never silent behaviour regressions.
 
 ## Unreleased
 
-## v0.8.2 — 2026-07-17
+## v0.8.3 — 2026-07-17
 
 ### Added
 
@@ -38,6 +38,10 @@ but never silent behaviour regressions.
   graph and resolved field semantics; unary and every streaming poll honor
   pre-cancellation and absolute deadlines. Recursive request schemas terminate
   safely in both TypeScript and Python.
+- **TypeScript HTTP proxy deadlines have one deterministic owner.** A caller
+  deadline now remains authoritative when it is earlier than or equal to the
+  configured transport timeout, avoiding duplicate timers with different error
+  representations while preserving independently configured transport limits.
 - **Rust projection shutdown and recovery are deterministic.** Multi-projection
   cancellation gracefully drains HTTP, aborts and joins MCP calls, synchronous
   middleware panics become `internal`, fast MCP calls remain tracked, colliding
