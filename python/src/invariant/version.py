@@ -9,4 +9,4 @@ def package_version() -> str:
     try:
         return version("invariant-protocol")
     except PackageNotFoundError:
-        return "0.9.0"
+        return "0.10.0"

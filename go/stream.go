@@ -190,5 +190,5 @@ func (s *Server) invokeGRPCStream(tool *Tool, stream grpc.ServerStream) (err err
 			err = status.FromContextError(contextErr).Err()
 		}
 	}
-	return err
+	return normalizeContextError(err)
 }

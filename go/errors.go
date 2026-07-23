@@ -36,6 +36,19 @@ func statusFromError(err error) *status.Status {
 	return status.New(codes.Unknown, err.Error())
 }
 
+func normalizeContextError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err).Err()
+	}
+	return err
+}
+
 func errorMessage(err error) string {
 	return statusFromError(err).Message()
 }

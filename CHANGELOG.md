@@ -10,6 +10,44 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.10.0 — 2026-07-22
+
+### Added
+
+- **One bundle now renders one complete PostgreSQL desired state.** The schema
+  CLI emits every dataset in deterministic order when `sql --bundle` omits
+  `--message`; single-dataset Arrow, Parquet, and Iceberg output retains an
+  explicit selection requirement for multi-dataset bundles.
+- **Schema evolution now retains compiler-owned name provenance.** SchemaBundle
+  IR v3 carries exact active and retired storage-name sources, requires
+  protobuf name/number reservations at rename and removal boundaries, and
+  permanently prevents a different identity from reusing a retired column
+  name in the same logical scope.
+- **The zero-network composition path is explicit.** Documentation distinguishes
+  direct typed application calls from optional programmatic dispatch through
+  Invariant's shared validation and interceptor pipeline.
+
+### Changed
+
+- **Dataset selection follows descriptors rather than namespace guesses.**
+  Annotation discovery includes imported annotated messages, and explicit roots
+  may select any real non-map message, including well-known or dependency
+  messages when that is intentional.
+- **Atlas integration verifies the live database contract.** The disposable
+  PostgreSQL check now covers the complete multi-table desired state, types,
+  defaults, nullability, comments, and exact constraint expressions before
+  requiring a zero Atlas diff.
+
+### Fixed
+
+- **In-process RPC semantics preserve canonical gRPC behavior.** Go normalizes
+  raw cancellation/deadline errors without overwriting explicit rich statuses.
+  Python rejects spoofed or wrong protobuf identities and restores same-name
+  cross-pool requests and responses to the registered concrete classes for
+  unary and server-streaming calls.
+- **PostgreSQL integration cleanup is leak-free and collision-safe.** The test
+  owns containers by returned ID and removes their anonymous volumes.
+
 ## v0.9.0 — 2026-07-22
 
 ### Added

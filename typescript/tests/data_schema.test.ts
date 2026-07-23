@@ -22,7 +22,7 @@ describe("canonical data schema", () => {
     const encoded = new Uint8Array(readFileSync(goldenBundle));
     const bundle = parseSchemaBundle(encoded);
 
-    expect(bundle.irVersion).toBe(2);
+    expect(bundle.irVersion).toBe(3);
     expect(bundle.mappingVersion).toBe(2);
     expect(bundle.datasets.map((dataset) => dataset.sourceMessage)).toEqual([
       "data.v1.CanonicalRecord",
@@ -39,6 +39,7 @@ describe("canonical data schema", () => {
       Presence.EXPLICIT,
       true,
     ]);
+    expect(optionalNote?.storageNameSource).toBe("optional_note");
 
     const labels = fields.get("labels");
     expect([labels?.stableId, labels?.presence]).toEqual([19, Presence.REPEATED]);
@@ -49,6 +50,7 @@ describe("canonical data schema", () => {
       Presence.NOT_APPLICABLE,
       SyntheticRole.LIST_ELEMENT,
     ]);
+    expect(element?.storageNameSource).toBe("");
 
     const choiceCount = fields.get("choice_count");
     expect([choiceCount?.stableId, choiceCount?.presence, choiceCount?.oneof]).toEqual([22, Presence.ONEOF, "choice"]);
@@ -71,7 +73,7 @@ describe("canonical data schema", () => {
   });
 
   test.each(["ir", "mapping"] as const)("rejects an unsupported %s version", (version) => {
-    const bundle = create(SchemaBundleSchema, { irVersion: 2, mappingVersion: 2 });
+    const bundle = create(SchemaBundleSchema, { irVersion: 3, mappingVersion: 2 });
     if (version === "ir") bundle.irVersion = 1;
     else bundle.mappingVersion = 1;
 
@@ -82,7 +84,7 @@ describe("canonical data schema", () => {
 
   test("round-trips portable refined types", () => {
     const bundle = create(SchemaBundleSchema, {
-      irVersion: 2,
+      irVersion: 3,
       mappingVersion: 2,
       datasets: [
         {

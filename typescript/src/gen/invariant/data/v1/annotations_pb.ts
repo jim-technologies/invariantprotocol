@@ -45,7 +45,8 @@ export type DecimalOptions = Message<"invariant.data.v1.DecimalOptions"> & {
   precision: number;
 
   /**
-   * Digits to the right of the decimal point. Must not exceed precision.
+   * Digits to the right of the decimal point. Omitted means zero. Must not
+   * exceed precision.
    *
    * @generated from field: uint32 scale = 2;
    */

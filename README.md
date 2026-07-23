@@ -222,6 +222,25 @@ wrapper for native compression, limits, and layers.
 Native reflection is always enabled and publishes only the services and methods
 actually served by Invariant, including registered unary remote proxies.
 
+## In-process composition
+
+When caller and service are co-located, keep the generated service behind a
+small typed application interface and call the implementation directly. That
+is the normal zero-network path: it preserves generated request/response types,
+context cancellation, and testability without pretending a local call has
+transport metadata.
+
+If a local caller specifically needs Invariant's shared validation and
+interceptor pipeline, every runtime also exposes programmatic unary and
+server-streaming invocation (`Invoke`/`InvokeStream` in Go and their idiomatic
+language equivalents). Those calls use the same registered implementation and
+perform no socket or hidden in-memory gRPC hop.
+
+When the component later moves out of process, implement the same typed
+application interface with the generated gRPC client. This keeps the
+local-versus-remote decision at the application boundary; Invariant does not
+introduce a service-locator or transparent-network abstraction.
+
 ## Optional projections
 
 Every optional projection calls the same registered implementation directly.
@@ -433,11 +452,20 @@ go run ./go/cmd/invariant-schema sql \
 
 `compile` reads an existing output bundle before replacing it. Numeric
 protobuf paths retain active field identities, removed identities remain
-tombstoned, field storage names survive same-number source renames while the
-dataset full name remains stable, and incompatible reuse fails.
+tombstoned, and field storage names survive same-number source renames when the
+old protobuf name remains reserved. Generated bundle names are compiler-owned;
+their exact protobuf source follows active fields into permanent tombstones,
+the dataset full name remains stable, and incompatible identity or storage-name
+reuse fails.
 Repeated `--message` flags can explicitly select roots for controlled or
 one-off builds; annotation discovery is the normal convention. Commit and
 review the bundle, but continue to author only protobuf.
+
+When a bundle contains multiple datasets, `sql` emits every table in
+deterministic source-message order so the result is one complete Atlas desired
+state. Pass `--message` to render one table as a controlled override.
+Arrow, Parquet, and Iceberg artifacts each describe one dataset and therefore
+require `--message` for a multi-dataset bundle.
 
 Portable field refinements map canonical decimal text, canonical UUID text,
 and exact-width bytes to native Arrow, Parquet, Iceberg, and PostgreSQL types.
@@ -449,7 +477,8 @@ encode keys, indexes, partitions, placement, or migration policy.
 The PostgreSQL renderer emits desired-state DDL directly for Atlas; HCL is not
 another source format. Atlas consumes the generated `file://` SQL desired state
 using a PostgreSQL development database. CI applies that SQL to disposable
-PostgreSQL 18.4, inspects the result, and requires a zero diff. Invariant does
+PostgreSQL 18.4, verifies defaults, nullability, collection defaults, comments,
+and constraints in the live catalog, and requires a zero diff. Invariant does
 not infer keys, indexes, partitions, catalog operations, file layout, or
 migrations, and it does not apply production database changes.
 
@@ -476,14 +505,14 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.9.0`; new releases do not create language-prefixed tags. The project
+tag `v0.10.0`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.9.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.10.0
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -493,26 +522,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.9.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.10.0#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.9.0#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.10.0#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.9.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.10.0" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.9.0" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.10.0" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.9.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.10.0"
 ```
 
 For reproducible production builds, replace the tag with a full commit

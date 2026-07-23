@@ -66,7 +66,8 @@ type DecimalOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Total number of base-10 digits. Valid values are 1 through 38.
 	Precision uint32 `protobuf:"varint,1,opt,name=precision,proto3" json:"precision,omitempty"`
-	// Digits to the right of the decimal point. Must not exceed precision.
+	// Digits to the right of the decimal point. Omitted means zero. Must not
+	// exceed precision.
 	Scale         uint32 `protobuf:"varint,2,opt,name=scale,proto3" json:"scale,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

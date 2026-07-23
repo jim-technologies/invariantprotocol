@@ -20,6 +20,7 @@ from typing import Any, Protocol, cast
 
 import grpc
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+from google.protobuf.message import Message
 
 from invariant.descriptor import ParsedDescriptor
 from invariant.http_types import (
@@ -86,14 +87,13 @@ class _Tool(Tool):
     """Internal execution state captured from generated gRPC registration."""
 
     handler: Callable
-    request_factory: Callable[[], Any] | None = None
+    request_class: type[Message]
+    response_class: type[Message]
     rpc_handler: _RpcMethodHandler | None = None
 
-    def new_request(self) -> Any:
-        """Create the generated request type captured during registration."""
-        if self.request_factory is None:
-            raise RuntimeError(f"No request factory registered for {self.service_full_name}/{self.method_name}")
-        return self.request_factory()
+    def new_request(self) -> Message:
+        """Create the concrete request type captured during registration."""
+        return self.request_class()
 
     def public_metadata(self) -> Tool:
         return Tool(
@@ -338,7 +338,7 @@ class Server:
                 grpc.StatusCode.FAILED_PRECONDITION,
                 f"Tool '{tool_name}' is server-streaming — use invoke_stream",
             )
-        return await self._invoke(tool, request, context)
+        return await self._invoke(tool, _coerce_in_process_request(tool, request), context)
 
     async def invoke_stream(self, tool_name: str, request: Any, context: Any = None) -> AsyncIterator[Any]:
         """Dispatch a server-streaming tool by name. Yields each response message.
@@ -358,6 +358,7 @@ class Server:
                 grpc.StatusCode.FAILED_PRECONDITION,
                 f"Tool '{tool_name}' is unary — use invoke",
             )
+        request = _coerce_in_process_request(tool, request)
         async for msg in self._invoke_stream(tool, request, context):
             yield msg
 
@@ -394,6 +395,7 @@ class Server:
                 if not inspect.isawaitable(response):
                     raise TypeError(f"shared unary handler for {full_method} must be async")
                 response = await response
+                response = _coerce_response(tool, response)
             except Exception as error:
                 raise _normalize_handler_error(error, full_method) from error
             if isinstance(context, ProjectionContext):
@@ -442,7 +444,7 @@ class Server:
                 if not hasattr(responses, "__aiter__"):
                     raise TypeError(f"shared stream handler for {full_method} must return an async iterator")
                 async for msg in responses:
-                    yield msg
+                    yield _coerce_response(tool, msg)
             except Exception as error:
                 raise _normalize_handler_error(error, full_method) from error
             if isinstance(context, ProjectionContext):
@@ -543,6 +545,7 @@ class Server:
         if self._descriptor_pool is None:
             raise ValueError("Generated registration requires Server.from_descriptor() or Server.from_bytes().")
         _validate_generated_service_descriptor(self._descriptor_pool, service_name)
+        generated_service = descriptor_pool.Default().FindServiceByName(service_name)
 
         expected_methods = set(svc_info.methods)
         actual_methods = set(method_handlers)
@@ -553,7 +556,7 @@ class Server:
                 f"Generated handlers for '{service_name}' do not match descriptor: missing={missing}, extra={extra}"
             )
 
-        validated: dict[str, tuple[_RpcMethodHandler, Callable[[], Any]]] = {}
+        validated: dict[str, tuple[_RpcMethodHandler, type[Message], type[Message]]] = {}
         for method_name, method_info in svc_info.methods.items():
             rpc_handler = method_handlers[method_name]
             expected_cardinality = (method_info.client_streaming, method_info.server_streaming)
@@ -595,7 +598,9 @@ class Server:
                     f"expected={method_info.input_type!r}, actual={actual_input!r}"
                 )
             request_class = type(request)
-            validated[method_name] = (rpc_handler, request_class)
+            generated_method = generated_service.methods_by_name[method_name]
+            response_class = message_factory.GetMessageClass(generated_method.output_type)
+            validated[method_name] = (rpc_handler, request_class, response_class)
 
         # Keep the complete generated service for native gRPC, including
         # client-streaming and bidi methods. Only unary and server-streaming
@@ -605,7 +610,7 @@ class Server:
         for method_name, method_info in svc_info.methods.items():
             if method_info.client_streaming:
                 continue
-            rpc_handler, request_factory = validated[method_name]
+            rpc_handler, request_class, response_class = validated[method_name]
             terminal = _rpc_terminal(rpc_handler)
             tool_name = f"{service_name}.{method_name}"
             tool = _Tool(
@@ -618,7 +623,8 @@ class Server:
                 service_full_name=service_name,
                 method_name=method_name,
                 server_streaming=method_info.server_streaming,
-                request_factory=request_factory,
+                request_class=request_class,
+                response_class=response_class,
                 rpc_handler=rpc_handler,
             )
             native_tools.append(tool)
@@ -719,7 +725,8 @@ class Server:
                     output_type=method_info.output_type,
                     service_full_name=svc_full_name,
                     method_name=method_name,
-                    request_factory=req_class,
+                    request_class=req_class,
+                    response_class=resp_class,
                     rpc_handler=rpc_handler,
                 )
                 staged_native_tools.append(tool)
@@ -787,7 +794,7 @@ class Server:
 
         rules = http_rules_by_method_path(self._fds)
         pool = self._require_descriptor_pool("connect_http")
-        staged_specs: list[tuple[Any, str, str, str, Any, Any, bool]] = []
+        staged_specs: list[tuple[Any, str, str, str, Any, Any, Any, bool]] = []
         staged_names: set[str] = set()
         for svc_full_name, svc_info in services.items():
             for method_name, method_info in svc_info.methods.items():
@@ -797,7 +804,8 @@ class Server:
                 method_path = f"/{svc_full_name}/{method_name}"
                 req_desc = pool.FindMessageTypeByName(method_info.input_type)
                 req_class = message_factory.GetMessageClass(req_desc)
-                pool.FindMessageTypeByName(method_info.output_type)
+                resp_desc = pool.FindMessageTypeByName(method_info.output_type)
+                resp_class = message_factory.GetMessageClass(resp_desc)
                 binding = client_binding_for_method(rules.get(method_path), svc_full_name, method_name)
                 tool_name = f"{svc_full_name}.{method_name}"
                 projected = self._should_include(svc_full_name, method_name)
@@ -812,7 +820,7 @@ class Server:
                             f"cannot register {svc_full_name!r}."
                         )
                 staged_specs.append(
-                    (method_info, svc_full_name, method_name, method_path, req_class, binding, projected)
+                    (method_info, svc_full_name, method_name, method_path, req_class, resp_class, binding, projected)
                 )
 
         connection = HTTPConnection(
@@ -831,6 +839,7 @@ class Server:
             method_name,
             method_path,
             req_class,
+            resp_class,
             binding,
             projected,
         ) in staged_specs:
@@ -861,7 +870,8 @@ class Server:
                 output_type=method_info.output_type,
                 service_full_name=svc_full_name,
                 method_name=method_name,
-                request_factory=req_class,
+                request_class=req_class,
+                response_class=resp_class,
                 rpc_handler=rpc_handler,
             )
             staged_native_tools.append(tool)
@@ -1127,6 +1137,55 @@ def _normalize_handler_error(error: Exception, full_method: str) -> Exception:
         grpc.StatusCode.INTERNAL,
         f"handler failed for {full_method}: {error}",
     )
+
+
+def _coerce_in_process_request(tool: _Tool, request: Any) -> Any:
+    """Require the registered protobuf identity and restore its generated class."""
+    from invariant.errors import InvariantError
+
+    if not isinstance(request, Message):
+        raise InvariantError(
+            grpc.StatusCode.INVALID_ARGUMENT,
+            f"{tool.name} requires protobuf request type {tool.input_type!r}, "
+            f"got non-protobuf {type(request).__name__!r}",
+        )
+    actual_type = getattr(getattr(request, "DESCRIPTOR", None), "full_name", None)
+    if actual_type != tool.input_type:
+        actual = actual_type or type(request).__name__
+        raise InvariantError(
+            grpc.StatusCode.INVALID_ARGUMENT,
+            f"{tool.name} requires request type {tool.input_type!r}, got {actual!r}",
+        )
+
+    if type(request) is tool.request_class:
+        return request
+    generated = tool.request_class()
+    try:
+        generated.ParseFromString(request.SerializeToString())
+    except Exception as error:
+        raise InvariantError(
+            grpc.StatusCode.INVALID_ARGUMENT,
+            f"{tool.name} could not convert request type {tool.input_type!r}: {error}",
+        ) from error
+    return generated
+
+
+def _coerce_response(tool: _Tool, response: Any) -> Any:
+    if not isinstance(response, Message):
+        raise TypeError(f"{tool.name} returned non-protobuf {type(response).__name__!r}, expected {tool.output_type!r}")
+    actual_type = getattr(getattr(response, "DESCRIPTOR", None), "full_name", None)
+    if actual_type != tool.output_type:
+        actual = actual_type or type(response).__name__
+        raise TypeError(f"{tool.name} returned {actual!r}, expected {tool.output_type!r}")
+
+    if type(response) is tool.response_class:
+        return response
+    registered = tool.response_class()
+    try:
+        registered.ParseFromString(response.SerializeToString())
+    except Exception as error:
+        raise TypeError(f"{tool.name} could not convert response type {tool.output_type!r}: {error}") from error
+    return registered
 
 
 async def _call_remote_unary(stub: Any, request: Any, context: Any, full_method: str) -> Any:

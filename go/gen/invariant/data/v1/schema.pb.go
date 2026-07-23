@@ -613,9 +613,18 @@ type RetiredField struct {
 	// Canonical compiler identity made from protobuf number and container paths.
 	Identity string `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
 	// Storage field identity that must never be assigned again.
-	StableId      int32 `protobuf:"varint,2,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	StableId int32 `protobuf:"varint,2,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"`
+	// Last fully-qualified protobuf field name, or synthetic collection-child
+	// name, observed before this identity was retired.
+	ProtoFullName string `protobuf:"bytes,3,opt,name=proto_full_name,json=protoFullName,proto3" json:"proto_full_name,omitempty"`
+	// Storage name that remains unavailable to other identities in this logical
+	// scope.
+	Name string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	// Exact protobuf field name from which name was originally derived. Empty
+	// for synthetic list/map children.
+	StorageNameSource string `protobuf:"bytes,5,opt,name=storage_name_source,json=storageNameSource,proto3" json:"storage_name_source,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *RetiredField) Reset() {
@@ -662,6 +671,27 @@ func (x *RetiredField) GetStableId() int32 {
 	return 0
 }
 
+func (x *RetiredField) GetProtoFullName() string {
+	if x != nil {
+		return x.ProtoFullName
+	}
+	return ""
+}
+
+func (x *RetiredField) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *RetiredField) GetStorageNameSource() string {
+	if x != nil {
+		return x.StorageNameSource
+	}
+	return ""
+}
+
 // Field is a protobuf field or a synthetic list/map child in the logical tree.
 type Field struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -696,9 +726,12 @@ type Field struct {
 	// metadata, not a request for storage renderers to erase field presence.
 	ProtobufDefault string `protobuf:"bytes,12,opt,name=protobuf_default,json=protobufDefault,proto3" json:"protobuf_default,omitempty"`
 	// Protobuf JSON field name. Empty for compiler-created collection children.
-	JsonName      string `protobuf:"bytes,13,opt,name=json_name,json=jsonName,proto3" json:"json_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	JsonName string `protobuf:"bytes,13,opt,name=json_name,json=jsonName,proto3" json:"json_name,omitempty"`
+	// Exact protobuf field name from which name was originally derived. It is
+	// retained across source renames and empty for synthetic list/map children.
+	StorageNameSource string `protobuf:"bytes,14,opt,name=storage_name_source,json=storageNameSource,proto3" json:"storage_name_source,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Field) Reset() {
@@ -818,6 +851,13 @@ func (x *Field) GetProtobufDefault() string {
 func (x *Field) GetJsonName() string {
 	if x != nil {
 		return x.JsonName
+	}
+	return ""
+}
+
+func (x *Field) GetStorageNameSource() string {
+	if x != nil {
+		return x.StorageNameSource
 	}
 	return ""
 }
@@ -1763,10 +1803,13 @@ const file_invariant_data_v1_schema_proto_rawDesc = "" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x120\n" +
 	"\x06fields\x18\x04 \x03(\v2\x18.invariant.data.v1.FieldR\x06fields\x12\"\n" +
 	"\rlast_field_id\x18\x05 \x01(\x05R\vlastFieldId\x12F\n" +
-	"\x0eretired_fields\x18\x06 \x03(\v2\x1f.invariant.data.v1.RetiredFieldR\rretiredFields\"G\n" +
+	"\x0eretired_fields\x18\x06 \x03(\v2\x1f.invariant.data.v1.RetiredFieldR\rretiredFields\"\xb3\x01\n" +
 	"\fRetiredField\x12\x1a\n" +
 	"\bidentity\x18\x01 \x01(\tR\bidentity\x12\x1b\n" +
-	"\tstable_id\x18\x02 \x01(\x05R\bstableId\"\xfc\x03\n" +
+	"\tstable_id\x18\x02 \x01(\x05R\bstableId\x12&\n" +
+	"\x0fproto_full_name\x18\x03 \x01(\tR\rprotoFullName\x12\x12\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\x12.\n" +
+	"\x13storage_name_source\x18\x05 \x01(\tR\x11storageNameSource\"\xac\x04\n" +
 	"\x05Field\x12&\n" +
 	"\x0fproto_full_name\x18\x01 \x01(\tR\rprotoFullName\x12*\n" +
 	"\x11proto_number_path\x18\x02 \x03(\rR\x0fprotoNumberPath\x12\x12\n" +
@@ -1782,7 +1825,8 @@ const file_invariant_data_v1_schema_proto_rawDesc = "" +
 	"\vhas_default\x18\v \x01(\bR\n" +
 	"hasDefault\x12)\n" +
 	"\x10protobuf_default\x18\f \x01(\tR\x0fprotobufDefault\x12\x1b\n" +
-	"\tjson_name\x18\r \x01(\tR\bjsonName\"\xb1\x05\n" +
+	"\tjson_name\x18\r \x01(\tR\bjsonName\x12.\n" +
+	"\x13storage_name_source\x18\x0e \x01(\tR\x11storageNameSource\"\xb1\x05\n" +
 	"\bDataType\x12#\n" +
 	"\rprotobuf_type\x18\x01 \x01(\tR\fprotobufType\x12@\n" +
 	"\tprimitive\x18\x02 \x01(\v2 .invariant.data.v1.PrimitiveTypeH\x00R\tprimitive\x121\n" +

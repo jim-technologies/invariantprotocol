@@ -10,7 +10,7 @@ fn reads_shared_canonical_schema_bundle() {
     let encoded = include_bytes!("../../testdata/data.schema.binpb");
     let bundle = parse_schema_bundle(encoded.as_slice()).expect("valid canonical schema bundle");
 
-    assert_eq!(bundle.ir_version, 2);
+    assert_eq!(bundle.ir_version, 3);
     assert_eq!(bundle.mapping_version, 2);
     assert_eq!(
         bundle
@@ -31,6 +31,7 @@ fn reads_shared_canonical_schema_bundle() {
         ),
         (17, Presence::Explicit as i32, true)
     );
+    assert_eq!(optional_note.storage_name_source, "optional_note");
 
     let labels = field(&canonical.fields, "labels");
     assert_eq!(
@@ -48,6 +49,7 @@ fn reads_shared_canonical_schema_bundle() {
     assert_eq!(element.stable_id, 31);
     assert_eq!(element.presence, Presence::NotApplicable as i32);
     assert_eq!(element.synthetic_role, SyntheticRole::ListElement as i32);
+    assert!(element.storage_name_source.is_empty());
 
     let choice_count = field(&canonical.fields, "choice_count");
     assert_eq!(
@@ -88,7 +90,7 @@ fn rejects_unsupported_bundle_versions() {
         Err(DataSchemaError::UnsupportedIrVersion { .. })
     ));
 
-    bundle.ir_version = 2;
+    bundle.ir_version = 3;
     bundle.mapping_version = 1;
     assert!(matches!(
         invariant::validate_schema_bundle(&bundle),
@@ -107,7 +109,7 @@ fn round_trips_portable_refined_types() {
         data_type::Kind::FixedBytes(FixedBytesType { byte_length: 32 }),
     ];
     let bundle = SchemaBundle {
-        ir_version: 2,
+        ir_version: 3,
         mapping_version: 2,
         datasets: vec![DatasetSchema {
             source_message: "example.v1.Record".into(),

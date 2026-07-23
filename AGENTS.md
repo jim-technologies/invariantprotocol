@@ -201,10 +201,10 @@ Go, Python, Rust, and TypeScript bundle readers reject unknown IR or mapping
 versions by default. Raw generated messages remain wire types, not permission
 to interpret a newer mapping with older code.
 
-The v1→v2 bundle reset is allowed only because there are no external data-schema
-consumers. Once a released bundle carries real identities/tombstones, do not
-bump its accepted version and abandon that history; ship an explicit artifact
-migration before changing the compiler's required version.
+SchemaBundle v3 carries compiler-owned storage-name provenance. Once a released
+bundle carries real identities or tombstones for consumers, do not bump its
+accepted version and abandon that history; ship an explicit artifact migration
+before changing the compiler's required version.
 
 ## Convention over configuration
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import struct
 from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
 
 import greet_pb2
 import grpc
@@ -14,6 +15,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from conftest import DESCRIPTOR_PATH, register_greet
+from google.protobuf import message_factory
 
 from invariant import ChannelOptions, InvariantError, MethodConfig, Server
 
@@ -483,6 +485,260 @@ async def test_invoke_stream_unknown_tool(stream_server):
     with pytest.raises(InvariantError) as exc:
         await consume()
     assert exc.value.code == grpc.StatusCode.NOT_FOUND
+
+
+async def test_invoke_rejects_wrong_request_types(basic_server, stream_server):
+    with pytest.raises(InvariantError) as unary:
+        await basic_server.invoke(
+            "greet.v1.GreetService.Greet",
+            greet_pb2.GreetResponse(message="wrong type"),
+        )
+    assert unary.value.code == grpc.StatusCode.INVALID_ARGUMENT
+    assert "GreetResponse" in unary.value.message
+    assert "GreetRequest" in unary.value.message
+
+    async def consume():
+        async for _ in stream_server.invoke_stream(
+            "greet.v1.GreetService.StreamGreet",
+            greet_pb2.GreetRequest(name="wrong type"),
+        ):
+            pass
+
+    with pytest.raises(InvariantError) as streaming:
+        await consume()
+    assert streaming.value.code == grpc.StatusCode.INVALID_ARGUMENT
+    assert "GreetRequest" in streaming.value.message
+    assert "StreamGreetRequest" in streaming.value.message
+
+
+async def test_invoke_rejects_spoofed_non_protobuf_requests(basic_server, stream_server):
+    class SpoofedUnaryRequest:
+        DESCRIPTOR = SimpleNamespace(full_name="greet.v1.GreetRequest")
+
+        def SerializeToString(self):
+            return greet_pb2.GreetRequest(name="spoofed").SerializeToString()
+
+    with pytest.raises(InvariantError) as unary:
+        await basic_server.invoke(
+            "greet.v1.GreetService.Greet",
+            SpoofedUnaryRequest(),
+        )
+    assert unary.value.code == grpc.StatusCode.INVALID_ARGUMENT
+    assert "non-protobuf" in unary.value.message
+    assert "GreetRequest" in unary.value.message
+
+    class SpoofedStreamRequest:
+        DESCRIPTOR = SimpleNamespace(full_name="greet.v1.StreamGreetRequest")
+
+        def SerializeToString(self):
+            return greet_pb2.StreamGreetRequest(name="spoofed").SerializeToString()
+
+    async def consume():
+        async for _ in stream_server.invoke_stream(
+            "greet.v1.GreetService.StreamGreet",
+            SpoofedStreamRequest(),
+        ):
+            pass
+
+    with pytest.raises(InvariantError) as streaming:
+        await consume()
+    assert streaming.value.code == grpc.StatusCode.INVALID_ARGUMENT
+    assert "non-protobuf" in streaming.value.message
+    assert "StreamGreetRequest" in streaming.value.message
+
+
+async def test_invoke_converts_same_identity_to_registered_request_type():
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    observed = []
+
+    class Interceptor(grpc.aio.ServerInterceptor):
+        async def intercept_service(self, continuation, handler_call_details):
+            handler = await continuation(handler_call_details)
+            assert handler is not None
+            terminal = handler.unary_unary
+            assert terminal is not None
+
+            async def wrapped(request, context):
+                observed.append(("interceptor", type(request)))
+                return await terminal(request, context)
+
+            return grpc.unary_unary_rpc_method_handler(
+                wrapped,
+                request_deserializer=handler.request_deserializer,
+                response_serializer=handler.response_serializer,
+            )
+
+    class Service:
+        async def Greet(self, request, context):
+            observed.append(("handler", type(request)))
+            return greet_pb2.GreetResponse(message=request.name)
+
+    register_greet(srv, Service())
+    srv.use(Interceptor())
+    runtime_descriptor = srv._descriptor_pool.FindMessageTypeByName("greet.v1.GreetRequest")
+    runtime_request = message_factory.GetMessageClass(runtime_descriptor)(name="isolated")
+    assert type(runtime_request) is not greet_pb2.GreetRequest
+
+    try:
+        response = await srv.invoke("greet.v1.GreetService.Greet", runtime_request)
+        assert response.message == "isolated"
+        assert observed == [
+            ("interceptor", greet_pb2.GreetRequest),
+            ("handler", greet_pb2.GreetRequest),
+        ]
+    finally:
+        await srv.stop()
+
+
+async def test_invoke_rejects_wrong_response_types():
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+
+    class Service:
+        async def Greet(self, request, context):
+            return greet_pb2.GreetRequest(name=request.name)
+
+        async def StreamGreet(self, request, context):
+            yield greet_pb2.GreetRequest(name=request.name)
+
+    register_greet(srv, Service())
+    try:
+        with pytest.raises(InvariantError) as unary:
+            await srv.invoke(
+                "greet.v1.GreetService.Greet",
+                greet_pb2.GreetRequest(name="wrong response"),
+            )
+        assert unary.value.code == grpc.StatusCode.INTERNAL
+        assert "GreetResponse" in unary.value.message
+        assert "GreetRequest" in unary.value.message
+
+        async def consume():
+            async for _ in srv.invoke_stream(
+                "greet.v1.GreetService.StreamGreet",
+                greet_pb2.StreamGreetRequest(name="wrong response"),
+            ):
+                pass
+
+        with pytest.raises(InvariantError) as streaming:
+            await consume()
+        assert streaming.value.code == grpc.StatusCode.INTERNAL
+        assert "GreetResponse" in streaming.value.message
+        assert "GreetRequest" in streaming.value.message
+    finally:
+        await srv.stop()
+
+
+async def test_invoke_rejects_spoofed_non_protobuf_responses():
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+
+    class SpoofedResponse:
+        DESCRIPTOR = SimpleNamespace(full_name="greet.v1.GreetResponse")
+
+    class Service:
+        async def Greet(self, request, context):
+            return SpoofedResponse()
+
+        async def StreamGreet(self, request, context):
+            yield SpoofedResponse()
+
+    register_greet(srv, Service())
+    try:
+        with pytest.raises(InvariantError) as unary:
+            await srv.invoke(
+                "greet.v1.GreetService.Greet",
+                greet_pb2.GreetRequest(name="spoofed"),
+            )
+        assert unary.value.code == grpc.StatusCode.INTERNAL
+        assert "non-protobuf" in unary.value.message
+        assert "GreetResponse" in unary.value.message
+
+        async def consume():
+            async for _ in srv.invoke_stream(
+                "greet.v1.GreetService.StreamGreet",
+                greet_pb2.StreamGreetRequest(name="spoofed"),
+            ):
+                pass
+
+        with pytest.raises(InvariantError) as streaming:
+            await consume()
+        assert streaming.value.code == grpc.StatusCode.INTERNAL
+        assert "non-protobuf" in streaming.value.message
+        assert "GreetResponse" in streaming.value.message
+    finally:
+        await srv.stop()
+
+
+async def test_invoke_converts_same_identity_to_registered_response_type():
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    runtime_descriptor = srv._descriptor_pool.FindMessageTypeByName("greet.v1.GreetResponse")
+    runtime_response = message_factory.GetMessageClass(runtime_descriptor)
+    assert runtime_response is not greet_pb2.GreetResponse
+
+    class Service:
+        async def Greet(self, request, context):
+            return runtime_response(message=f"dynamic {request.name}")
+
+        async def StreamGreet(self, request, context):
+            for index in range(2):
+                yield runtime_response(message=f"dynamic {request.name} #{index}")
+
+    register_greet(srv, Service())
+    try:
+        unary = await srv.invoke(
+            "greet.v1.GreetService.Greet",
+            greet_pb2.GreetRequest(name="unary"),
+        )
+        assert type(unary) is greet_pb2.GreetResponse
+        assert unary.message == "dynamic unary"
+
+        streamed = [
+            response
+            async for response in srv.invoke_stream(
+                "greet.v1.GreetService.StreamGreet",
+                greet_pb2.StreamGreetRequest(name="stream"),
+            )
+        ]
+        assert all(type(response) is greet_pb2.GreetResponse for response in streamed)
+        assert [response.message for response in streamed] == [
+            "dynamic stream #0",
+            "dynamic stream #1",
+        ]
+    finally:
+        await srv.stop()
+
+
+async def test_invoke_matching_types_do_not_allocate_bridge_messages(monkeypatch):
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    unary_request = greet_pb2.GreetRequest(name="unary")
+    stream_request = greet_pb2.StreamGreetRequest(name="stream")
+    response = greet_pb2.GreetResponse(message="registered")
+
+    class Service:
+        async def Greet(self, request, context):
+            return response
+
+        async def StreamGreet(self, request, context):
+            yield response
+
+    register_greet(srv, Service())
+
+    def reject_allocation(*args, **kwargs):
+        raise AssertionError("matching registered types must not allocate bridge messages")
+
+    monkeypatch.setattr(greet_pb2.GreetRequest, "__new__", staticmethod(reject_allocation))
+    monkeypatch.setattr(greet_pb2.StreamGreetRequest, "__new__", staticmethod(reject_allocation))
+    monkeypatch.setattr(greet_pb2.GreetResponse, "__new__", staticmethod(reject_allocation))
+    try:
+        assert await srv.invoke("greet.v1.GreetService.Greet", unary_request) is response
+        streamed = [
+            message
+            async for message in srv.invoke_stream(
+                "greet.v1.GreetService.StreamGreet",
+                stream_request,
+            )
+        ]
+        assert streamed == [response]
+    finally:
+        await srv.stop()
 
 
 # -- Outbound HTTP response size cap (connect_http proxy mode). --

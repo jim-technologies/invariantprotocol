@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,7 +22,7 @@ import (
 
 const (
 	// IRVersion is the current SchemaBundle protobuf model version.
-	IRVersion uint32 = 2
+	IRVersion uint32 = 3
 
 	// MappingVersion is the current protobuf-to-logical-type mapping version.
 	MappingVersion uint32 = 2
@@ -120,10 +119,6 @@ func CompileDescriptorBytes(
 		if md.IsMapEntry() {
 			return nil, fmt.Errorf("compile descriptor: %q is a synthetic protobuf map entry", name)
 		}
-		if isDependencyNamespace(md) {
-			return nil, fmt.Errorf("compile descriptor: %q belongs to a dependency namespace", name)
-		}
-
 		dataset, err := CompileMessage(md, previousByMessage[name])
 		if err != nil {
 			return nil, fmt.Errorf("compile descriptor: dataset %q: %w", name, err)
@@ -288,12 +283,6 @@ func CompileMessage(
 		return nil, fmt.Errorf("compile message %q: synthetic map entries are not datasets", md.FullName())
 	}
 	datasetName := storageName(string(md.FullName()))
-	if previous != nil {
-		datasetName = previous.GetName()
-		if datasetName == "" {
-			return nil, fmt.Errorf("compile message %q: previous dataset has an empty storage name", md.FullName())
-		}
-	}
 	if datasetName == "" {
 		return nil, fmt.Errorf(
 			"compile message %q: protobuf message name normalizes to an empty storage name",
@@ -341,19 +330,25 @@ func CompileMessage(
 		return nil, fmt.Errorf("compile message %q: %w", md.FullName(), err)
 	}
 
-	retired := make(map[string]int32, len(c.retired)+len(c.previousActive))
-	maps.Copy(retired, c.retired)
-	for identity, id := range c.previousActive {
+	retired := make(map[string]*datav1.RetiredField, len(c.retired)+len(c.previousActive))
+	for identity, field := range c.retired {
+		retired[identity] = proto.Clone(field).(*datav1.RetiredField)
+	}
+	for identity := range c.previousActive {
 		if _, active := c.currentActive[identity]; !active {
-			retired[identity] = id
+			previousField := c.previousFields[identity]
+			retired[identity] = &datav1.RetiredField{
+				Identity:          identity,
+				StableId:          previousField.GetStableId(),
+				ProtoFullName:     previousField.GetProtoFullName(),
+				Name:              previousField.GetName(),
+				StorageNameSource: previousField.GetStorageNameSource(),
+			}
 		}
 	}
 	retiredFields := make([]*datav1.RetiredField, 0, len(retired))
-	for identity, id := range retired {
-		retiredFields = append(retiredFields, &datav1.RetiredField{
-			Identity: identity,
-			StableId: id,
-		})
+	for _, field := range retired {
+		retiredFields = append(retiredFields, field)
 	}
 	slices.SortFunc(retiredFields, func(left, right *datav1.RetiredField) int {
 		if byID := cmp.Compare(left.GetStableId(), right.GetStableId()); byID != 0 {
@@ -361,6 +356,11 @@ func CompileMessage(
 		}
 		return cmp.Compare(left.GetIdentity(), right.GetIdentity())
 	})
+	for _, field := range retiredFields {
+		if err := c.validateRetiredReservation(field.GetIdentity(), field); err != nil {
+			return nil, fmt.Errorf("compile message %q: %w", md.FullName(), err)
+		}
+	}
 
 	return &datav1.DatasetSchema{
 		SourceMessage: string(md.FullName()),
@@ -373,13 +373,15 @@ func CompileMessage(
 }
 
 type datasetCompiler struct {
-	previousActive   map[string]int32
-	previousFields   map[string]*datav1.Field
-	retired          map[string]int32
-	currentActive    map[string]int32
-	reservedIDs      map[int32]string
-	firstTopLevelIDs map[string]int32
-	lastID           int32
+	previousActive    map[string]int32
+	previousFields    map[string]*datav1.Field
+	retired           map[string]*datav1.RetiredField
+	currentActive     map[string]int32
+	currentContainers map[string]protoreflect.MessageDescriptor
+	historicalNames   map[string]map[string]string
+	reservedIDs       map[int32]string
+	firstTopLevelIDs  map[string]int32
+	lastID            int32
 }
 
 func newDatasetCompiler(
@@ -387,12 +389,14 @@ func newDatasetCompiler(
 	previous *datav1.DatasetSchema,
 ) (*datasetCompiler, error) {
 	c := &datasetCompiler{
-		previousActive:   make(map[string]int32),
-		previousFields:   make(map[string]*datav1.Field),
-		retired:          make(map[string]int32),
-		currentActive:    make(map[string]int32),
-		reservedIDs:      make(map[int32]string),
-		firstTopLevelIDs: make(map[string]int32),
+		previousActive:    make(map[string]int32),
+		previousFields:    make(map[string]*datav1.Field),
+		retired:           make(map[string]*datav1.RetiredField),
+		currentActive:     make(map[string]int32),
+		currentContainers: map[string]protoreflect.MessageDescriptor{"": md},
+		historicalNames:   make(map[string]map[string]string),
+		reservedIDs:       make(map[int32]string),
+		firstTopLevelIDs:  make(map[string]int32),
 	}
 	if previous == nil {
 		return c, nil
@@ -404,12 +408,23 @@ func newDatasetCompiler(
 			md.FullName(),
 		)
 	}
+	canonicalDatasetName := storageName(previous.GetSourceMessage())
+	if previous.GetName() != canonicalDatasetName {
+		return nil, fmt.Errorf(
+			"previous dataset storage name %q is not the canonical name %q derived from source_message %q; "+
+				"generated SchemaBundle names are compiler-owned",
+			previous.GetName(), canonicalDatasetName, previous.GetSourceMessage(),
+		)
+	}
 	if previous.GetLastFieldId() < 0 || previous.GetLastFieldId() > maxStableID {
 		return nil, fmt.Errorf("previous last_field_id %d is outside 0..%d", previous.GetLastFieldId(), maxStableID)
 	}
 	c.lastID = previous.GetLastFieldId()
 
 	for _, retired := range previous.GetRetiredFields() {
+		if retired == nil {
+			return nil, errors.New("previous schema contains a nil retired field")
+		}
 		if retired.GetIdentity() == "" {
 			return nil, errors.New("previous retired field has an empty identity")
 		}
@@ -425,7 +440,18 @@ func newDatasetCompiler(
 				retired.GetStableId(), owner, retired.GetIdentity(),
 			)
 		}
-		c.retired[retired.GetIdentity()] = retired.GetStableId()
+		if err := validateCompilerOwnedName(
+			retired.GetIdentity(),
+			retired.GetProtoFullName(),
+			retired.GetName(),
+			retired.GetStorageNameSource(),
+		); err != nil {
+			return nil, fmt.Errorf("previous retired field %q: %w", retired.GetIdentity(), err)
+		}
+		if err := c.registerHistoricalName(retired.GetIdentity(), retired.GetName()); err != nil {
+			return nil, err
+		}
+		c.retired[retired.GetIdentity()] = proto.Clone(retired).(*datav1.RetiredField)
 		c.reservedIDs[retired.GetStableId()] = retired.GetIdentity()
 	}
 	for _, field := range previous.GetFields() {
@@ -507,6 +533,17 @@ func (c *datasetCompiler) indexPreviousField(
 			field.GetStableId(), owner, identity,
 		)
 	}
+	if err := validateCompilerOwnedName(
+		identity,
+		field.GetProtoFullName(),
+		field.GetName(),
+		field.GetStorageNameSource(),
+	); err != nil {
+		return fmt.Errorf("previous field %q: %w", field.GetProtoFullName(), err)
+	}
+	if err := c.registerHistoricalName(identity, field.GetName()); err != nil {
+		return err
+	}
 	c.previousActive[identity] = field.GetStableId()
 	c.previousFields[identity] = field
 	c.reservedIDs[field.GetStableId()] = identity
@@ -562,19 +599,24 @@ func (c *datasetCompiler) compileProtoField(
 	if err != nil {
 		return nil, fmt.Errorf("field %q: %w", fd.FullName(), err)
 	}
+	fieldName, storageNameSource, err := c.storageFieldName(identity, parentIdentity, fd)
+	if err != nil {
+		return nil, fmt.Errorf("field %q: %w", fd.FullName(), err)
+	}
 
 	presence, nullable, oneof := fieldPresence(fd)
 	field := &datav1.Field{
-		ProtoFullName:   string(fd.FullName()),
-		ProtoNumberPath: path,
-		Name:            c.storageFieldName(identity, string(fd.Name())),
-		StableId:        id,
-		Presence:        presence,
-		Nullable:        nullable,
-		Oneof:           oneof,
-		Description:     descriptorComment(fd),
-		SyntheticRole:   datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
-		JsonName:        fd.JSONName(),
+		ProtoFullName:     string(fd.FullName()),
+		ProtoNumberPath:   path,
+		Name:              fieldName,
+		StableId:          id,
+		Presence:          presence,
+		Nullable:          nullable,
+		Oneof:             oneof,
+		Description:       descriptorComment(fd),
+		SyntheticRole:     datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
+		JsonName:          fd.JSONName(),
+		StorageNameSource: storageNameSource,
 	}
 	if fd.HasDefault() {
 		field.HasDefault = true
@@ -792,11 +834,230 @@ func (c *datasetCompiler) compileRefinedValueType(
 	}
 }
 
-func (c *datasetCompiler) storageFieldName(identity, sourceName string) string {
-	if previous, ok := c.previousFields[identity]; ok {
-		return previous.GetName()
+func (c *datasetCompiler) storageFieldName(
+	identity string,
+	parentIdentity string,
+	fd protoreflect.FieldDescriptor,
+) (string, string, error) {
+	currentSource := string(fd.Name())
+	storageSource := currentSource
+	previous, ok := c.previousFields[identity]
+	if ok {
+		previousSource, err := exactProtoFieldName(previous.GetProtoFullName())
+		if err != nil {
+			return "", "", fmt.Errorf("previous proto_full_name: %w", err)
+		}
+		expectedPreviousFullName := fd.ContainingMessage().FullName().Append(previousSource)
+		if previous.GetProtoFullName() != string(expectedPreviousFullName) {
+			return "", "", fmt.Errorf(
+				"previous proto_full_name %q is not a field of current containing message %q",
+				previous.GetProtoFullName(), fd.ContainingMessage().FullName(),
+			)
+		}
+		if previousSource != fd.Name() && !fd.ContainingMessage().ReservedNames().Has(previousSource) {
+			return "", "", fmt.Errorf(
+				"same-number rename from %q to %q must reserve the exact previous protobuf field name %q",
+				previousSource, fd.Name(), previousSource,
+			)
+		}
+
+		storageSource = previous.GetStorageNameSource()
+		sourceName := protoreflect.Name(storageSource)
+		if sourceName != fd.Name() && !fd.ContainingMessage().ReservedNames().Has(sourceName) {
+			return "", "", fmt.Errorf(
+				"original storage-name source %q must remain an exact reserved protobuf field name",
+				storageSource,
+			)
+		}
 	}
-	return storageName(sourceName)
+
+	name := storageName(storageSource)
+	if owner := c.historicalNameOwner(parentIdentity, name); owner != "" && owner != identity {
+		return "", "", fmt.Errorf(
+			"storage name %q in this logical scope is permanently owned by compiler identity %q, not new identity %q",
+			name, owner, identity,
+		)
+	}
+	return name, storageSource, nil
+}
+
+func validateCompilerOwnedName(identity, protoFullName, name, storageSource string) error {
+	role, err := compilerIdentityRole(identity)
+	if err != nil {
+		return err
+	}
+	if protoFullName == "" {
+		return errors.New("proto_full_name must not be empty")
+	}
+	if name == "" {
+		return errors.New("storage name must not be empty")
+	}
+
+	switch role {
+	case datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD:
+		if _, err := exactProtoFieldName(protoFullName); err != nil {
+			return err
+		}
+		sourceName := protoreflect.Name(storageSource)
+		if storageSource == "" || !sourceName.IsValid() {
+			return fmt.Errorf("storage_name_source %q is not an exact protobuf field name", storageSource)
+		}
+		if expected := storageName(storageSource); name != expected {
+			return fmt.Errorf(
+				"storage name %q is not the canonical name %q derived from storage_name_source %q; generated SchemaBundle names are compiler-owned",
+				name, expected, storageSource,
+			)
+		}
+	case datav1.SyntheticRole_SYNTHETIC_ROLE_LIST_ELEMENT:
+		if name != "element" || storageSource != "" {
+			return errors.New("synthetic list element must use storage name \"element\" and an empty storage_name_source")
+		}
+	case datav1.SyntheticRole_SYNTHETIC_ROLE_MAP_KEY:
+		if name != "key" || storageSource != "" {
+			return errors.New("synthetic map key must use storage name \"key\" and an empty storage_name_source")
+		}
+	case datav1.SyntheticRole_SYNTHETIC_ROLE_MAP_VALUE:
+		if name != "value" || storageSource != "" {
+			return errors.New("synthetic map value must use storage name \"value\" and an empty storage_name_source")
+		}
+	default:
+		return fmt.Errorf("compiler identity %q has an invalid field role", identity)
+	}
+	return nil
+}
+
+func exactProtoFieldName(fullName string) (protoreflect.Name, error) {
+	name := protoreflect.FullName(fullName)
+	if !name.IsValid() || !name.Name().IsValid() {
+		return "", fmt.Errorf("proto_full_name %q is not a valid fully-qualified protobuf field name", fullName)
+	}
+	return name.Name(), nil
+}
+
+func compilerIdentityRole(identity string) (datav1.SyntheticRole, error) {
+	var previous, role datav1.SyntheticRole
+	for index, segment := range strings.Split(identity, "/") {
+		switch segment {
+		case "list:element":
+			role = datav1.SyntheticRole_SYNTHETIC_ROLE_LIST_ELEMENT
+		case "map:key":
+			role = datav1.SyntheticRole_SYNTHETIC_ROLE_MAP_KEY
+		case "map:value":
+			role = datav1.SyntheticRole_SYNTHETIC_ROLE_MAP_VALUE
+		default:
+			number, err := strconv.ParseInt(strings.TrimPrefix(segment, "field:"), 10, 32)
+			if !strings.HasPrefix(segment, "field:") || err != nil || number < 1 || number > 1<<29-1 ||
+				fieldIdentitySegment(protoreflect.FieldNumber(number)) != segment {
+				return datav1.SyntheticRole_SYNTHETIC_ROLE_UNSPECIFIED, fmt.Errorf(
+					"compiler identity %q has invalid segment %q",
+					identity, segment,
+				)
+			}
+			role = datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD
+		}
+
+		if index == 0 && role != datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD {
+			return datav1.SyntheticRole_SYNTHETIC_ROLE_UNSPECIFIED, fmt.Errorf(
+				"compiler identity %q must begin with a protobuf field segment",
+				identity,
+			)
+		}
+		if role != datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD &&
+			previous != datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD {
+			return datav1.SyntheticRole_SYNTHETIC_ROLE_UNSPECIFIED, fmt.Errorf(
+				"compiler identity %q has a synthetic segment outside a protobuf collection field",
+				identity,
+			)
+		}
+		if previous == datav1.SyntheticRole_SYNTHETIC_ROLE_MAP_KEY {
+			return datav1.SyntheticRole_SYNTHETIC_ROLE_UNSPECIFIED, fmt.Errorf(
+				"compiler identity %q descends through a protobuf map key",
+				identity,
+			)
+		}
+		previous = role
+	}
+	return role, nil
+}
+
+func (c *datasetCompiler) registerHistoricalName(identity, name string) error {
+	scope := parentCompilerIdentity(identity)
+	owners := c.historicalNames[scope]
+	if owners == nil {
+		owners = make(map[string]string)
+		c.historicalNames[scope] = owners
+	}
+	if owner, exists := owners[name]; exists && owner != identity {
+		return fmt.Errorf(
+			"previous storage name %q in logical scope %q is shared by compiler identities %q and %q",
+			name, scope, owner, identity,
+		)
+	}
+	owners[name] = identity
+	return nil
+}
+
+func (c *datasetCompiler) historicalNameOwner(scope, name string) string {
+	return c.historicalNames[scope][name]
+}
+
+func (c *datasetCompiler) validateRetiredReservation(
+	identity string,
+	field *datav1.RetiredField,
+) error {
+	role, err := compilerIdentityRole(identity)
+	if err != nil {
+		return fmt.Errorf("retired field %q: %w", identity, err)
+	}
+	if role != datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD {
+		return nil
+	}
+
+	container, reachable := c.currentContainers[parentCompilerIdentity(identity)]
+	if !reachable {
+		return nil
+	}
+	previousName, err := exactProtoFieldName(field.GetProtoFullName())
+	if err != nil {
+		return fmt.Errorf("retired field %q: %w", identity, err)
+	}
+	if expected := container.FullName().Append(previousName); field.GetProtoFullName() != string(expected) {
+		return fmt.Errorf(
+			"retired field %q has proto_full_name %q outside current containing message %q",
+			identity, field.GetProtoFullName(), container.FullName(),
+		)
+	}
+
+	segment := identity[strings.LastIndexByte(identity, '/')+1:]
+	number, _ := strconv.ParseInt(strings.TrimPrefix(segment, "field:"), 10, 32)
+	fieldNumber := protoreflect.FieldNumber(number)
+	if !container.ReservedRanges().Has(fieldNumber) {
+		return fmt.Errorf(
+			"removed protobuf field %q number %d must remain reserved while containing message %q remains reachable",
+			field.GetProtoFullName(), fieldNumber, container.FullName(),
+		)
+	}
+	if !container.ReservedNames().Has(previousName) {
+		return fmt.Errorf(
+			"removed protobuf field %q exact name %q must remain reserved while containing message %q remains reachable",
+			field.GetProtoFullName(), previousName, container.FullName(),
+		)
+	}
+	storageSource := protoreflect.Name(field.GetStorageNameSource())
+	if storageSource != previousName && !container.ReservedNames().Has(storageSource) {
+		return fmt.Errorf(
+			"removed protobuf field %q original storage-name source %q must remain reserved while containing message %q remains reachable",
+			field.GetProtoFullName(), storageSource, container.FullName(),
+		)
+	}
+	return nil
+}
+
+func parentCompilerIdentity(identity string) string {
+	if slash := strings.LastIndexByte(identity, '/'); slash >= 0 {
+		return identity[:slash]
+	}
+	return ""
 }
 
 func (c *datasetCompiler) compileValueType(
@@ -843,6 +1104,7 @@ func (c *datasetCompiler) compileValueType(
 		if typ, ok := wellKnownType(md.FullName()); ok {
 			return typ, nil
 		}
+		c.currentContainers[identity] = md
 		if stack[md.FullName()] {
 			return nil, fmt.Errorf("recursive protobuf message %q is not a finite row schema", md.FullName())
 		}
@@ -877,8 +1139,8 @@ func (c *datasetCompiler) allocate(identity string) (int32, error) {
 	if _, duplicate := c.currentActive[identity]; duplicate {
 		return 0, fmt.Errorf("compiler identity %q occurs more than once", identity)
 	}
-	if id, retired := c.retired[identity]; retired {
-		return 0, fmt.Errorf("compiler identity %q reuses retired stable_id %d", identity, id)
+	if retired, exists := c.retired[identity]; exists {
+		return 0, fmt.Errorf("compiler identity %q reuses retired stable_id %d", identity, retired.GetStableId())
 	}
 	if id, ok := c.previousActive[identity]; ok {
 		c.currentActive[identity] = id
@@ -1238,15 +1500,6 @@ func storageName(name string) string {
 		b.WriteRune(unicode.ToLower(r))
 	}
 	return strings.Trim(b.String(), "_")
-}
-
-func isDependencyNamespace(md protoreflect.MessageDescriptor) bool {
-	path := md.ParentFile().Path()
-	if strings.HasPrefix(path, "google/") || strings.HasPrefix(path, "buf/") || strings.HasPrefix(path, "invariant/") {
-		return true
-	}
-	name := string(md.FullName())
-	return strings.HasPrefix(name, "google.") || strings.HasPrefix(name, "buf.") || strings.HasPrefix(name, "invariant.")
 }
 
 func validateStableID(id int32) error {

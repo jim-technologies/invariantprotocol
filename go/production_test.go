@@ -12,6 +12,7 @@ import (
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -150,7 +151,93 @@ func TestStreamCancellationStopsSend(t *testing.T) {
 	<-started
 	cancel()
 	err := <-errc
-	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, codes.Canceled, status.Code(err))
 	// Only the first chunk should have been emitted.
 	assert.Equal(t, int32(1), sent.Load())
+}
+
+type rawContextErrorServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+	err error
+}
+
+func (s rawContextErrorServicer) Greet(
+	context.Context,
+	*greetpb.GreetRequest,
+) (*greetpb.GreetResponse, error) {
+	return nil, s.err
+}
+
+func (s rawContextErrorServicer) StreamGreet(
+	*greetpb.StreamGreetRequest,
+	grpc.ServerStreamingServer[greetpb.GreetResponse],
+) error {
+	return s.err
+}
+
+func TestInProcessInvocationNormalizesRawContextErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code codes.Code
+	}{
+		{name: "canceled", err: context.Canceled, code: codes.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded, code: codes.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			srv := streamServer(t, rawContextErrorServicer{err: test.err})
+
+			_, err := srv.Invoke(
+				t.Context(),
+				"greet.v1.GreetService.Greet",
+				&greetpb.GreetRequest{Name: "unary"},
+			)
+			assert.Equal(t, test.code, status.Code(err))
+
+			err = srv.InvokeStream(
+				t.Context(),
+				"greet.v1.GreetService.StreamGreet",
+				&greetpb.StreamGreetRequest{Name: "stream"},
+				func(proto.Message) error { return nil },
+			)
+			assert.Equal(t, test.code, status.Code(err))
+		})
+	}
+}
+
+func TestInProcessInvocationPreservesStatusJoinedWithContextError(t *testing.T) {
+	declared, err := status.New(codes.PermissionDenied, "policy denied").WithDetails(
+		&errdetails.ErrorInfo{Reason: "POLICY_DENIED", Domain: "example.test"},
+	)
+	require.NoError(t, err)
+	handlerErr := errors.Join(declared.Err(), context.Canceled)
+	srv := streamServer(t, rawContextErrorServicer{err: handlerErr})
+
+	assertStatus := func(t *testing.T, err error) {
+		t.Helper()
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.PermissionDenied, st.Code())
+		details := st.Details()
+		require.Len(t, details, 1)
+		info, ok := details[0].(*errdetails.ErrorInfo)
+		require.True(t, ok)
+		assert.Equal(t, "POLICY_DENIED", info.GetReason())
+		assert.Equal(t, "example.test", info.GetDomain())
+	}
+
+	_, err = srv.Invoke(
+		t.Context(),
+		"greet.v1.GreetService.Greet",
+		&greetpb.GreetRequest{Name: "unary"},
+	)
+	assertStatus(t, err)
+
+	err = srv.InvokeStream(
+		t.Context(),
+		"greet.v1.GreetService.StreamGreet",
+		&greetpb.StreamGreetRequest{Name: "stream"},
+		func(proto.Message) error { return nil },
+	)
+	assertStatus(t, err)
 }

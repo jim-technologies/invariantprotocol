@@ -54,6 +54,7 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "  invariant-schema compile --descriptor FILE [--message FULL_NAME ...] --output FILE")
 	fmt.Fprintln(w, "    Without --message, messages marked (invariant.data.v1.dataset) are compiled.")
 	fmt.Fprintln(w, "  invariant-schema arrow|parquet|iceberg|sql --bundle FILE [--message FULL_NAME] [--output FILE|-]")
+	fmt.Fprintln(w, "    SQL renders every dataset when --message is omitted; other targets require one dataset.")
 }
 
 type messageFlags []string
@@ -161,15 +162,24 @@ func runRender(target string, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", target, err)
 	}
-	dataset, err := selectDataset(bundle, messageName)
-	if err != nil {
-		return fmt.Errorf("%s: %w", target, err)
-	}
 
-	artifact, diagnostics, err := render(target, dataset)
-	writeDiagnostics(stderr, target, diagnostics)
-	if err != nil {
-		return err
+	var artifact []byte
+	if target == "sql" && messageName == "" {
+		artifact, err = renderSQLBundle(bundle, stderr)
+		if err != nil {
+			return err
+		}
+	} else {
+		dataset, err := selectDataset(bundle, messageName)
+		if err != nil {
+			return fmt.Errorf("%s: %w", target, err)
+		}
+		var diagnostics []*datav1.MappingDiagnostic
+		artifact, diagnostics, err = render(target, dataset)
+		writeDiagnostics(stderr, target, diagnostics)
+		if err != nil {
+			return err
+		}
 	}
 	if outputPath == "-" {
 		if _, err := stdout.Write(artifact); err != nil {
@@ -181,6 +191,33 @@ func runRender(target string, args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("%s: write artifact %q: %w", target, outputPath, err)
 	}
 	return nil
+}
+
+func renderSQLBundle(bundle *datav1.SchemaBundle, stderr io.Writer) ([]byte, error) {
+	datasets := slices.Clone(bundle.GetDatasets())
+	if len(datasets) == 0 {
+		return nil, errors.New("sql: bundle contains no datasets")
+	}
+	slices.SortFunc(datasets, func(left, right *datav1.DatasetSchema) int {
+		if bySource := strings.Compare(left.GetSourceMessage(), right.GetSourceMessage()); bySource != 0 {
+			return bySource
+		}
+		return strings.Compare(left.GetName(), right.GetName())
+	})
+
+	var output bytes.Buffer
+	for index, dataset := range datasets {
+		artifact, diagnostics, err := render("sql", dataset)
+		writeDiagnostics(stderr, "sql", diagnostics)
+		if err != nil {
+			return nil, err
+		}
+		if index > 0 {
+			output.WriteByte('\n')
+		}
+		output.Write(artifact)
+	}
+	return output.Bytes(), nil
 }
 
 func readBundle(path string) (*datav1.SchemaBundle, error) {

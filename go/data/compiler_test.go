@@ -197,8 +197,10 @@ func TestCompileDescriptorBytesUsesExplicitDeterministicRoots(t *testing.T) {
 	require.ErrorContains(t, err, "must not be empty")
 	_, err = CompileDescriptorBytes(descriptor, []string{"data.v1.DataState"}, nil)
 	require.ErrorContains(t, err, "is not a protobuf message")
-	_, err = CompileDescriptorBytes(descriptor, []string{"google.protobuf.Timestamp"}, nil)
-	require.ErrorContains(t, err, "dependency namespace")
+	wellKnownRoot, err := CompileDescriptorBytes(descriptor, []string{"google.protobuf.Timestamp"}, nil)
+	require.NoError(t, err)
+	require.Len(t, wellKnownRoot.GetDatasets(), 1)
+	assert.Equal(t, "google.protobuf.Timestamp", wellKnownRoot.GetDatasets()[0].GetSourceMessage())
 }
 
 func TestCompileDescriptorBytesDiscoversAnnotatedDatasets(t *testing.T) {
@@ -227,6 +229,29 @@ func TestCompileDescriptorBytesDiscoversAnnotatedDatasets(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, explicit.GetDatasets(), 1)
 	assert.Equal(t, "annotated.v1.NotADataset", explicit.GetDatasets()[0].GetSourceMessage())
+}
+
+func TestCompileDescriptorBytesDiscoversAnnotatedImportedDatasets(t *testing.T) {
+	dependency := rowFile("records/dependency.proto", "records.dependency.v1")
+	dependency.MessageType[0].Options = &descriptorpb.MessageOptions{}
+	proto.SetExtension(dependency.MessageType[0].Options, datav1.E_Dataset, &datav1.DatasetOptions{})
+
+	application := rowFile("records/application.proto", "records.application.v1")
+	application.Dependency = []string{dependency.GetName()}
+	application.MessageType[0].Options = &descriptorpb.MessageOptions{}
+	proto.SetExtension(application.MessageType[0].Options, datav1.E_Dataset, &datav1.DatasetOptions{})
+
+	descriptor := descriptorSetBytes(t, application, dependency)
+	discovered, err := CompileDescriptorBytes(descriptor, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, discovered.GetDatasets(), 2)
+	assert.Equal(t, "records.application.v1.Row", discovered.GetDatasets()[0].GetSourceMessage())
+	assert.Equal(t, "records.dependency.v1.Row", discovered.GetDatasets()[1].GetSourceMessage())
+
+	explicit, err := CompileDescriptorBytes(descriptor, []string{"records.application.v1.Row"}, nil)
+	require.NoError(t, err)
+	require.Len(t, explicit.GetDatasets(), 1)
+	assert.Equal(t, "records.application.v1.Row", explicit.GetDatasets()[0].GetSourceMessage())
 }
 
 func TestCompileDescriptorBytesRejectsAnnotationNumberCollisions(t *testing.T) {
@@ -324,6 +349,9 @@ func TestCompileMessageAppliesPortableTypeRefinements(t *testing.T) {
 			{name: "id", number: 2, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: uuidOptions()},
 			{name: "digest", number: 3, kind: descriptorpb.FieldDescriptorProto_TYPE_BYTES, options: fixedBytesOptions(32)},
 			{name: "amounts", number: 4, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, repeated: true, options: decimalOptions(12, 2)},
+			// scale is deliberately omitted from the serialized proto3 option;
+			// its contractual default is zero.
+			{name: "whole_amount", number: 5, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(18, 0)},
 		},
 	})
 
@@ -341,6 +369,10 @@ func TestCompileMessageAppliesPortableTypeRefinements(t *testing.T) {
 	require.NotNil(t, element)
 	assert.Equal(t, uint32(12), element.GetType().GetDecimal().GetPrecision())
 	assert.Equal(t, uint32(2), element.GetType().GetDecimal().GetScale())
+	wholeAmount := schemaField(t, schema, 5).GetType().GetDecimal()
+	require.NotNil(t, wholeAmount)
+	assert.Equal(t, uint32(18), wholeAmount.GetPrecision())
+	assert.Zero(t, wholeAmount.GetScale())
 
 	serialized := descriptorSetBytes(t, protodesc.ToFileDescriptorProto(md.ParentFile()))
 	bundle, err := CompileDescriptorBytes(serialized, []string{"shape.v1.ScalarRow"}, nil)
@@ -435,7 +467,7 @@ func TestCompileMessageRejectsMapRefinement(t *testing.T) {
 	require.ErrorContains(t, err, "semantic type refinements are not supported on protobuf maps")
 }
 
-func TestCompileMessagePreservesStorageNamesAndRejectsRefinementEvolution(t *testing.T) {
+func TestCompileMessageOwnsStorageNamesAndPreservesReservedRenames(t *testing.T) {
 	firstDescriptor := refinedMessage(t, refinedMessageSpec{
 		fields: []refinedFieldSpec{{
 			name: "amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(10, 2),
@@ -443,21 +475,84 @@ func TestCompileMessagePreservesStorageNamesAndRejectsRefinementEvolution(t *tes
 	})
 	first, err := CompileMessage(firstDescriptor, nil)
 	require.NoError(t, err)
-	first.Name = "ledger_entries"
-	first.Fields[0].Name = "ledger_amount"
+	assert.Equal(t, "shape_v1_scalar_row", first.GetName())
+	assert.Equal(t, "amount", first.GetFields()[0].GetName())
+	assert.Equal(t, "amount", first.GetFields()[0].GetStorageNameSource())
+
+	tamperedDataset := proto.Clone(first).(*datav1.DatasetSchema)
+	tamperedDataset.Name = "ledger_entries"
+	_, err = CompileMessage(firstDescriptor, tamperedDataset)
+	require.ErrorContains(t, err, "generated SchemaBundle names are compiler-owned")
+
+	tamperedField := proto.Clone(first).(*datav1.DatasetSchema)
+	tamperedField.Fields[0].Name = "ledger_amount"
+	_, err = CompileMessage(firstDescriptor, tamperedField)
+	require.ErrorContains(t, err, "generated SchemaBundle names are compiler-owned")
+
+	unreservedRename := refinedMessage(t, refinedMessageSpec{
+		fields: []refinedFieldSpec{{
+			name: "renamed_amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(10, 2),
+		}},
+	})
+	_, err = CompileMessage(unreservedRename, first)
+	require.ErrorContains(t, err, "must reserve the exact previous protobuf field name")
+
+	coordinatedTamper := proto.Clone(first).(*datav1.DatasetSchema)
+	coordinatedTamper.Fields[0].Name = "renamed_amount"
+	_, err = CompileMessage(unreservedRename, coordinatedTamper)
+	require.ErrorContains(t, err, "storage_name_source \"amount\"")
+
+	unrelatedReserved := refinedMessage(t, refinedMessageSpec{
+		reservedNames: []string{"ledger_amount"},
+		fields: []refinedFieldSpec{{
+			name: "renamed_amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(10, 2),
+		}},
+	})
+	unrelatedReservedBundle := proto.Clone(first).(*datav1.DatasetSchema)
+	unrelatedReservedBundle.Fields[0].Name = "ledger_amount"
+	_, err = CompileMessage(unrelatedReserved, unrelatedReservedBundle)
+	require.ErrorContains(t, err, "storage_name_source \"amount\"")
 
 	renamedDescriptor := refinedMessage(t, refinedMessageSpec{
+		reservedNames: []string{"amount"},
 		fields: []refinedFieldSpec{{
 			name: "renamed_amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(10, 2),
 		}},
 	})
 	renamed, err := CompileMessage(renamedDescriptor, first)
 	require.NoError(t, err)
-	assert.Equal(t, "ledger_entries", renamed.GetName())
-	assert.Equal(t, "ledger_amount", schemaField(t, renamed, 1).GetName())
+	assert.Equal(t, "shape_v1_scalar_row", renamed.GetName())
+	assert.Equal(t, "amount", schemaField(t, renamed, 1).GetName())
 	assert.Equal(t, "shape.v1.ScalarRow.renamed_amount", schemaField(t, renamed, 1).GetProtoFullName())
+	assert.Equal(t, "amount", schemaField(t, renamed, 1).GetStorageNameSource())
+
+	recompiled, err := CompileMessage(renamedDescriptor, renamed)
+	require.NoError(t, err)
+	assert.Equal(t, "amount", schemaField(t, recompiled, 1).GetName())
+	assert.True(t, proto.Equal(renamed, recompiled))
+
+	renamedAgainDescriptor := refinedMessage(t, refinedMessageSpec{
+		reservedNames: []string{"amount", "renamed_amount"},
+		fields: []refinedFieldSpec{{
+			name: "final_amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(10, 2),
+		}},
+	})
+	renamedAgain, err := CompileMessage(renamedAgainDescriptor, renamed)
+	require.NoError(t, err)
+	assert.Equal(t, "amount", schemaField(t, renamedAgain, 1).GetName())
+	assert.Equal(t, "amount", schemaField(t, renamedAgain, 1).GetStorageNameSource())
+
+	droppedIntermediateReservation := refinedMessage(t, refinedMessageSpec{
+		reservedNames: []string{"amount"},
+		fields: []refinedFieldSpec{{
+			name: "final_amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(10, 2),
+		}},
+	})
+	_, err = CompileMessage(droppedIntermediateReservation, renamed)
+	require.ErrorContains(t, err, "exact previous protobuf field name \"renamed_amount\"")
 
 	changedDescriptor := refinedMessage(t, refinedMessageSpec{
+		reservedNames: []string{"amount"},
 		fields: []refinedFieldSpec{{
 			name: "renamed_amount", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(11, 2),
 		}},
@@ -659,29 +754,45 @@ func TestCompileMessageRetainsAndRetiresStableIDs(t *testing.T) {
 	assert.Equal(t, int32(3), first.GetLastFieldId())
 
 	v2 := evolutionMessage(t, evolutionVersion{
-		rootFieldName:   "renamed_child",
-		nestedFieldName: "renamed_value",
-		includeAdded:    true,
+		rootFieldName:       "renamed_child",
+		nestedFieldName:     "renamed_value",
+		rootReservedNames:   []string{"child", "removed"},
+		rootReservedNumbers: []int32{2},
+		nestedReservedNames: []string{"value"},
+		includeAdded:        true,
 	})
 	second, err := CompileMessage(v2, first)
 	require.NoError(t, err)
-	assert.Equal(t, int32(1), schemaField(t, second, 1).GetStableId())
-	assert.Equal(t, int32(3), schemaField(t, second, 1).GetType().GetStruct().GetFields()[0].GetStableId())
+	secondChild := schemaField(t, second, 1)
+	assert.Equal(t, int32(1), secondChild.GetStableId())
+	assert.Equal(t, "child", secondChild.GetName())
+	require.Len(t, secondChild.GetType().GetStruct().GetFields(), 1)
+	assert.Equal(t, int32(3), secondChild.GetType().GetStruct().GetFields()[0].GetStableId())
+	assert.Equal(t, "value", secondChild.GetType().GetStruct().GetFields()[0].GetName())
 	assert.Equal(t, int32(4), schemaField(t, second, 100).GetStableId())
 	assert.Equal(t, int32(4), second.GetLastFieldId())
 	require.Len(t, second.GetRetiredFields(), 1)
 	assert.Equal(t, int32(2), second.GetRetiredFields()[0].GetStableId())
 	assert.Equal(t, "field:2", second.GetRetiredFields()[0].GetIdentity())
+	assert.Equal(t, "evolution.v1.Row.removed", second.GetRetiredFields()[0].GetProtoFullName())
+	assert.Equal(t, "removed", second.GetRetiredFields()[0].GetName())
+	assert.Equal(t, "removed", second.GetRetiredFields()[0].GetStorageNameSource())
 
 	secondAgain, err := CompileMessage(v2, first)
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(second, secondAgain))
 
+	third, err := CompileMessage(v2, second)
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(second, third))
+
 	v3 := evolutionMessage(t, evolutionVersion{
-		rootFieldName:   "renamed_child",
-		nestedFieldName: "renamed_value",
-		includeRemoved:  true,
-		includeAdded:    true,
+		rootFieldName:       "renamed_child",
+		nestedFieldName:     "renamed_value",
+		rootReservedNames:   []string{"child"},
+		nestedReservedNames: []string{"value"},
+		includeRemoved:      true,
+		includeAdded:        true,
 	})
 	_, err = CompileMessage(v3, second)
 	require.Error(t, err)
@@ -713,6 +824,117 @@ func TestCompileMessageTombstonesNestedAndCollectionIdentities(t *testing.T) {
 		delete(expected, retired.GetIdentity())
 	}
 	require.Empty(t, expected)
+}
+
+func TestCompileMessageEnforcesPermanentRemovalHistory(t *testing.T) {
+	firstDescriptor := refinedMessage(t, refinedMessageSpec{
+		fields: []refinedFieldSpec{
+			{name: "old_value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING},
+			{name: "keep", number: 2, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING},
+		},
+	})
+	first, err := CompileMessage(firstDescriptor, nil)
+	require.NoError(t, err)
+
+	removedFields := []refinedFieldSpec{{
+		name: "keep", number: 2, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING,
+	}}
+	for _, test := range []struct {
+		name            string
+		reservedNames   []string
+		reservedNumbers []int32
+		want            string
+	}{
+		{name: "neither reserved", want: "number 1 must remain reserved"},
+		{name: "only name reserved", reservedNames: []string{"old_value"}, want: "number 1 must remain reserved"},
+		{name: "only number reserved", reservedNumbers: []int32{1}, want: `exact name "old_value" must remain reserved`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := CompileMessage(refinedMessage(t, refinedMessageSpec{
+				reservedNames:   test.reservedNames,
+				reservedNumbers: test.reservedNumbers,
+				fields:          removedFields,
+			}), first)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+
+	removedDescriptor := refinedMessage(t, refinedMessageSpec{
+		reservedNames:   []string{"old_value"},
+		reservedNumbers: []int32{1},
+		fields:          removedFields,
+	})
+	removed, err := CompileMessage(removedDescriptor, first)
+	require.NoError(t, err)
+	require.Len(t, removed.GetRetiredFields(), 1)
+	retired := removed.GetRetiredFields()[0]
+	assert.Equal(t, "field:1", retired.GetIdentity())
+	assert.Equal(t, "shape.v1.ScalarRow.old_value", retired.GetProtoFullName())
+	assert.Equal(t, "old_value", retired.GetName())
+	assert.Equal(t, "old_value", retired.GetStorageNameSource())
+
+	recompiled, err := CompileMessage(removedDescriptor, removed)
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(removed, recompiled))
+
+	_, err = CompileMessage(refinedMessage(t, refinedMessageSpec{
+		reservedNames: []string{"old_value"},
+		fields:        removedFields,
+	}), removed)
+	require.ErrorContains(t, err, "number 1 must remain reserved")
+
+	_, err = CompileMessage(refinedMessage(t, refinedMessageSpec{
+		reservedNumbers: []int32{1},
+		fields:          removedFields,
+	}), removed)
+	require.ErrorContains(t, err, `exact name "old_value" must remain reserved`)
+
+	_, err = CompileMessage(refinedMessage(t, refinedMessageSpec{
+		fields: []refinedFieldSpec{
+			{name: "replacement", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING},
+			{name: "keep", number: 2, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING},
+		},
+	}), removed)
+	require.ErrorContains(t, err, "reuses retired stable_id")
+
+	_, err = CompileMessage(refinedMessage(t, refinedMessageSpec{
+		reservedNames:   []string{"old_value"},
+		reservedNumbers: []int32{1},
+		fields: []refinedFieldSpec{
+			{name: "keep", number: 2, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING},
+			{name: "OldValue", number: 3, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING},
+		},
+	}), removed)
+	require.ErrorContains(t, err, `storage name "old_value" in this logical scope is permanently owned`)
+}
+
+func TestCompileMessageRequiresReservationsOnlyForDirectlyReachableRemovals(t *testing.T) {
+	first, err := CompileMessage(nestedRemovalMessage(t, nestedRemovalVersion{
+		includeParent: true,
+		includeChild:  true,
+	}), nil)
+	require.NoError(t, err)
+
+	_, err = CompileMessage(nestedRemovalMessage(t, nestedRemovalVersion{
+		includeParent: true,
+	}), first)
+	require.ErrorContains(t, err, "number 1 must remain reserved")
+
+	directlyReserved, err := CompileMessage(nestedRemovalMessage(t, nestedRemovalVersion{
+		includeParent: true,
+		reserveChild:  true,
+	}), first)
+	require.NoError(t, err)
+	require.Len(t, directlyReserved.GetRetiredFields(), 1)
+	assert.Equal(t, "field:1/field:1", directlyReserved.GetRetiredFields()[0].GetIdentity())
+
+	ancestorRemoved, err := CompileMessage(nestedRemovalMessage(t, nestedRemovalVersion{
+		reserveParent: true,
+	}), first)
+	require.NoError(t, err)
+	require.Len(t, ancestorRemoved.GetRetiredFields(), 2)
+	assert.Equal(t, "field:1", ancestorRemoved.GetRetiredFields()[0].GetIdentity())
+	assert.Equal(t, "field:1/field:1", ancestorRemoved.GetRetiredFields()[1].GetIdentity())
 }
 
 func TestCompileMessageRejectsStorageShapeAndPresenceChanges(t *testing.T) {
@@ -812,16 +1034,20 @@ func TestCompileMessageValidatesPreviousIdentityState(t *testing.T) {
 }
 
 type evolutionVersion struct {
-	rootFieldName   string
-	nestedFieldName string
-	includeRemoved  bool
-	includeAdded    bool
+	rootFieldName       string
+	nestedFieldName     string
+	rootReservedNames   []string
+	rootReservedNumbers []int32
+	nestedReservedNames []string
+	includeRemoved      bool
+	includeAdded        bool
 }
 
 func evolutionMessage(t *testing.T, version evolutionVersion) protoreflect.MessageDescriptor {
 	t.Helper()
 	nested := &descriptorpb.DescriptorProto{
-		Name: new("Nested"),
+		Name:         new("Nested"),
+		ReservedName: version.nestedReservedNames,
 		Field: []*descriptorpb.FieldDescriptorProto{{
 			Name:   new(version.nestedFieldName),
 			Number: proto.Int32(1),
@@ -830,7 +1056,9 @@ func evolutionMessage(t *testing.T, version evolutionVersion) protoreflect.Messa
 		}},
 	}
 	row := &descriptorpb.DescriptorProto{
-		Name: new("Row"),
+		Name:          new("Row"),
+		ReservedName:  version.rootReservedNames,
+		ReservedRange: reservedRanges(version.rootReservedNumbers...),
 		Field: []*descriptorpb.FieldDescriptorProto{{
 			Name:     new(version.rootFieldName),
 			Number:   proto.Int32(1),
@@ -882,6 +1110,10 @@ func collectionRetirementMessage(t *testing.T, includeRemoved bool) protoreflect
 			Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
 		})
 	}
+	if !includeRemoved {
+		child.ReservedName = []string{"removed"}
+		child.ReservedRange = reservedRanges(2)
+	}
 
 	row := &descriptorpb.DescriptorProto{
 		Name: new("Row"),
@@ -928,10 +1160,60 @@ func collectionRetirementMessage(t *testing.T, includeRemoved bool) protoreflect
 			},
 		)
 	}
+	if !includeRemoved {
+		row.ReservedName = []string{"labels", "counters"}
+		row.ReservedRange = reservedRanges(2, 3)
+	}
 
 	return messageFromFile(t, &descriptorpb.FileDescriptorProto{
 		Name:        new("collection_retirement.proto"),
 		Package:     new("retirement.v1"),
+		Syntax:      new("proto3"),
+		MessageType: []*descriptorpb.DescriptorProto{child, row},
+	}, "Row")
+}
+
+type nestedRemovalVersion struct {
+	includeParent bool
+	includeChild  bool
+	reserveParent bool
+	reserveChild  bool
+}
+
+func nestedRemovalMessage(t *testing.T, version nestedRemovalVersion) protoreflect.MessageDescriptor {
+	t.Helper()
+	child := &descriptorpb.DescriptorProto{Name: new("Child")}
+	if version.includeChild {
+		child.Field = []*descriptorpb.FieldDescriptorProto{{
+			Name:   new("value"),
+			Number: proto.Int32(1),
+			Label:  descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:   descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+		}}
+	}
+	if version.reserveChild {
+		child.ReservedName = []string{"value"}
+		child.ReservedRange = reservedRanges(1)
+	}
+
+	row := &descriptorpb.DescriptorProto{Name: new("Row")}
+	if version.includeParent {
+		row.Field = []*descriptorpb.FieldDescriptorProto{{
+			Name:     new("child"),
+			Number:   proto.Int32(1),
+			Label:    descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+			Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+			TypeName: new(".nested_removal.v1.Child"),
+		}}
+	}
+	if version.reserveParent {
+		row.ReservedName = []string{"child"}
+		row.ReservedRange = reservedRanges(1)
+	}
+
+	return messageFromFile(t, &descriptorpb.FileDescriptorProto{
+		Name:        new("nested_removal.proto"),
+		Package:     new("nested_removal.v1"),
 		Syntax:      new("proto3"),
 		MessageType: []*descriptorpb.DescriptorProto{child, row},
 	}, "Row")
@@ -1153,8 +1435,10 @@ func storageCollisionMessage(t *testing.T, nested bool) protoreflect.MessageDesc
 }
 
 type refinedMessageSpec struct {
-	syntax string
-	fields []refinedFieldSpec
+	syntax          string
+	reservedNames   []string
+	reservedNumbers []int32
+	fields          []refinedFieldSpec
 }
 
 type refinedFieldSpec struct {
@@ -1201,10 +1485,23 @@ func refinedMessage(t *testing.T, spec refinedMessageSpec) protoreflect.MessageD
 		Package: new("shape.v1"),
 		Syntax:  new(spec.syntax),
 		MessageType: []*descriptorpb.DescriptorProto{{
-			Name:  new("ScalarRow"),
-			Field: fields,
+			Name:          new("ScalarRow"),
+			ReservedName:  spec.reservedNames,
+			ReservedRange: reservedRanges(spec.reservedNumbers...),
+			Field:         fields,
 		}},
 	}, "ScalarRow")
+}
+
+func reservedRanges(numbers ...int32) []*descriptorpb.DescriptorProto_ReservedRange {
+	ranges := make([]*descriptorpb.DescriptorProto_ReservedRange, 0, len(numbers))
+	for _, number := range numbers {
+		ranges = append(ranges, &descriptorpb.DescriptorProto_ReservedRange{
+			Start: new(number),
+			End:   new(number + 1),
+		})
+	}
+	return ranges
 }
 
 func refinedMapMessage(t *testing.T, options *datav1.FieldOptions) protoreflect.MessageDescriptor {

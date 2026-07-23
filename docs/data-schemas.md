@@ -38,7 +38,8 @@ The generated bundle is that history. On the first compile, top-level protobuf
 field numbers are retained where possible and nested/container identities are
 allocated deterministically. Later compiles use the previous bundle to:
 
-- retain identities across protobuf field renames;
+- retain identities and storage names across same-number protobuf field renames
+  when the old protobuf name remains reserved;
 - allocate new identities monotonically;
 - tombstone every removed identity permanently;
 - reject reuse of a retired protobuf numeric path; and
@@ -51,8 +52,12 @@ existing name/number pairs must remain present. To rename an enum value, retain
 the old name as an alias instead of removing or renumbering it.
 
 Commit the bundle and review its diff, but do not edit it. Developers continue
-to author protobuf only. Reserving removed protobuf field numbers and names is
-still required, just as it is for ordinary wire compatibility.
+to author protobuf only. A same-number field rename must reserve the old
+protobuf name; removing a field must reserve its number and name. These
+reservations must remain present while the containing message remains directly
+reachable. Removing an ancestor field requires reservations for that ancestor,
+not for every descendant that becomes unreachable with it. These requirements
+keep storage history in the authored protobuf contract.
 
 Always render each target from the bundle. Do not chain serialized target
 artifacts (an emitted Arrow IPC file into Parquet, for example), because target
@@ -60,6 +65,12 @@ formats do not necessarily round-trip every piece of canonical source
 metadata. The Parquet renderer's direct bundle mapping followed by the
 official in-process Arrow-to-Parquet schema bridge is deliberate; it does not
 use the emitted Arrow IPC artifact as evolution state.
+
+Arrow, Parquet, and Iceberg artifacts each describe one dataset, so their
+commands require `--message` when a bundle contains multiple roots. PostgreSQL
+is a database desired state: `sql` without `--message` emits every dataset table
+in deterministic source-message order. Its optional `--message` is the
+controlled single-table override.
 
 ## Dataset roots
 
@@ -104,9 +115,11 @@ explicit `--message` roots if that is not the desired bundle boundary.
 
 Dataset and field storage names begin as deterministic snake_case projections
 of protobuf names. Subsequent compiles retain the committed names by numeric
-identity, so a source field rename does not silently rename a physical column.
-Compilation rejects an empty name or a collision after normalization, both
-across selected datasets and in every reachable nested struct.
+identity when the old protobuf field name remains reserved, so a source field
+rename does not silently rename a physical column. Generated bundle names are
+compiler-owned rather than an undocumented override mechanism. Compilation
+rejects an empty name or a collision after normalization, both across selected
+datasets and in every reachable nested struct.
 
 Invariant repository policy assigns `51974` from Protobuf's
 organization-internal range to the two aggregate data options on their
@@ -137,12 +150,14 @@ the same repository revision and expose its `proto/` directory as a local Buf
 workspace/module dependency or `protoc -I` import root. No protobuf registry is
 required.
 
-## Moving to SchemaBundle v2
+## SchemaBundle versioning
 
-IR and mapping version 2 add portable refinements and stable storage-name
-retention. Version 1 bundles and readers are rejected instead of being guessed
-forward. With no external v1 consumers, regenerate the committed baseline once
-with the v2 compiler.
+IR version 3 retains the exact protobuf source of every compiler-owned storage
+name and carries that provenance into permanent field tombstones. Mapping
+version 2 defines the current target mappings. Readers reject a version mismatch
+instead of guessing forward. Regenerate or explicitly migrate a bundle with the
+matching compiler when either contract version changes; never hand-edit the
+artifact.
 
 Before removing explicit `--message` flags, annotate every existing root.
 Explicit names replace annotation discovery when supplied; the two sets are not
@@ -276,15 +291,17 @@ application. HCL is not an intermediate format and is not another source of
 truth.
 
 Repository integration runs `scripts/check_postgres_atlas.sh`: it renders the
-committed bundle, applies the result to disposable PostgreSQL 18.4, inspects
-the live schema, and requires Atlas to report a zero diff. This verifies the
-boundary without making production DDL application part of Invariant.
+committed multi-dataset and annotated bundles into one desired state, applies
+the result to disposable PostgreSQL 18.4, inspects the live schema, verifies
+defaults, nullability, empty list/map defaults, comments, and constraints in
+the PostgreSQL catalog, and requires Atlas to report a zero diff. This verifies
+the boundary without making production DDL application part of Invariant.
 
 SQL has no portable field-identity mechanism, so the compiler retains the
 committed storage name when a protobuf field is renamed under the same numeric
-identity. Treat the output as desired state and review Atlas's diff. Renames
-inside values represented as `jsonb` remain application-level data-evolution
-concerns.
+identity and the old name remains reserved. Treat the output as desired state
+and review Atlas's diff. Renames inside values represented as `jsonb` remain
+application-level data-evolution concerns.
 
 The SQL renderer quotes identifiers, preserves comments, stores complex values
 as `jsonb`, adds an at-most-one check for each top-level oneof, and checks

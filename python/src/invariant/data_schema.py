@@ -5,7 +5,7 @@ from invariant.gen.invariant.data.v1.schema_pb2 import (
     SchemaBundle,
 )
 
-SCHEMA_IR_VERSION = 2
+SCHEMA_IR_VERSION = 3
 SCHEMA_MAPPING_VERSION = 2
 
 

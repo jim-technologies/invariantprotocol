@@ -16,7 +16,8 @@ message DecimalOptions {
   // Total number of base-10 digits. Valid values are 1 through 38.
   uint32 precision = 1;
 
-  // Digits to the right of the decimal point. Must not exceed precision.
+  // Digits to the right of the decimal point. Omitted means zero. Must not
+  // exceed precision.
   uint32 scale = 2;
 }
 

@@ -611,7 +611,7 @@ func (s *Server) invoke(ctx context.Context, tool *Tool, req proto.Message) (pro
 	ctx, _ = withProjectionUnaryTransport(ctx, tool.callInfo.FullMethod)
 	resp, err := tool.invokeHandler(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, normalizeContextError(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()

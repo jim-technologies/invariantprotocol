@@ -17,7 +17,7 @@ def test_reads_shared_canonical_schema_bundle() -> None:
     encoded = GOLDEN_BUNDLE.read_bytes()
     bundle = parse_schema_bundle(encoded)
 
-    assert bundle.ir_version == 2
+    assert bundle.ir_version == 3
     assert bundle.mapping_version == 2
     assert [dataset.source_message for dataset in bundle.datasets] == [
         "data.v1.CanonicalRecord",
@@ -34,12 +34,14 @@ def test_reads_shared_canonical_schema_bundle() -> None:
         schema_pb2.PRESENCE_EXPLICIT,
         True,
     )
+    assert optional_note.storage_name_source == "optional_note"
 
     labels = fields["labels"]
     assert (labels.stable_id, labels.presence) == (19, schema_pb2.PRESENCE_REPEATED)
     assert labels.type.list.element.stable_id == 31
     assert labels.type.list.element.presence == schema_pb2.PRESENCE_NOT_APPLICABLE
     assert labels.type.list.element.synthetic_role == schema_pb2.SYNTHETIC_ROLE_LIST_ELEMENT
+    assert labels.type.list.element.storage_name_source == ""
 
     choice_count = fields["choice_count"]
     assert (choice_count.stable_id, choice_count.presence, choice_count.oneof) == (
@@ -68,7 +70,7 @@ def test_reads_shared_canonical_schema_bundle() -> None:
 
 @pytest.mark.parametrize(("field", "message"), [("ir_version", "ir_version"), ("mapping_version", "mapping_version")])
 def test_rejects_unsupported_bundle_versions(field: str, message: str) -> None:
-    bundle = schema_pb2.SchemaBundle(ir_version=2, mapping_version=2)
+    bundle = schema_pb2.SchemaBundle(ir_version=3, mapping_version=2)
     setattr(bundle, field, 1)
 
     with pytest.raises(ValueError, match=message):
@@ -77,7 +79,7 @@ def test_rejects_unsupported_bundle_versions(field: str, message: str) -> None:
 
 def test_round_trips_portable_refined_types() -> None:
     bundle = schema_pb2.SchemaBundle(
-        ir_version=2,
+        ir_version=3,
         mapping_version=2,
         datasets=[
             schema_pb2.DatasetSchema(

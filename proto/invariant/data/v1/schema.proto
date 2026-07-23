@@ -50,6 +50,18 @@ message RetiredField {
 
   // Storage field identity that must never be assigned again.
   int32 stable_id = 2;
+
+  // Last fully-qualified protobuf field name, or synthetic collection-child
+  // name, observed before this identity was retired.
+  string proto_full_name = 3;
+
+  // Storage name that remains unavailable to other identities in this logical
+  // scope.
+  string name = 4;
+
+  // Exact protobuf field name from which name was originally derived. Empty
+  // for synthetic list/map children.
+  string storage_name_source = 5;
 }
 
 // Field is a protobuf field or a synthetic list/map child in the logical tree.
@@ -98,6 +110,10 @@ message Field {
 
   // Protobuf JSON field name. Empty for compiler-created collection children.
   string json_name = 13;
+
+  // Exact protobuf field name from which name was originally derived. It is
+  // retained across source renames and empty for synthetic list/map children.
+  string storage_name_source = 14;
 }
 
 // Presence records protobuf semantics that nullability alone cannot express.

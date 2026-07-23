@@ -43,7 +43,7 @@ func TestCompileRetainsPreviousBundleAutomatically(t *testing.T) {
 	firstID := first.GetDatasets()[0].GetFields()[0].GetStableId()
 	removedID := first.GetDatasets()[0].GetFields()[1].GetStableId()
 
-	writeDescriptor(t, descriptorPath,
+	writeDescriptorWithReservations(t, descriptorPath, []string{"id", "removed"}, []int32{2},
 		field("identifier", 1),
 		field("created", 3),
 	)
@@ -140,15 +140,35 @@ func TestArrowWritesOnlyIPCToStdoutAndDiagnosticsToStderr(t *testing.T) {
 }
 
 func TestRenderersEmitOfficialArtifactsAndSelectMessage(t *testing.T) {
-	bundle := oneFieldBundle("example.v1.First")
-	bundle.Datasets = append(bundle.Datasets, oneFieldBundle("example.v1.Second").Datasets[0])
+	bundle := oneFieldBundle("example.v1.Second")
+	bundle.Datasets = append(bundle.Datasets, oneFieldBundle("example.v1.First").Datasets[0])
 	bundlePath := writeBundle(t, bundle)
 
-	var stdout, stderr bytes.Buffer
-	err := run([]string{"parquet", "--bundle", bundlePath}, &stdout, &stderr)
-	require.EqualError(t, err, "parquet: --message is required because bundle contains 2 datasets")
-	assert.Empty(t, stdout.String())
+	for _, target := range []string{"arrow", "parquet", "iceberg"} {
+		t.Run(target+" requires selection", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := run([]string{target, "--bundle", bundlePath}, &stdout, &stderr)
+			require.EqualError(t, err, target+": --message is required because bundle contains 2 datasets")
+			assert.Empty(t, stdout.String())
+		})
+	}
 
+	t.Run("sql renders the complete bundle deterministically", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		require.NoError(t, run([]string{"sql", "--bundle", bundlePath}, &stdout, &stderr))
+		ddl := stdout.String()
+		require.Equal(t, 2, strings.Count(ddl, "CREATE TABLE"))
+		first := strings.Index(ddl, `CREATE TABLE "example_v1_first"`)
+		second := strings.Index(ddl, `CREATE TABLE "example_v1_second"`)
+		require.NotEqual(t, -1, first)
+		require.NotEqual(t, -1, second)
+		assert.Less(t, first, second, "bundle SQL must be independent of input dataset order")
+		assert.Contains(t, ddl, ");\n\nCREATE TABLE", "dataset statements must have one readable separator")
+		assert.Equal(t, 2, strings.Count(stderr.String(), "sql: MAPPING_COMPATIBILITY_LOSSLESS: id:"))
+		assert.NotContains(t, ddl, "MAPPING_COMPATIBILITY")
+	})
+
+	var stdout, stderr bytes.Buffer
 	for _, test := range []struct {
 		target   string
 		contains string
@@ -166,11 +186,24 @@ func TestRenderersEmitOfficialArtifactsAndSelectMessage(t *testing.T) {
 				"--message", "example.v1.Second",
 			}, &stdout, &stderr))
 			assert.Contains(t, stdout.String(), test.contains)
+			assert.NotContains(t, stdout.String(), "example_v1_first")
 			assert.True(t, strings.HasSuffix(stdout.String(), "\n"))
 			assert.Contains(t, stderr.String(), test.target+": MAPPING_COMPATIBILITY_LOSSLESS: id:")
 			assert.NotContains(t, stdout.String(), "MAPPING_COMPATIBILITY")
 		})
 	}
+}
+
+func TestSQLRejectsAnEmptyBundle(t *testing.T) {
+	bundlePath := writeBundle(t, &datav1.SchemaBundle{
+		IrVersion:      data.IRVersion,
+		MappingVersion: data.MappingVersion,
+	})
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"sql", "--bundle", bundlePath}, &stdout, &stderr)
+	require.EqualError(t, err, "sql: bundle contains no datasets")
+	assert.Empty(t, stdout.String())
+	assert.Empty(t, stderr.String())
 }
 
 func TestRenderOutputFileDoesNotContainDiagnostics(t *testing.T) {
@@ -201,7 +234,7 @@ func TestRenderRejectsUnknownBundleVersions(t *testing.T) {
 			mutate: func(bundle *datav1.SchemaBundle) {
 				bundle.IrVersion = 0
 			},
-			wantError: "unsupported SchemaBundle ir_version 0; expected 2",
+			wantError: "unsupported SchemaBundle ir_version 0; expected 3",
 		},
 		{
 			name: "mapping",
@@ -226,13 +259,43 @@ func TestRenderRejectsUnknownBundleVersions(t *testing.T) {
 
 func writeDescriptor(t *testing.T, path string, fields ...*descriptorpb.FieldDescriptorProto) {
 	t.Helper()
+	writeDescriptorWithReservedNames(t, path, nil, fields...)
+}
+
+func writeDescriptorWithReservedNames(
+	t *testing.T,
+	path string,
+	reservedNames []string,
+	fields ...*descriptorpb.FieldDescriptorProto,
+) {
+	t.Helper()
+	writeDescriptorWithReservations(t, path, reservedNames, nil, fields...)
+}
+
+func writeDescriptorWithReservations(
+	t *testing.T,
+	path string,
+	reservedNames []string,
+	reservedNumbers []int32,
+	fields ...*descriptorpb.FieldDescriptorProto,
+) {
+	t.Helper()
+	reservedRanges := make([]*descriptorpb.DescriptorProto_ReservedRange, 0, len(reservedNumbers))
+	for _, number := range reservedNumbers {
+		reservedRanges = append(reservedRanges, &descriptorpb.DescriptorProto_ReservedRange{
+			Start: new(number),
+			End:   new(number + 1),
+		})
+	}
 	set := &descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{{
 		Name:    new("example/v1/record.proto"),
 		Package: new("example.v1"),
 		Syntax:  new("proto3"),
 		MessageType: []*descriptorpb.DescriptorProto{{
-			Name:  new("Record"),
-			Field: fields,
+			Name:          new("Record"),
+			ReservedName:  reservedNames,
+			ReservedRange: reservedRanges,
+			Field:         fields,
 		}},
 	}}}
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(set)

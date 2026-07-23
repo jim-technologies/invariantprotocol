@@ -54,7 +54,8 @@ def test_generated_registration_captures_service_exactly_once():
     tool = srv.tools["greet.v1.GreetService.Greet"]
     assert tool.input_type == "greet.v1.GreetRequest"
     assert not hasattr(tool, "handler")
-    assert not hasattr(tool, "request_factory")
+    assert not hasattr(tool, "request_class")
+    assert not hasattr(tool, "response_class")
     assert not hasattr(tool, "rpc_handler")
 
 

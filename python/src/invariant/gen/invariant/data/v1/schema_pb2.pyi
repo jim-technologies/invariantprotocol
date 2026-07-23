@@ -140,15 +140,21 @@ class DatasetSchema(_message.Message):
     def __init__(self, source_message: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., fields: _Optional[_Iterable[_Union[Field, _Mapping]]] = ..., last_field_id: _Optional[int] = ..., retired_fields: _Optional[_Iterable[_Union[RetiredField, _Mapping]]] = ...) -> None: ...
 
 class RetiredField(_message.Message):
-    __slots__ = ("identity", "stable_id")
+    __slots__ = ("identity", "stable_id", "proto_full_name", "name", "storage_name_source")
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
     STABLE_ID_FIELD_NUMBER: _ClassVar[int]
+    PROTO_FULL_NAME_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    STORAGE_NAME_SOURCE_FIELD_NUMBER: _ClassVar[int]
     identity: str
     stable_id: int
-    def __init__(self, identity: _Optional[str] = ..., stable_id: _Optional[int] = ...) -> None: ...
+    proto_full_name: str
+    name: str
+    storage_name_source: str
+    def __init__(self, identity: _Optional[str] = ..., stable_id: _Optional[int] = ..., proto_full_name: _Optional[str] = ..., name: _Optional[str] = ..., storage_name_source: _Optional[str] = ...) -> None: ...
 
 class Field(_message.Message):
-    __slots__ = ("proto_full_name", "proto_number_path", "name", "stable_id", "presence", "nullable", "oneof", "description", "type", "synthetic_role", "has_default", "protobuf_default", "json_name")
+    __slots__ = ("proto_full_name", "proto_number_path", "name", "stable_id", "presence", "nullable", "oneof", "description", "type", "synthetic_role", "has_default", "protobuf_default", "json_name", "storage_name_source")
     PROTO_FULL_NAME_FIELD_NUMBER: _ClassVar[int]
     PROTO_NUMBER_PATH_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
@@ -162,6 +168,7 @@ class Field(_message.Message):
     HAS_DEFAULT_FIELD_NUMBER: _ClassVar[int]
     PROTOBUF_DEFAULT_FIELD_NUMBER: _ClassVar[int]
     JSON_NAME_FIELD_NUMBER: _ClassVar[int]
+    STORAGE_NAME_SOURCE_FIELD_NUMBER: _ClassVar[int]
     proto_full_name: str
     proto_number_path: _containers.RepeatedScalarFieldContainer[int]
     name: str
@@ -175,7 +182,8 @@ class Field(_message.Message):
     has_default: bool
     protobuf_default: str
     json_name: str
-    def __init__(self, proto_full_name: _Optional[str] = ..., proto_number_path: _Optional[_Iterable[int]] = ..., name: _Optional[str] = ..., stable_id: _Optional[int] = ..., presence: _Optional[_Union[Presence, str]] = ..., nullable: _Optional[bool] = ..., oneof: _Optional[str] = ..., description: _Optional[str] = ..., type: _Optional[_Union[DataType, _Mapping]] = ..., synthetic_role: _Optional[_Union[SyntheticRole, str]] = ..., has_default: _Optional[bool] = ..., protobuf_default: _Optional[str] = ..., json_name: _Optional[str] = ...) -> None: ...
+    storage_name_source: str
+    def __init__(self, proto_full_name: _Optional[str] = ..., proto_number_path: _Optional[_Iterable[int]] = ..., name: _Optional[str] = ..., stable_id: _Optional[int] = ..., presence: _Optional[_Union[Presence, str]] = ..., nullable: _Optional[bool] = ..., oneof: _Optional[str] = ..., description: _Optional[str] = ..., type: _Optional[_Union[DataType, _Mapping]] = ..., synthetic_role: _Optional[_Union[SyntheticRole, str]] = ..., has_default: _Optional[bool] = ..., protobuf_default: _Optional[str] = ..., json_name: _Optional[str] = ..., storage_name_source: _Optional[str] = ...) -> None: ...
 
 class DataType(_message.Message):
     __slots__ = ("protobuf_type", "primitive", "enum", "struct", "list", "map", "timestamp", "duration", "json", "decimal", "uuid", "fixed_bytes")
