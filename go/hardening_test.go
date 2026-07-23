@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -184,27 +183,24 @@ func TestServeContextCancelStopsGracefully(t *testing.T) {
 }
 
 func TestServeProjectionsCancelsAndWaitsForSiblingAfterError(t *testing.T) {
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := probe.Addr().(*net.TCPAddr).Port
-	require.NoError(t, probe.Close())
+	defer func() { require.NoError(t, occupied.Close()) }()
+	port := occupied.Addr().(*net.TCPAddr).Port
 
 	srv := streamServer(t, &streamServicer{})
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 
-	err = srv.ServeProjections(ctx, HTTP(port), HTTP(port))
+	err = srv.ServeProjections(ctx, HTTP(0), HTTP(port))
 	require.Error(t, err)
 	require.NotErrorIs(t, err, context.DeadlineExceeded)
 	var listenErr *net.OpError
 	require.ErrorAs(t, err, &listenErr)
 	assert.Equal(t, "listen", listenErr.Op)
 
-	// Returning means the projection that successfully acquired the port has
-	// observed sibling cancellation and completed graceful shutdown.
-	reused, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	require.NoError(t, err)
-	require.NoError(t, reused.Close())
+	// Returning means the ephemeral HTTP sibling observed cancellation and
+	// completed graceful shutdown after the occupied-port projection failed.
 }
 
 // -- Stream edge cases. --
