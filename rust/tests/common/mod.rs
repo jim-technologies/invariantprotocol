@@ -60,6 +60,16 @@ impl Default for TestGreetService {
                         message: format!("Hi {}", request.name),
                         mood: request.mood.unwrap_or_default(),
                         tags: request.tags,
+                        response_label: if request.name == "ProtoJSON" {
+                            "canonical".into()
+                        } else {
+                            String::new()
+                        },
+                        response_count: if request.name == "ProtoJSON" {
+                            9_007_199_254_740_993
+                        } else {
+                            0
+                        },
                     }))
                 })
             }),

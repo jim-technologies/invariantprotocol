@@ -108,6 +108,25 @@ async def test_greet_http_with_enum_and_tags(server):
         await server._stop_http()
 
 
+async def test_greet_http_uses_canonical_proto_json_names(server):
+    port = await server._start_http(port=0)
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"http://localhost:{port}/greet.v1.GreetService/Greet",
+                json={"name": "Canonical", "wireSequenceId": "9007199254740993"},
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "message": "Hi Canonical",
+            "wireDisplayLabel": "Canonical",
+            "wireResponseCount": "9007199254740993",
+        }
+    finally:
+        await server._stop_http()
+
+
 async def test_greet_group_http(server):
     port = await server._start_http(port=0)
     try:
@@ -221,7 +240,7 @@ async def test_tool_catalog(server):
             resp = await client.get(f"http://localhost:{port}/")
         body = resp.json()
         names = {t["name"] for t in body["tools"]}
-        assert names == {"GreetService.Greet", "GreetService.GreetGroup"}
+        assert names == {"greet.v1.GreetService.Greet", "greet.v1.GreetService.GreetGroup"}
     finally:
         await server._stop_http()
 

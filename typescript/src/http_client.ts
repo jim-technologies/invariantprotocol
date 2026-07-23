@@ -3,7 +3,7 @@ import { ConnectError } from "@connectrpc/connect";
 
 import { monotonicDeadlineAfter, scheduleAbsoluteDeadline } from "./deadline.js";
 import { asInvariantError, type Code, codeFromHttpStatus, InvariantError, invalidArgument } from "./errors.js";
-import type { HandlerContext, Server, Tool, UnaryHandler } from "./server.js";
+import { type HandlerContext, type RegisteredTool, type Server, serverInternal, type UnaryHandler } from "./server.js";
 
 export type OutboundHTTPRequest = {
   methodPath: string;
@@ -244,12 +244,13 @@ export class HTTPClientBinding {
 
 export function httpRulesByMethodPath(server: Server): Map<string, unknown> {
   const rules = new Map<string, unknown>();
-  const extension = server.parsed.registry.getExtension("google.api.http");
+  const parsed = server[serverInternal].parsed();
+  const extension = parsed.registry.getExtension("google.api.http");
   if (!extension) {
     return rules;
   }
 
-  for (const service of server.parsed.services.values()) {
+  for (const service of parsed.services.values()) {
     for (const method of service.desc.methods) {
       const rule = getOption(method, extension);
       if (rule && (rule as { pattern?: { case?: string } }).pattern?.case) {
@@ -290,17 +291,18 @@ export function httpProxyHandler(
   server: Server,
   connection: HTTPConnection,
   binding: HTTPClientBinding,
-  tool: Tool,
+  tool: RegisteredTool,
   methodPath: string,
 ): UnaryHandler {
   binding.resolveFields(tool.inputDesc, tool.outputDesc);
+  const registry = server[serverInternal].parsed().registry;
   return async (request, context) => {
-    const args = toJson(tool.inputDesc, request, { registry: server.parsed.registry }) as Record<string, unknown>;
+    const args = toJson(tool.inputDesc, request, { registry }) as Record<string, unknown>;
     const built = binding.build(args, connection.baseUrl);
     const bytes = await connection.send(methodPath, binding.method, built.url, built.body, context);
     const payload = bytes.length === 0 ? {} : JSON.parse(Buffer.from(bytes).toString("utf8"));
     return fromJson(tool.outputDesc, responseBody(payload, binding.responseBody) as JsonValue, {
-      registry: server.parsed.registry,
+      registry,
     });
   };
 }

@@ -11,6 +11,7 @@ import {
   FileDescriptorProtoSchema,
   FileDescriptorSetSchema,
   MethodDescriptorProtoSchema,
+  MessageOptionsSchema,
   ServiceDescriptorProtoSchema,
 } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
@@ -26,6 +27,7 @@ import { http as googleApiHttp } from "./gen/google/api/annotations_pb.js";
 import {
   type GreetGroupRequest,
   type GreetRequest,
+  GreetRequestSchema,
   GreetResponseSchema,
   GreetService,
   type StreamGreetRequest,
@@ -40,6 +42,8 @@ class GreetServicer implements ServiceImpl<typeof GreetService> {
       message: `Hi ${request.name}`,
       mood: request.mood ?? 0,
       tags: request.tags,
+      responseLabel: request.name === "ProtoJSON" ? "canonical" : "",
+      responseCount: request.name === "ProtoJSON" ? 9_007_199_254_740_993n : 0n,
     });
   }
 
@@ -101,6 +105,18 @@ describe("schema generation", () => {
     expect(props.mood.enum).toEqual(["MOOD_UNSPECIFIED", "MOOD_HAPPY", "MOOD_SAD"]);
     expect(props.tags.additionalProperties).toEqual({ type: "string" });
     expect(props.name.description).toContain("Name of the person");
+    expect(props.wireSequenceId).toMatchObject({
+      type: "string",
+      pattern: "^(0|-?[1-9][0-9]*)$",
+    });
+    expect(props.account_sequence).toBeUndefined();
+    expect(schema.required).not.toContain("wireSequenceId");
+
+    const proto2 = new SchemaGenerator(ParsedDescriptor.fromFile(descriptorPath)).messageToSchema(
+      "data.v1.Proto2Record",
+    );
+    expect(proto2.required).toContain("id");
+    expect(proto2.required).not.toContain("label");
 
     const group = new SchemaGenerator(ParsedDescriptor.fromFile(descriptorPath)).messageToSchema(
       "greet.v1.GreetGroupRequest",
@@ -115,6 +131,87 @@ describe("schema generation", () => {
     const parent = (recursive.properties as Record<string, any>).parent;
     expect(parent.properties.parent).toMatchObject({ type: "object" });
     expect(parent.properties.parent.properties).toBeUndefined();
+  });
+
+  test("models ProtoJSON special scalars, well-known types, and map-key strings", () => {
+    const parsed = ParsedDescriptor.fromFile(descriptorPath);
+    const schema = new SchemaGenerator(parsed).messageToSchema("data.v1.CanonicalRecord");
+    const props = schema.properties as Record<string, any>;
+    expect(props.doubleValue).toEqual({
+      oneOf: [{ type: "number" }, { type: "string", enum: ["NaN", "Infinity", "-Infinity"] }],
+      description: expect.any(String),
+    });
+    expect(props.int64Value).toMatchObject({ type: "string", pattern: "^(0|-?[1-9][0-9]*)$" });
+    expect(props.elapsed).toMatchObject({
+      type: "string",
+      pattern: "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,9})?s$",
+    });
+    expect(props.counters.propertyNames).toBeUndefined();
+
+    const entry = (name: string, keyType: FieldDescriptorProto_Type) =>
+      create(DescriptorProtoSchema, {
+        name,
+        options: create(MessageOptionsSchema, { mapEntry: true }),
+        field: [
+          create(FieldDescriptorProtoSchema, {
+            name: "key",
+            jsonName: "key",
+            number: 1,
+            label: FieldDescriptorProto_Label.OPTIONAL,
+            type: keyType,
+          }),
+          create(FieldDescriptorProtoSchema, {
+            name: "value",
+            jsonName: "value",
+            number: 2,
+            label: FieldDescriptorProto_Label.OPTIONAL,
+            type: FieldDescriptorProto_Type.STRING,
+          }),
+        ],
+      });
+    const mapField = (name: string, number: number, entryName: string) =>
+      create(FieldDescriptorProtoSchema, {
+        name,
+        jsonName: name.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase()),
+        number,
+        label: FieldDescriptorProto_Label.REPEATED,
+        type: FieldDescriptorProto_Type.MESSAGE,
+        typeName: `.keys.v1.KeyMaps.${entryName}`,
+      });
+    const fds = create(FileDescriptorSetSchema, {
+      file: [
+        create(FileDescriptorProtoSchema, {
+          name: "keys.proto",
+          package: "keys.v1",
+          syntax: "proto3",
+          messageType: [
+            create(DescriptorProtoSchema, {
+              name: "KeyMaps",
+              nestedType: [
+                entry("BoolValuesEntry", FieldDescriptorProto_Type.BOOL),
+                entry("SignedValuesEntry", FieldDescriptorProto_Type.INT64),
+                entry("UnsignedValuesEntry", FieldDescriptorProto_Type.UINT64),
+                entry("StringValuesEntry", FieldDescriptorProto_Type.STRING),
+              ],
+              field: [
+                mapField("bool_values", 1, "BoolValuesEntry"),
+                mapField("signed_values", 2, "SignedValuesEntry"),
+                mapField("unsigned_values", 3, "UnsignedValuesEntry"),
+                mapField("string_values", 4, "StringValuesEntry"),
+              ],
+            }),
+          ],
+        }),
+      ],
+    });
+    const mapSchema = new SchemaGenerator(
+      ParsedDescriptor.fromBytes(toBinary(FileDescriptorSetSchema, fds)),
+    ).messageToSchema("keys.v1.KeyMaps");
+    const maps = mapSchema.properties as Record<string, any>;
+    expect(maps.boolValues.propertyNames).toEqual({ enum: ["false", "true"] });
+    expect(maps.signedValues.propertyNames).toEqual({ pattern: "^(0|-?[1-9][0-9]*)$" });
+    expect(maps.unsignedValues.propertyNames).toEqual({ pattern: "^(0|[1-9][0-9]*)$" });
+    expect(maps.stringValues.propertyNames).toBeUndefined();
   });
 });
 
@@ -148,27 +245,58 @@ describe("server dispatch", () => {
   test("registers a generated service with Promise and AsyncIterable handlers", async () => {
     const server = registeredServer();
     expect([...server.tools.keys()].sort()).toEqual([
-      "GreetService.Greet",
-      "GreetService.GreetGroup",
-      "GreetService.StreamGreet",
+      "greet.v1.GreetService.Greet",
+      "greet.v1.GreetService.GreetGroup",
+      "greet.v1.GreetService.StreamGreet",
     ]);
 
-    const response = await server.invoke("GreetService.Greet", {
+    const response = await server.invoke("greet.v1.GreetService.Greet", {
       name: "Ada",
       mood: "MOOD_HAPPY",
       tags: { team: "eng" },
     });
-    expect(server.toJson(server.tools.get("GreetService.Greet")!, response)).toEqual({
+    expect(server.toJson("greet.v1.GreetService.Greet", response)).toEqual({
       message: "Hi Ada",
       mood: "MOOD_HAPPY",
       tags: { team: "eng" },
     });
 
     const chunks = [];
-    for await (const chunk of server.invokeStream("GreetService.StreamGreet", { name: "Ada", count: 2 })) {
-      chunks.push(server.toJson(server.tools.get("GreetService.StreamGreet")!, chunk));
+    for await (const chunk of server.invokeStream("greet.v1.GreetService.StreamGreet", { name: "Ada", count: 2 })) {
+      chunks.push(server.toJson("greet.v1.GreetService.StreamGreet", chunk));
     }
     expect(chunks.map((chunk: any) => chunk.message)).toEqual(["Hi Ada #1", "Hi Ada #2"]);
+  });
+
+  test("exposes immutable tool metadata without executable dispatch records", async () => {
+    let calls = 0;
+    const server = Server.fromDescriptor(descriptorPath);
+    server.register(GreetService, {
+      greet(request) {
+        calls += 1;
+        return { message: `registered ${request.name}` };
+      },
+    });
+
+    await server.invoke("greet.v1.GreetService.Greet", { name: "first" });
+    const metadata = server.tools.get("greet.v1.GreetService.Greet");
+    expect(metadata).toBeDefined();
+    expect(metadata).not.toHaveProperty("handler");
+    expect(metadata).not.toHaveProperty("inputDesc");
+    expect(metadata).not.toHaveProperty("methodDesc");
+    expect(Object.isFrozen(metadata)).toBe(true);
+    expect(Object.isFrozen(metadata?.inputSchema)).toBe(true);
+    expect(() => Object.assign(metadata!, { handler: () => ({ message: "fabricated" }) })).toThrow();
+    expect((server as unknown as Record<string, unknown>).invokeTool).toBeUndefined();
+
+    const response = await server.invoke("greet.v1.GreetService.Greet", { name: "second" });
+    expect(server.toJson("greet.v1.GreetService.Greet", response)).toMatchObject({ message: "registered second" });
+    expect(calls).toBe(2);
+
+    const catalog = server.toolCatalog();
+    expect(Object.isFrozen(catalog)).toBe(true);
+    expect(Object.isFrozen(catalog[0])).toBe(true);
+    expect(Object.isFrozen(catalog[0]?.inputSchema)).toBe(true);
   });
 
   test("runs unary interceptors in registration order", async () => {
@@ -188,7 +316,7 @@ describe("server dispatch", () => {
       return response;
     });
 
-    await server.invoke("GreetService.Greet", { name: "Ada" });
+    await server.invoke("greet.v1.GreetService.Greet", { name: "Ada" });
     expect(calls).toEqual(["before:/greet.v1.GreetService/Greet", "after"]);
   });
 
@@ -214,7 +342,7 @@ describe("server dispatch", () => {
       };
     });
 
-    for await (const _chunk of server.invokeStream("GreetService.StreamGreet", { name: "Ada", count: 1 })) {
+    for await (const _chunk of server.invokeStream("greet.v1.GreetService.StreamGreet", { name: "Ada", count: 1 })) {
       // Consume the stream so the interceptor terminal completes.
     }
     expect(calls).toEqual(["before:/greet.v1.GreetService/StreamGreet", "after"]);
@@ -224,6 +352,57 @@ describe("server dispatch", () => {
     const server = registeredServer();
     expect(() => server.register(GreetService, new GreetServicer())).toThrow(/already registered/);
     expect(() => (server.tools as Map<string, unknown>).clear()).toThrow(/read-only/);
+  });
+
+  test("fully qualified tool IDs allow equal short service names", async () => {
+    const file = (pkg: string) =>
+      create(FileDescriptorProtoSchema, {
+        name: `${pkg}/echo.proto`,
+        package: pkg,
+        syntax: "proto3",
+        messageType: [
+          create(DescriptorProtoSchema, {
+            name: "Envelope",
+            field: [
+              create(FieldDescriptorProtoSchema, {
+                name: "value",
+                jsonName: "value",
+                number: 1,
+                label: FieldDescriptorProto_Label.OPTIONAL,
+                type: FieldDescriptorProto_Type.STRING,
+              }),
+            ],
+          }),
+        ],
+        service: [
+          create(ServiceDescriptorProtoSchema, {
+            name: "EchoService",
+            method: [
+              create(MethodDescriptorProtoSchema, {
+                name: "Call",
+                inputType: `.${pkg}.Envelope`,
+                outputType: `.${pkg}.Envelope`,
+              }),
+            ],
+          }),
+        ],
+      });
+    const descriptor = create(FileDescriptorSetSchema, { file: [file("alpha.v1"), file("beta.v1")] });
+    const server = Server.fromBytes(toBinary(FileDescriptorSetSchema, descriptor));
+    const alpha = server.parsed.services.get("alpha.v1.EchoService")?.desc;
+    const beta = server.parsed.services.get("beta.v1.EchoService")?.desc;
+    if (!alpha || !beta) {
+      throw new Error("missing synthetic services");
+    }
+
+    server.register(alpha, { call: async () => ({ value: "alpha" }) } as never);
+    server.register(beta, { call: async () => ({ value: "beta" }) } as never);
+
+    expect([...server.tools.keys()].sort()).toEqual(["alpha.v1.EchoService.Call", "beta.v1.EchoService.Call"]);
+    const alphaResponse = await server.invoke("alpha.v1.EchoService.Call", {});
+    const betaResponse = await server.invoke("beta.v1.EchoService.Call", {});
+    expect(server.toJson("alpha.v1.EchoService.Call", alphaResponse)).toEqual({ value: "alpha" });
+    expect(server.toJson("beta.v1.EchoService.Call", betaResponse)).toEqual({ value: "beta" });
   });
 
   test("rejects generated message descriptors that drift from the descriptor image", () => {
@@ -298,7 +477,7 @@ describe("server dispatch", () => {
 
   test("freezes registration, interceptors, filters, and limits on first execution", async () => {
     const server = registeredServer();
-    await server.invoke("GreetService.Greet", { name: "Ada" });
+    await server.invoke("greet.v1.GreetService.Greet", { name: "Ada" });
 
     expect(() => server.register(GreetService, new GreetServicer())).toThrow(
       /cannot be changed after execution begins/,
@@ -334,7 +513,7 @@ describe("server dispatch", () => {
     expect(server.maxUnaryRequestBytes()).toBe(16 * 1024 * 1024);
 
     server.configureMethod("/greet.v1.GreetService/Greet", { maxUnaryResponseBytes: 0 });
-    expect(server.maxUnaryResponseBytes(server.tools.get("GreetService.Greet"))).toBe(16 * 1024 * 1024);
+    expect(server.maxUnaryResponseBytes(server.tools.get("greet.v1.GreetService.Greet"))).toBe(16 * 1024 * 1024);
 
     expect(() => server.setMaxUnaryResponseBytes(-1)).toThrow(/positive integer/);
     expect(() => server.setMaxStreamRequestBytes(Number.NaN)).toThrow(/positive integer/);
@@ -687,10 +866,12 @@ describe("projections", () => {
   test("runs CLI and MCP calls", async () => {
     const server = registeredServer();
 
-    const cli = JSON.parse(await runCli(server, ["GreetService", "Greet", "-r", '{"name":"Ada"}']));
+    const cli = JSON.parse(await runCli(server, ["greet.v1.GreetService", "Greet", "-r", '{"name":"Ada"}']));
     expect(cli).toEqual({ message: "Hi Ada" });
-    await expect(runCli(server, ["GreetService", "Greet", "extra"])).rejects.toThrow("Unknown argument: extra");
-    await expect(runCli(server, ["GreetService", "Greet", "-r", "{}", "extra"])).rejects.toThrow(
+    await expect(runCli(server, ["greet.v1.GreetService", "Greet", "extra"])).rejects.toThrow(
+      "Unknown argument: extra",
+    );
+    await expect(runCli(server, ["greet.v1.GreetService", "Greet", "-r", "{}", "extra"])).rejects.toThrow(
       "Unexpected argument: extra",
     );
 
@@ -698,12 +879,37 @@ describe("projections", () => {
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
-      params: { name: "GreetService.Greet", arguments: { name: "Ada" } },
+      params: { name: "greet.v1.GreetService.Greet", arguments: { name: "Ada" } },
     });
     if (mcp === undefined) {
       throw new Error("MCP tool call returned no response");
     }
     expect((mcp.result as any).content[0].text).toContain("Hi Ada");
+
+    const canonicalCli = JSON.parse(
+      await runCli(server, ["greet.v1.GreetService", "Greet", "-r", '{"name":"ProtoJSON"}']),
+    );
+    expect(canonicalCli).toMatchObject({
+      wireDisplayLabel: "canonical",
+      wireResponseCount: "9007199254740993",
+    });
+    expect(canonicalCli.response_label).toBeUndefined();
+    expect(canonicalCli.response_count).toBeUndefined();
+
+    const canonicalMcp = await mcpDispatch(server, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "greet.v1.GreetService.Greet", arguments: { name: "ProtoJSON" } },
+    });
+    if (canonicalMcp === undefined) {
+      throw new Error("canonical MCP tool call returned no response");
+    }
+    const canonicalMcpBody = JSON.parse((canonicalMcp.result as any).content[0].text);
+    expect(canonicalMcpBody).toMatchObject({
+      wireDisplayLabel: "canonical",
+      wireResponseCount: "9007199254740993",
+    });
   });
 
   test("serves Connect-style HTTP JSON and descriptor endpoints", async () => {
@@ -720,7 +926,7 @@ describe("projections", () => {
     const base = `http://127.0.0.1:${address.port}`;
 
     const catalog = await fetch(`${base}/__invariant/tools`).then((res) => res.json());
-    expect(catalog.tools.map((tool: any) => tool.name)).toContain("GreetService.Greet");
+    expect(catalog.tools.map((tool: any) => tool.name)).toContain("greet.v1.GreetService.Greet");
 
     const response = await fetch(`${base}/greet.v1.GreetService/Greet`, {
       method: "POST",
@@ -741,6 +947,29 @@ describe("projections", () => {
       body: Buffer.alloc(5),
     });
     expect(grpcWeb.status).not.toBe(200);
+  });
+
+  test("owns descriptor bytes and isolates public descriptor views", async () => {
+    const callerBytes = readFileSync(descriptorPath);
+    const expectedBytes = Buffer.from(callerBytes);
+    const server = Server.fromBytes(callerBytes);
+
+    callerBytes.fill(0);
+    const publicView = server.parsed;
+    publicView.services.clear();
+    publicView.fds.file.length = 0;
+    publicView.bytes.fill(0);
+
+    server.register(GreetService, new GreetServicer());
+    const response = await server.invoke("greet.v1.GreetService.Greet", { name: "owned" });
+    expect(server.toJson("greet.v1.GreetService.Greet", response)).toMatchObject({ message: "Hi owned" });
+
+    const base = await startHttp(server, servers);
+    const descriptor = await fetch(`${base}/__invariant/descriptor.binpb`);
+    expect(Buffer.from(await descriptor.arrayBuffer())).toEqual(expectedBytes);
+
+    const native = server.grpcServer();
+    grpcServers.push(native);
   });
 
   test("returns a listening caller-owned HTTP server from the public host wrapper", async () => {
@@ -797,13 +1026,12 @@ describe("projections", () => {
       throw new Error("missing test server address");
     }
     const base = `http://127.0.0.1:${address.port}`;
-    const tool = server.tools.get("GreetService.Greet")!;
-    const request = server.coerceMessage(tool.inputDesc, { name: "Ada" });
+    const request = create(GreetRequestSchema, { name: "Ada" });
 
     const response = await fetch(`${base}/greet.v1.GreetService/Greet`, {
       method: "POST",
       headers: { "content-type": "application/proto", accept: "application/proto" },
-      body: toBinary(tool.inputDesc, request),
+      body: toBinary(GreetRequestSchema, request),
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/proto");
@@ -1054,7 +1282,7 @@ describe("projections", () => {
         jsonrpc: "2.0",
         id: 1,
         method: "tools/call",
-        params: { name: "GreetService.Greet", arguments: { name: "cpu" } },
+        params: { name: "greet.v1.GreetService.Greet", arguments: { name: "cpu" } },
       }),
     });
     expect(mcp.status).toBe(504);
@@ -1156,7 +1384,7 @@ describe("projections", () => {
         jsonrpc: "2.0",
         id: 1,
         method: "tools/call",
-        params: { name: "GreetService.Greet", arguments: { name: "mcp" } },
+        params: { name: "greet.v1.GreetService.Greet", arguments: { name: "mcp" } },
       }),
     });
     expect(mcp.status).toBe(200);
@@ -1215,7 +1443,7 @@ describe("projections", () => {
     const client = new Client(started.address, grpc.credentials.createInsecure());
 
     const unary = await unaryCall(client, "greet", { name: "Ada", mood: "MOOD_HAPPY" });
-    expect(server.toJson(server.tools.get("GreetService.Greet")!, unary)).toEqual({
+    expect(server.toJson("greet.v1.GreetService.Greet", unary)).toEqual({
       message: "Hi Ada",
       mood: "MOOD_HAPPY",
     });
@@ -1334,8 +1562,8 @@ describe("projections", () => {
     );
     const client = new Client(started.address, grpc.credentials.createInsecure());
     proxy.connectGrpc(GreetService, client);
-    const response = await proxy.invoke("GreetService.Greet", { name: "Ada" });
-    expect(proxy.toJson(proxy.tools.get("GreetService.Greet")!, response)).toEqual({ message: "Hi Ada" });
+    const response = await proxy.invoke("greet.v1.GreetService.Greet", { name: "Ada" });
+    expect(proxy.toJson("greet.v1.GreetService.Greet", response)).toEqual({ message: "Hi Ada" });
 
     const proxyStarted = await startGrpc(proxy);
     grpcServers.push(proxyStarted.server);
@@ -1345,7 +1573,7 @@ describe("projections", () => {
     );
     const proxyClient = new ProxyClient(proxyStarted.address, grpc.credentials.createInsecure());
     const native = await unaryCall(proxyClient, "greet", { name: "Grace" });
-    expect(proxy.toJson(proxy.tools.get("GreetService.Greet")!, native)).toEqual({ message: "Hi Grace" });
+    expect(proxy.toJson("greet.v1.GreetService.Greet", native)).toEqual({ message: "Hi Grace" });
 
     const protoPath = resolve(
       here,
@@ -1429,21 +1657,21 @@ describe("projections", () => {
         observed.push(response);
       },
     });
-    const response = await proxy.invoke("GreetService.Greet", { name: "Ada", mood: "MOOD_HAPPY" });
-    expect(proxy.toJson(proxy.tools.get("GreetService.Greet")!, response)).toEqual({
+    const response = await proxy.invoke("greet.v1.GreetService.Greet", { name: "Ada", mood: "MOOD_HAPPY" });
+    expect(proxy.toJson("greet.v1.GreetService.Greet", response)).toEqual({
       message: "REST Ada",
       mood: "MOOD_HAPPY",
     });
     expect(observed).toHaveLength(1);
     expect(observed[0].request.url).toContain("/v1/greet/Ada");
 
-    await expect(proxy.invoke("GreetService.Greet", { name: "Bad" })).rejects.toMatchObject({
+    await expect(proxy.invoke("greet.v1.GreetService.Greet", { name: "Bad" })).rejects.toMatchObject({
       code: "invalid_argument",
       message: "bad name",
     });
     expect(observed).toHaveLength(2);
 
-    await expect(proxy.invoke("GreetService.Greet", { name: "Cancel" })).rejects.toMatchObject({
+    await expect(proxy.invoke("greet.v1.GreetService.Greet", { name: "Cancel" })).rejects.toMatchObject({
       code: "canceled",
       message: "request canceled",
     });
@@ -1468,9 +1696,9 @@ describe("projections", () => {
 
     const responseBodyProxy = Server.fromBytes(toBinary(FileDescriptorSetSchema, fds));
     responseBodyProxy.connectHttp(`http://127.0.0.1:${address.port}`);
-    const wrapped = await responseBodyProxy.invoke("GreetService.Greet", { name: "ResponseBody" });
-    expect(responseBodyProxy.toJson(responseBodyProxy.tools.get("GreetService.Greet")!, wrapped)).toEqual({
-      response_text: "wrapped response",
+    const wrapped = await responseBodyProxy.invoke("greet.v1.GreetService.Greet", { name: "ResponseBody" });
+    expect(responseBodyProxy.toJson("greet.v1.GreetService.Greet", wrapped)).toEqual({
+      wireText: "wrapped response",
     });
   });
 });

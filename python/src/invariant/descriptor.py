@@ -37,7 +37,7 @@ class ParsedDescriptor:
 
             for i, msg_proto in enumerate(file_proto.message_type):
                 full_name = f"{package}.{msg_proto.name}" if package else msg_proto.name
-                self._parse_message(msg_proto, full_name, comments, (4, i))
+                self._parse_message(msg_proto, full_name, comments, (4, i), file_proto.syntax or "proto2")
 
             for i, svc_proto in enumerate(file_proto.service):
                 full_name = f"{package}.{svc_proto.name}" if package else svc_proto.name
@@ -64,6 +64,7 @@ class ParsedDescriptor:
         full_name: str,
         comments: dict[str, str],
         path_prefix: tuple[int, ...],
+        syntax: str,
     ) -> None:
         for i, enum_proto in enumerate(msg_proto.enum_type):
             enum_full_name = f"{full_name}.{enum_proto.name}"
@@ -71,7 +72,7 @@ class ParsedDescriptor:
 
         for i, nested_proto in enumerate(msg_proto.nested_type):
             nested_full_name = f"{full_name}.{nested_proto.name}"
-            self._parse_message(nested_proto, nested_full_name, comments, (*path_prefix, 3, i))
+            self._parse_message(nested_proto, nested_full_name, comments, (*path_prefix, 3, i), syntax)
 
         oneofs: list[invpb.OneofInfo] = []
         for i, oneof_proto in enumerate(msg_proto.oneof_decl):
@@ -97,7 +98,9 @@ class ParsedDescriptor:
                 type_name=field_proto.type_name.lstrip(".") if field_proto.type_name else "",
                 label=field_proto.label,
                 comment=comments.get(_path_key((*path_prefix, 2, i)), ""),
-                optional=field_proto.proto3_optional,
+                optional=field_proto.proto3_optional
+                or (syntax == "proto2" and field_proto.label == descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL),
+                json_name=field_proto.json_name,
             )
             if oneof_idx is not None:
                 field.oneof_index = oneof_idx

@@ -48,6 +48,8 @@ message GreetRequest {
   optional Mood mood = 2;
   // Optional metadata tags.
   map<string, string> tags = 3;
+  // Optional 64-bit sequence with an explicit ProtoJSON field name.
+  optional int64 account_sequence = 4 [json_name = "wireSequenceId"];
 }
 
 // Response from the Greet RPC.
@@ -58,6 +60,10 @@ message GreetResponse {
   Mood mood = 2;
   // Tags echoed back.
   map<string, string> tags = 3;
+  // A label with an explicit ProtoJSON field name.
+  string response_label = 4 [json_name = "wireDisplayLabel"];
+  // A 64-bit count emitted as a ProtoJSON string.
+  int64 response_count = 5 [json_name = "wireResponseCount"];
 }
 
 // A person in a group.

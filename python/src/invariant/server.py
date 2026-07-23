@@ -14,7 +14,7 @@ import os
 import sys
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from concurrent.futures import Executor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Protocol, cast
 
@@ -22,6 +22,15 @@ import grpc
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
 from invariant.descriptor import ParsedDescriptor
+from invariant.http_types import (
+    DEFAULT_HTTP_MESSAGE_BYTES,
+    ChannelOptions,
+    HTTPAuth,
+    HTTPHeaderProvider,
+    HTTPMetadataMapper,
+    HTTPResponseObserver,
+    default_http_metadata_mapper,
+)
 from invariant.projection_context import ProjectionContext
 from invariant.schema import SchemaGenerator
 from invariant.version import package_version
@@ -48,88 +57,7 @@ class _HandlerCallDetails:
     invocation_metadata: Any
 
 
-@dataclass
-class OutboundHTTPRequest:
-    """Outbound HTTP request metadata for dynamic header providers."""
-
-    method_path: str
-    method: str
-    url: str
-    body: bytes
-
-
-HTTPHeaderProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
-
-# Selects reviewed HTTP request values to expose as incoming gRPC metadata.
-# Invariant applies its reserved identity/authentication filter after this
-# callback, so even custom mappers cannot make caller-controlled authorization
-# headers trusted.
-HTTPMetadataMapper = Callable[[Mapping[str, str]], Sequence[tuple[str, str | bytes]]]
-
-# Returns extra query parameters to add to an outbound request — for APIs that
-# authenticate via the query string (an API key, or an HMAC signature +
-# timestamp computed over the request). Sees the fully-built request so it can
-# sign over the existing query/body. Symmetric to HTTPHeaderProvider.
-HTTPQueryProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
-
-
-@dataclass
-class OutboundHTTPResponse:
-    """Outbound HTTP response metadata for response observers.
-
-    `body` is the raw, undecoded response bytes exactly as received — before any
-    proto/JSON parsing — so an observer can archive the verbatim payload (e.g.
-    a raw response archive) independent of what the typed message models.
-    """
-
-    method_path: str
-    status_code: int
-    headers: dict[str, str]
-    body: bytes
-    duration_ms: float
-    success: bool
-    request: OutboundHTTPRequest
-
-
-# Called once per outbound HTTP response, success or error, after bytes are
-# received and before success bodies are parsed into typed messages.
-# Side-effecting (archival/metrics); its return value is ignored and exceptions
-# are swallowed so an observer can never break the call path.
-HTTPResponseObserver = Callable[[OutboundHTTPResponse], None]
-
-
-@dataclass(slots=True)
-class HTTPAuth:
-    """Per-connection outbound HTTP credentials.
-
-    Providers are called once per attempt with the fully-built request so
-    signatures and timestamps stay fresh across retries.
-    """
-
-    header_provider: HTTPHeaderProvider | None = None
-    query_provider: HTTPQueryProvider | None = None
-
-
-@dataclass(slots=True)
-class ChannelOptions:
-    """Transport options for ``connect_http``.
-
-    Names mirror gRPC channel args where there is a direct HTTP-client analog.
-    """
-
-    max_receive_message_size: int = 16 * 1024 * 1024
-    connect_timeout: float = 10.0
-    read_timeout: float = 10.0
-    write_timeout: float = 10.0
-    pool_timeout: float = 10.0
-    max_connections: int = 100
-    max_keepalive_connections: int = 20
-    keepalive_expiry: float = 5.0
-    proxy: str | None = None
-    http2: bool = False
-
-
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class MethodConfig:
     """Per-method HTTP wire limits; zero values inherit server defaults."""
 
@@ -141,17 +69,23 @@ class MethodConfig:
 
 @dataclass(frozen=True, slots=True)
 class Tool:
-    """A single registered RPC method projected as a tool."""
+    """Immutable public metadata for one projected RPC method."""
 
     name: str
     description: str
     input_schema: dict
-    handler: Callable
     input_type: str
     output_type: str
     service_full_name: str
     method_name: str
     server_streaming: bool = False
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Tool(Tool):
+    """Internal execution state captured from generated gRPC registration."""
+
+    handler: Callable
     request_factory: Callable[[], Any] | None = None
     rpc_handler: _RpcMethodHandler | None = None
 
@@ -160,6 +94,18 @@ class Tool:
         if self.request_factory is None:
             raise RuntimeError(f"No request factory registered for {self.service_full_name}/{self.method_name}")
         return self.request_factory()
+
+    def public_metadata(self) -> Tool:
+        return Tool(
+            name=self.name,
+            description=self.description,
+            input_schema=copy.deepcopy(self.input_schema),
+            input_type=self.input_type,
+            output_type=self.output_type,
+            service_full_name=self.service_full_name,
+            method_name=self.method_name,
+            server_streaming=self.server_streaming,
+        )
 
 
 def _is_async_callable(fn: Any) -> bool:
@@ -187,30 +133,20 @@ class Server:
         *,
         fds: descriptor_pb2.FileDescriptorSet | None = None,
     ):
-        self.parsed = parsed
-        self.schema_gen = SchemaGenerator(parsed)
-        self._tools: dict[str, Tool] = {}
-        self._native_tools: dict[tuple[str, str], Tool] = {}
+        self._parsed = copy.deepcopy(parsed)
+        self._schema_gen = SchemaGenerator(self._parsed)
+        self._tools: dict[str, _Tool] = {}
+        self._native_tools: dict[tuple[str, str], _Tool] = {}
         self._fds = fds
         self._descriptor_pool = _build_descriptor_pool(fds) if fds is not None else None
         self._registered_services: dict[str, dict[str, _RpcMethodHandler]] = {}
         self._http_connections: list[Any] = []
         self._shared_interceptors: list[grpc.aio.ServerInterceptor] = []
-        # Body-size safety caps. Defaults are tight; raise per-server when the
-        # application has a legitimate need (e.g. accepting large uploads).
-        # Mirrors Go's `httpMaxUnaryRequest` / `connectStreamMaxRequest` fields.
-        from invariant.projections.http import CONNECT_STREAM_MAX_REQUEST as _STREAM_REQUEST_DEFAULT
-        from invariant.projections.http import CONNECT_STREAM_MAX_RESPONSE as _STREAM_RESPONSE_DEFAULT
-        from invariant.projections.http import HTTP_MAX_UNARY_REQUEST as _UNARY_REQUEST_DEFAULT
-        from invariant.projections.http import HTTP_MAX_UNARY_RESPONSE as _UNARY_RESPONSE_DEFAULT
-
-        self._http_max_unary_request: int = _UNARY_REQUEST_DEFAULT
-        self._http_max_unary_response: int = _UNARY_RESPONSE_DEFAULT
-        self._connect_stream_max_request: int = _STREAM_REQUEST_DEFAULT
-        self._connect_stream_max_response: int = _STREAM_RESPONSE_DEFAULT
+        self._http_max_unary_request = DEFAULT_HTTP_MESSAGE_BYTES
+        self._http_max_unary_response = DEFAULT_HTTP_MESSAGE_BYTES
+        self._connect_stream_max_request = DEFAULT_HTTP_MESSAGE_BYTES
+        self._connect_stream_max_response = DEFAULT_HTTP_MESSAGE_BYTES
         self._method_configs: dict[str, MethodConfig] = {}
-        from invariant.projections.http import default_http_metadata_mapper
-
         self._http_metadata_mapper: HTTPMetadataMapper = default_http_metadata_mapper
         self._includes: list[str] = []
         self._excludes: list[str] = []
@@ -223,11 +159,19 @@ class Server:
         self._grpc_server_built = False
 
     @property
+    def parsed(self) -> ParsedDescriptor:
+        """Return a detached snapshot of the parsed discovery metadata."""
+        return copy.deepcopy(self._parsed)
+
+    @property
+    def schema_gen(self) -> SchemaGenerator:
+        """Return a schema generator backed by detached discovery metadata."""
+        return SchemaGenerator(self.parsed)
+
+    @property
     def tools(self) -> Mapping[str, Tool]:
         """Return an immutable snapshot of projected tool metadata."""
-        snapshot = {
-            name: replace(tool, input_schema=copy.deepcopy(tool.input_schema)) for name, tool in self._tools.items()
-        }
+        snapshot = {name: tool.public_metadata() for name, tool in self._tools.items()}
         return MappingProxyType(snapshot)
 
     def _freeze(self) -> None:
@@ -301,9 +245,7 @@ class Server:
         if n < 0:
             raise ValueError("HTTP unary request limit must be non-negative")
         if n == 0:
-            from invariant.projections.http import HTTP_MAX_UNARY_REQUEST as _UNARY_DEFAULT
-
-            n = _UNARY_DEFAULT
+            n = DEFAULT_HTTP_MESSAGE_BYTES
         self._http_max_unary_request = n
 
     def set_max_unary_response_bytes(self, n: int) -> None:
@@ -312,9 +254,7 @@ class Server:
         if n < 0:
             raise ValueError("HTTP unary response limit must be non-negative")
         if n == 0:
-            from invariant.projections.http import HTTP_MAX_UNARY_RESPONSE
-
-            n = HTTP_MAX_UNARY_RESPONSE
+            n = DEFAULT_HTTP_MESSAGE_BYTES
         self._http_max_unary_response = n
 
     def set_max_stream_request_bytes(self, n: int) -> None:
@@ -326,9 +266,7 @@ class Server:
         if n < 0:
             raise ValueError("HTTP stream request limit must be non-negative")
         if n == 0:
-            from invariant.projections.http import CONNECT_STREAM_MAX_REQUEST as _STREAM_DEFAULT
-
-            n = _STREAM_DEFAULT
+            n = DEFAULT_HTTP_MESSAGE_BYTES
         self._connect_stream_max_request = n
 
     def set_max_stream_response_bytes(self, n: int) -> None:
@@ -337,9 +275,7 @@ class Server:
         if n < 0:
             raise ValueError("HTTP stream response limit must be non-negative")
         if n == 0:
-            from invariant.projections.http import CONNECT_STREAM_MAX_RESPONSE
-
-            n = CONNECT_STREAM_MAX_RESPONSE
+            n = DEFAULT_HTTP_MESSAGE_BYTES
         self._connect_stream_max_response = n
 
     def configure_method(self, method_path: str, config: MethodConfig) -> None:
@@ -355,18 +291,21 @@ class Server:
             )
         ):
             raise ValueError("Method byte limits must be non-negative")
-        self._method_configs[method_path] = config
+        self._method_configs[method_path] = MethodConfig(
+            max_unary_request_bytes=config.max_unary_request_bytes,
+            max_unary_response_bytes=config.max_unary_response_bytes,
+            max_stream_request_bytes=config.max_stream_request_bytes,
+            max_stream_response_bytes=config.max_stream_response_bytes,
+        )
 
     def use_http_metadata_mapper(self, mapper: HTTPMetadataMapper | None) -> None:
         """Replace the reviewed inbound HTTP-to-gRPC metadata mapper."""
         self._require_configuration_open("HTTP metadata mapper")
         if mapper is None:
-            from invariant.projections.http import default_http_metadata_mapper
-
             mapper = default_http_metadata_mapper
         self._http_metadata_mapper = mapper
 
-    def _method_limit(self, tool: Tool, field: str, default: int) -> int:
+    def _method_limit(self, tool: _Tool, field: str, default: int) -> int:
         config = self._method_configs.get(f"/{tool.service_full_name}/{tool.method_name}")
         if config is not None:
             value = getattr(config, field)
@@ -422,7 +361,7 @@ class Server:
         async for msg in self._invoke_stream(tool, request, context):
             yield msg
 
-    async def _invoke(self, tool: Tool, request: Any, context: Any) -> Any:
+    async def _invoke(self, tool: _Tool, request: Any, context: Any) -> Any:
         """Core proto-in/proto-out dispatch. Runs the interceptor chain then
         awaits tool.handler.
 
@@ -466,7 +405,7 @@ class Server:
 
     async def _invoke_stream(
         self,
-        tool: Tool,
+        tool: _Tool,
         request: Any,
         context: Any,
     ) -> AsyncIterator[Any]:
@@ -513,8 +452,13 @@ class Server:
                 context.finish(cancelled=isinstance(context, ProjectionContext) and context.cancelled())
 
     async def _intercepted_rpc_handler(self, full_method: str, context: Any) -> _RpcMethodHandler | None:
-        invocation_metadata = ()
-        if context is not None:
+        invocation_metadata: grpc.aio.Metadata | Sequence[tuple[str, str | bytes]] = ()
+        if isinstance(context, ProjectionContext):
+            # HandlerCallDetails accepts the already-normalized metadata
+            # sequence. Keep the public ServicerContext Metadata allocation
+            # lazy unless application code actually requests it.
+            invocation_metadata = context._invocation_metadata
+        elif context is not None:
             metadata_fn = getattr(context, "invocation_metadata", None)
             if callable(metadata_fn):
                 metadata = metadata_fn()
@@ -522,7 +466,7 @@ class Server:
                     invocation_metadata = metadata
         details = _HandlerCallDetails(full_method, invocation_metadata)
 
-        async def dispatch(index: int, call_details: grpc.HandlerCallDetails) -> grpc.RpcMethodHandler:
+        async def dispatch(index: int, call_details: grpc.HandlerCallDetails) -> grpc.RpcMethodHandler | None:
             if index == len(self._shared_interceptors):
                 # grpcio's annotation omits None even though its documented
                 # interceptor contract permits a failed handler lookup.
@@ -530,7 +474,7 @@ class Server:
             interceptor = self._shared_interceptors[index]
 
             async def continuation(next_details: grpc.HandlerCallDetails) -> grpc.RpcMethodHandler:
-                return await dispatch(index + 1, next_details)
+                return cast(grpc.RpcMethodHandler, await dispatch(index + 1, next_details))
 
             return await interceptor.intercept_service(continuation, call_details)
 
@@ -589,9 +533,9 @@ class Server:
         callables used by every projection.
         """
         self._require_registration_open(f"service {service_name!r}")
-        svc_info = self.parsed.services.get(service_name)
+        svc_info = self._parsed.services.get(service_name)
         if svc_info is None:
-            available = sorted(self.parsed.services)
+            available = sorted(self._parsed.services)
             raise ValueError(f"Service '{service_name}' not found in descriptor. Available: {available}")
         if service_name in self._registered_services:
             raise ValueError(f"Service '{service_name}' is already registered")
@@ -656,18 +600,18 @@ class Server:
         # Keep the complete generated service for native gRPC, including
         # client-streaming and bidi methods. Only unary and server-streaming
         # methods enter the optional projection catalog below.
-        native_tools: list[Tool] = []
-        new_tools: list[Tool] = []
+        native_tools: list[_Tool] = []
+        new_tools: list[_Tool] = []
         for method_name, method_info in svc_info.methods.items():
             if method_info.client_streaming:
                 continue
             rpc_handler, request_factory = validated[method_name]
             terminal = _rpc_terminal(rpc_handler)
-            tool_name = f"{svc_info.name}.{method_name}"
-            tool = Tool(
+            tool_name = f"{service_name}.{method_name}"
+            tool = _Tool(
                 name=tool_name,
                 description=method_info.comment or tool_name,
-                input_schema=self.schema_gen.message_to_schema(method_info.input_type),
+                input_schema=self._schema_gen.message_to_schema(method_info.input_type),
                 handler=terminal,
                 input_type=method_info.input_type,
                 output_type=method_info.output_type,
@@ -694,8 +638,8 @@ class Server:
             self._add_tool(tool)
         self._registration_started = True
 
-    def _add_tool(self, tool: Tool) -> None:
-        """Register a Tool, rejecting duplicate tool names."""
+    def _add_tool(self, tool: _Tool) -> None:
+        """Register an internal tool, rejecting duplicate tool names."""
         existing = self._tools.get(tool.name)
         if existing is not None:
             raise ValueError(
@@ -716,21 +660,21 @@ class Server:
         pool = self._require_descriptor_pool("connect_grpc")
 
         if service_name:
-            svc_info = self.parsed.services.get(service_name)
+            svc_info = self._parsed.services.get(service_name)
             if svc_info is None:
-                available = list(self.parsed.services.keys())
+                available = list(self._parsed.services.keys())
                 raise ValueError(f"Service '{service_name}' not found in descriptor. Available: {available}")
             services = {service_name: svc_info}
         else:
-            services = self.parsed.services
+            services = self._parsed.services
 
         duplicate_services = sorted(set(services) & self._registered_services.keys())
         if duplicate_services:
             raise ValueError(f"Services are already registered: {duplicate_services}")
 
         staged_services: dict[str, dict[str, _RpcMethodHandler]] = {}
-        staged_native_tools: list[Tool] = []
-        staged_tools: list[Tool] = []
+        staged_native_tools: list[_Tool] = []
+        staged_tools: list[_Tool] = []
         for svc_full_name, svc_info in services.items():
             service_handlers: dict[str, _RpcMethodHandler] = {}
             for method_name, method_info in svc_info.methods.items():
@@ -743,7 +687,7 @@ class Server:
                 resp_desc = pool.FindMessageTypeByName(method_info.output_type)
                 resp_class = message_factory.GetMessageClass(resp_desc)
 
-                stub = channel.unary_unary(
+                stub: Any = channel.unary_unary(
                     method_path,
                     request_serializer=lambda msg: msg.SerializeToString(),
                     response_deserializer=resp_class.FromString,
@@ -756,17 +700,20 @@ class Server:
                     return remote_handler
 
                 handler = _make_handler(stub, method_path)
-                rpc_handler = grpc.unary_unary_rpc_method_handler(
-                    handler,
-                    request_deserializer=req_class.FromString,
-                    response_serializer=lambda msg: msg.SerializeToString(),
+                rpc_handler: _RpcMethodHandler = cast(
+                    _RpcMethodHandler,
+                    grpc.unary_unary_rpc_method_handler(
+                        handler,
+                        request_deserializer=req_class.FromString,
+                        response_serializer=lambda msg: msg.SerializeToString(),
+                    ),
                 )
                 service_handlers[method_name] = rpc_handler
-                tool_name = f"{svc_info.name}.{method_name}"
-                tool = Tool(
+                tool_name = f"{svc_full_name}.{method_name}"
+                tool = _Tool(
                     name=tool_name,
                     description=method_info.comment or tool_name,
-                    input_schema=self.schema_gen.message_to_schema(method_info.input_type),
+                    input_schema=self._schema_gen.message_to_schema(method_info.input_type),
                     handler=handler,
                     input_type=method_info.input_type,
                     output_type=method_info.output_type,
@@ -827,20 +774,20 @@ class Server:
         )
 
         if service_name:
-            svc_info = self.parsed.services.get(service_name)
+            svc_info = self._parsed.services.get(service_name)
             if svc_info is None:
-                available = list(self.parsed.services.keys())
+                available = list(self._parsed.services.keys())
                 raise ValueError(f"Service '{service_name}' not found in descriptor. Available: {available}")
             services = {service_name: svc_info}
         else:
-            services = self.parsed.services
+            services = self._parsed.services
         duplicate_services = sorted(set(services) & self._registered_services.keys())
         if duplicate_services:
             raise ValueError(f"Services are already registered: {duplicate_services}")
 
         rules = http_rules_by_method_path(self._fds)
         pool = self._require_descriptor_pool("connect_http")
-        staged_specs: list[tuple[Any, Any, str, str, str, Any, Any, bool]] = []
+        staged_specs: list[tuple[Any, str, str, str, Any, Any, bool]] = []
         staged_names: set[str] = set()
         for svc_full_name, svc_info in services.items():
             for method_name, method_info in svc_info.methods.items():
@@ -852,7 +799,7 @@ class Server:
                 req_class = message_factory.GetMessageClass(req_desc)
                 pool.FindMessageTypeByName(method_info.output_type)
                 binding = client_binding_for_method(rules.get(method_path), svc_full_name, method_name)
-                tool_name = f"{svc_info.name}.{method_name}"
+                tool_name = f"{svc_full_name}.{method_name}"
                 projected = self._should_include(svc_full_name, method_name)
                 if projected:
                     if tool_name in staged_names:
@@ -865,7 +812,7 @@ class Server:
                             f"cannot register {svc_full_name!r}."
                         )
                 staged_specs.append(
-                    (svc_info, method_info, svc_full_name, method_name, method_path, req_class, binding, projected)
+                    (method_info, svc_full_name, method_name, method_path, req_class, binding, projected)
                 )
 
         connection = HTTPConnection(
@@ -876,10 +823,9 @@ class Server:
             observer=observer,
         )
         staged_services: dict[str, dict[str, _RpcMethodHandler]] = {}
-        staged_native_tools: list[Tool] = []
-        staged_tools: list[Tool] = []
+        staged_native_tools: list[_Tool] = []
+        staged_tools: list[_Tool] = []
         for (
-            svc_info,
             method_info,
             svc_full_name,
             method_name,
@@ -896,17 +842,20 @@ class Server:
                 input_type=method_info.input_type,
                 pool=pool,
             )
-            rpc_handler = grpc.unary_unary_rpc_method_handler(
-                handler,
-                request_deserializer=req_class.FromString,
-                response_serializer=lambda message: message.SerializeToString(),
+            rpc_handler: _RpcMethodHandler = cast(
+                _RpcMethodHandler,
+                grpc.unary_unary_rpc_method_handler(
+                    handler,
+                    request_deserializer=req_class.FromString,
+                    response_serializer=lambda message: message.SerializeToString(),
+                ),
             )
             staged_services.setdefault(svc_full_name, {})[method_name] = rpc_handler
-            tool_name = f"{svc_info.name}.{method_name}"
-            tool = Tool(
+            tool_name = f"{svc_full_name}.{method_name}"
+            tool = _Tool(
                 name=tool_name,
                 description=method_info.comment or tool_name,
-                input_schema=self.schema_gen.message_to_schema(method_info.input_type),
+                input_schema=self._schema_gen.message_to_schema(method_info.input_type),
                 handler=handler,
                 input_type=method_info.input_type,
                 output_type=method_info.output_type,
@@ -919,6 +868,9 @@ class Server:
             if projected:
                 staged_tools.append(tool)
 
+        # Construct and validate the transport only after handler staging has
+        # succeeded, so a registration failure cannot strand an AsyncClient.
+        _ = connection.client
         self._http_connections.append(connection)
         self._registered_services.update(staged_services)
         for tool in staged_native_tools:
@@ -1146,7 +1098,7 @@ class Server:
             return result
         from google.protobuf import json_format as _jf
 
-        return _jf.MessageToDict(result, preserving_proto_field_name=True)
+        return _jf.MessageToDict(result)
 
     async def stop(self, grace: float | None = 5.0) -> None:
         """Gracefully stop owned servers and close owned HTTP clients.
@@ -1255,7 +1207,7 @@ def _rpc_terminal(handler: _RpcMethodHandler) -> Callable:
 
 def _build_descriptor_pool(fds: descriptor_pb2.FileDescriptorSet) -> descriptor_pool.DescriptorPool:
     """Build an isolated descriptor registry without relying on pb2 import order."""
-    pool = descriptor_pool.DescriptorPool()  # ty: ignore[possibly-missing-implicit-call]
+    pool = descriptor_pool.DescriptorPool()
     pending: dict[str, descriptor_pb2.FileDescriptorProto] = {}
     for file_proto in fds.file:
         if not file_proto.name:

@@ -57,13 +57,13 @@ describe("cross-projection HandlerContext semantics", () => {
       },
     });
 
-    await server.invoke("GreetService.Greet", { name: "invoke" });
-    await runCli(server, ["GreetService", "Greet", "-r", '{"name":"cli"}']);
+    await server.invoke("greet.v1.GreetService.Greet", { name: "invoke" });
+    await runCli(server, ["greet.v1.GreetService", "Greet", "-r", '{"name":"cli"}']);
     await mcpDispatch(server, {
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
-      params: { name: "GreetService.Greet", arguments: { name: "mcp" } },
+      params: { name: "greet.v1.GreetService.Greet", arguments: { name: "mcp" } },
     });
 
     expect(protocols).toEqual(["in-process", "cli", "mcp"]);
@@ -107,7 +107,9 @@ describe("cross-projection HandlerContext semantics", () => {
       url: "in-process:///greet.v1.GreetService/Greet",
       requestSignal: canceled.signal,
     });
-    await expect(server.invoke("GreetService.Greet", { name: "canceled" }, unaryCanceled)).rejects.toMatchObject({
+    await expect(
+      server.invoke("greet.v1.GreetService.Greet", { name: "canceled" }, unaryCanceled),
+    ).rejects.toMatchObject({
       code: Code.Canceled,
     });
 
@@ -121,7 +123,7 @@ describe("cross-projection HandlerContext semantics", () => {
     });
     const consumeCanceled = async () => {
       for await (const _message of server.invokeStream(
-        "GreetService.StreamGreet",
+        "greet.v1.GreetService.StreamGreet",
         { name: "canceled", count: 1 },
         streamCanceled,
       )) {
@@ -139,7 +141,9 @@ describe("cross-projection HandlerContext semantics", () => {
       url: "in-process:///greet.v1.GreetService/Greet",
       timeoutMs: 5,
     });
-    await expect(server.invoke("GreetService.Greet", { name: "deadline" }, unaryExpired)).rejects.toMatchObject({
+    await expect(
+      server.invoke("greet.v1.GreetService.Greet", { name: "deadline" }, unaryExpired),
+    ).rejects.toMatchObject({
       code: Code.DeadlineExceeded,
     });
 
@@ -153,7 +157,7 @@ describe("cross-projection HandlerContext semantics", () => {
     });
     const consumeExpired = async () => {
       for await (const _message of server.invokeStream(
-        "GreetService.StreamGreet",
+        "greet.v1.GreetService.StreamGreet",
         { name: "deadline", count: 1 },
         streamExpired,
       )) {
@@ -212,7 +216,7 @@ describe("cross-projection HandlerContext semantics", () => {
     });
     const consume = async () => {
       for await (const _message of server.invokeStream(
-        "GreetService.StreamGreet",
+        "greet.v1.GreetService.StreamGreet",
         { name: "cancel", count: 1 },
         context,
       )) {
@@ -252,13 +256,13 @@ describe("cross-projection HandlerContext semantics", () => {
       return next(request);
     });
 
-    await server.invoke("GreetService.Greet", { name: "invoke" });
-    await runCli(server, ["GreetService", "Greet", "-r", '{"name":"cli"}']);
+    await server.invoke("greet.v1.GreetService.Greet", { name: "invoke" });
+    await runCli(server, ["greet.v1.GreetService", "Greet", "-r", '{"name":"cli"}']);
     await mcpDispatch(server, {
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
-      params: { name: "GreetService.Greet", arguments: { name: "mcp" } },
+      params: { name: "greet.v1.GreetService.Greet", arguments: { name: "mcp" } },
     });
 
     const base = await startHTTP(server, httpServers);
@@ -670,7 +674,7 @@ describe("cross-projection HandlerContext semantics", () => {
         jsonrpc: "2.0",
         id: 14,
         method: "tools/call",
-        params: { name: "GreetService.Greet", arguments: [] },
+        params: { name: "greet.v1.GreetService.Greet", arguments: [] },
       },
     ]) {
       const invalidParams = await fetch(`${base}/mcp`, {
@@ -689,7 +693,7 @@ describe("cross-projection HandlerContext semantics", () => {
         jsonrpc: "2.0",
         id: 8,
         method: "tools/call",
-        params: { name: "GreetService.Greet", arguments: { name: "Ada" } },
+        params: { name: "greet.v1.GreetService.Greet", arguments: { name: "Ada" } },
       }),
     });
     expect(toolCall.status).toBe(200);
@@ -718,6 +722,96 @@ describe("cross-projection HandlerContext semantics", () => {
     expect(await boundedParseError.text()).toBe("");
   });
 
+  test("bounds MCP HTTP server-stream collection before handler completion", async () => {
+    let produced = 0;
+    let closed = 0;
+    const server = Server.fromDescriptor(descriptorPath);
+    server.setMaxUnaryResponseBytes(512);
+    server.register(GreetService, {
+      streamGreet: (request) =>
+        (async function* () {
+          try {
+            for (let index = 0; index < request.count; index += 1) {
+              produced += 1;
+              yield { message: `chunk-${index}-xxxxxxxxxxxxxxxx` };
+            }
+            if (request.name === "error") {
+              throw new ConnectError("x".repeat(2048), Code.InvalidArgument);
+            }
+          } finally {
+            closed += 1;
+          }
+        })(),
+    });
+
+    const direct = await mcpDispatch(server, {
+      jsonrpc: "2.0",
+      id: "direct",
+      method: "tools/call",
+      params: {
+        name: "greet.v1.GreetService.StreamGreet",
+        arguments: { name: "direct", count: 20 },
+      },
+    });
+    if (direct === undefined) {
+      throw new Error("direct MCP tool call returned no response");
+    }
+    expect((direct.result as { content: unknown[] }).content).toHaveLength(20);
+    expect(produced).toBe(20);
+    expect(closed).toBe(1);
+
+    const base = await startHTTP(server, httpServers);
+    const response = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "bounded",
+        method: "tools/call",
+        params: {
+          name: "greet.v1.GreetService.StreamGreet",
+          arguments: { name: "bounded", count: 1000 },
+        },
+      }),
+    });
+    expect(response.status).toBe(429);
+    const body = new Uint8Array(await response.arrayBuffer());
+    expect(body.byteLength).toBeLessThanOrEqual(512);
+    expect(JSON.parse(Buffer.from(body).toString("utf8"))).toMatchObject({ code: "resource_exhausted" });
+    expect(produced).toBeGreaterThan(20);
+    expect(produced).toBeLessThan(1020);
+    expect(closed).toBe(2);
+
+    const producedBeforeError = produced;
+    const errorResponse = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "bounded-error",
+        method: "tools/call",
+        params: {
+          name: "greet.v1.GreetService.StreamGreet",
+          arguments: { name: "error", count: 1 },
+        },
+      }),
+    });
+    expect(errorResponse.status).toBe(429);
+    const errorBody = new Uint8Array(await errorResponse.arrayBuffer());
+    expect(errorBody.byteLength).toBeLessThanOrEqual(512);
+    expect(JSON.parse(Buffer.from(errorBody).toString("utf8"))).toMatchObject({ code: "resource_exhausted" });
+    expect(produced).toBe(producedBeforeError + 1);
+    expect(closed).toBe(3);
+  });
+
   test("subtracts MCP request-body time from the handler deadline", async () => {
     let observedTimeoutMs = Number.NaN;
     const server = Server.fromDescriptor(descriptorPath);
@@ -733,7 +827,7 @@ describe("cross-projection HandlerContext semantics", () => {
         jsonrpc: "2.0",
         id: 1,
         method: "tools/call",
-        params: { name: "GreetService.Greet", arguments: { name: "Ada" } },
+        params: { name: "greet.v1.GreetService.Greet", arguments: { name: "Ada" } },
       }),
     );
     const response = await new Promise<{ status: number; body: string }>((resolveResponse, rejectResponse) => {
@@ -850,8 +944,10 @@ describe("cross-projection HandlerContext semantics", () => {
       timeoutMs: 10_000,
       requestHeader: { "x-request-id": "proxy-123", "x-comma": "left,right" },
     });
-    const response = await proxy.invoke("GreetService.Greet", { name: "Ada" }, context);
-    expect(proxy.toJson(proxy.tools.get("GreetService.Greet")!, response)).toMatchObject({ message: "Hi Ada" });
+    const response = await proxy.invoke("greet.v1.GreetService.Greet", { name: "Ada" }, context);
+    expect(proxy.toJson("greet.v1.GreetService.Greet", response)).toMatchObject({
+      message: "Hi Ada",
+    });
     expect(context.responseHeader.get("x-upstream-header")).toBe("present");
     expect(context.responseTrailer.get("x-upstream-trailer")).toBe("present");
 
@@ -864,14 +960,16 @@ describe("cross-projection HandlerContext semantics", () => {
       timeoutMs: 10_000,
       requestHeader: { "x-request-id": "proxy-123", "x-invalid-bin": "not-base64!" },
     });
-    await expect(proxy.invoke("GreetService.Greet", { name: "invalid" }, invalidContext)).rejects.toMatchObject({
+    await expect(
+      proxy.invoke("greet.v1.GreetService.Greet", { name: "invalid" }, invalidContext),
+    ).rejects.toMatchObject({
       code: Code.InvalidArgument,
     });
     invalidContext.abort();
 
     let thrown: unknown;
     try {
-      await proxy.invoke("GreetService.Greet", { name: "status" }, context);
+      await proxy.invoke("greet.v1.GreetService.Greet", { name: "status" }, context);
     } catch (error) {
       thrown = error;
     }
@@ -974,8 +1072,8 @@ describe("cross-projection HandlerContext semantics", () => {
       timeoutMs: 10_000,
       requestHeader,
     });
-    const success = await proxy.invoke("GreetService.Greet", { name: "Ada" }, successContext);
-    expect(proxy.toJson(proxy.tools.get("GreetService.Greet")!, success)).toMatchObject({ message: "Hi Ada" });
+    const success = await proxy.invoke("greet.v1.GreetService.Greet", { name: "Ada" }, successContext);
+    expect(proxy.toJson("greet.v1.GreetService.Greet", success)).toMatchObject({ message: "Hi Ada" });
     expect(successContext.responseHeader.get("x-upstream-header")).toBe("present");
     expect(successContext.responseHeader.get("set-cookie")).toBeNull();
     successContext.abort();
@@ -991,7 +1089,7 @@ describe("cross-projection HandlerContext semantics", () => {
     });
     let remoteError: unknown;
     try {
-      await proxy.invoke("GreetService.Greet", { name: "status" }, errorContext);
+      await proxy.invoke("greet.v1.GreetService.Greet", { name: "status" }, errorContext);
     } catch (error) {
       remoteError = error;
     }
@@ -1109,7 +1207,7 @@ describe("cross-projection HandlerContext semantics", () => {
       requestSignal: cancelController.signal,
     });
     preparePendingRequest();
-    const canceledCall = proxy.invoke("GreetService.Greet", { name: "Cancel" }, cancelContext);
+    const canceledCall = proxy.invoke("greet.v1.GreetService.Greet", { name: "Cancel" }, cancelContext);
     await requestEntered;
     cancelController.abort();
     await expect(canceledCall).rejects.toMatchObject({ code: Code.Canceled });
@@ -1125,7 +1223,7 @@ describe("cross-projection HandlerContext semantics", () => {
       timeoutMs: 100,
     });
     preparePendingRequest();
-    const deadlineCall = proxy.invoke("GreetService.Greet", { name: "Deadline" }, deadlineContext);
+    const deadlineCall = proxy.invoke("greet.v1.GreetService.Greet", { name: "Deadline" }, deadlineContext);
     await requestEntered;
     await expect(deadlineCall).rejects.toMatchObject({ code: Code.DeadlineExceeded });
     await responseClosed;
@@ -1140,13 +1238,13 @@ describe("cross-projection HandlerContext semantics", () => {
       timeoutMs: 10_000,
     });
     preparePendingRequest();
-    const configuredCall = proxy.invoke("GreetService.Greet", { name: "Configured" }, configuredContext);
+    const configuredCall = proxy.invoke("greet.v1.GreetService.Greet", { name: "Configured" }, configuredContext);
     await requestEntered;
     await expect(configuredCall).rejects.toMatchObject({ code: "deadline_exceeded" });
     await responseClosed;
     configuredContext.abort();
 
-    await expect(proxy.invoke("GreetService.Greet", { name: "Oversized" })).rejects.toMatchObject({
+    await expect(proxy.invoke("greet.v1.GreetService.Greet", { name: "Oversized" })).rejects.toMatchObject({
       code: "resource_exhausted",
     });
     expect(observedBodies.at(-1)?.byteLength).toBe(64);
@@ -1173,8 +1271,8 @@ describe("cross-projection HandlerContext semantics", () => {
         readTimeoutMs: 1_500_000_000,
       },
     });
-    const response = await proxy.invoke("GreetService.Greet", { name: "Long" });
-    expect(proxy.toJson(proxy.tools.get("GreetService.Greet")!, response)).toMatchObject({
+    const response = await proxy.invoke("greet.v1.GreetService.Greet", { name: "Long" });
+    expect(proxy.toJson("greet.v1.GreetService.Greet", response)).toMatchObject({
       message: "Hi Long",
     });
   });
@@ -1196,7 +1294,7 @@ describe("cross-projection HandlerContext semantics", () => {
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
-      params: { name: "GreetService.Greet", arguments: { name: "status" } },
+      params: { name: "greet.v1.GreetService.Greet", arguments: { name: "status" } },
     })) as {
       result: {
         error: {
@@ -1317,7 +1415,7 @@ describe("MCP stdio", () => {
         jsonrpc: "2.0",
         id: 11,
         method: "tools/call",
-        params: { name: "GreetService.Greet", arguments: [] },
+        params: { name: "greet.v1.GreetService.Greet", arguments: [] },
       },
     ]) {
       await expect(mcpDispatch(server, message)).resolves.toMatchObject({
@@ -1432,7 +1530,7 @@ describe("MCP stdio", () => {
           jsonrpc: "2.0",
           id: 7,
           method: "tools/call",
-          params: { name: "GreetService.Greet", arguments: { name: "wait" } },
+          params: { name: "greet.v1.GreetService.Greet", arguments: { name: "wait" } },
         })}\n`;
         await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
         yield `${JSON.stringify({
@@ -1456,7 +1554,7 @@ describe("Protovalidate", () => {
 
     let unaryError: unknown;
     try {
-      await server.invoke("GreetService.Greet", { name: "" });
+      await server.invoke("greet.v1.GreetService.Greet", { name: "" });
     } catch (error) {
       unaryError = error;
     }
@@ -1468,7 +1566,7 @@ describe("Protovalidate", () => {
 
     let streamError: unknown;
     try {
-      for await (const _message of server.invokeStream("GreetService.StreamGreet", { name: "", count: 1 })) {
+      for await (const _message of server.invokeStream("greet.v1.GreetService.StreamGreet", { name: "", count: 1 })) {
         // Validation must fail before the generated handler emits a message.
       }
     } catch (error) {

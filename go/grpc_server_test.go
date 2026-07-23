@@ -87,7 +87,7 @@ func TestNativeGRPCViaConnectGRPC(t *testing.T) {
 
 	client := connectServer(t, addr)
 
-	result, err := client.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"E2E"}`})
+	result, err := client.cli(t.Context(), []string{"greet.v1.GreetService", "Greet", "-r", `{"name":"E2E"}`})
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, E2E")
 }

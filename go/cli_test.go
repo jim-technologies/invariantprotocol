@@ -23,7 +23,7 @@ func cliServer(t *testing.T) *Server {
 
 func TestCLIBasic(t *testing.T) {
 	srv := cliServer(t)
-	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"Alice"}`})
+	result, err := srv.cli(t.Context(), []string{"greet.v1.GreetService", "Greet", "-r", `{"name":"Alice"}`})
 	require.NoError(t, err)
 
 	var data map[string]any
@@ -33,14 +33,14 @@ func TestCLIBasic(t *testing.T) {
 
 func TestCLIInlineInvalidJSON(t *testing.T) {
 	srv := cliServer(t)
-	_, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", "not json"})
+	_, err := srv.cli(t.Context(), []string{"greet.v1.GreetService", "Greet", "-r", "not json"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot parse inline value as JSON")
 }
 
 func TestCLIUnknownFieldRejected(t *testing.T) {
 	srv := cliServer(t)
-	_, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"Alice","extra":"x"}`})
+	_, err := srv.cli(t.Context(), []string{"greet.v1.GreetService", "Greet", "-r", `{"name":"Alice","extra":"x"}`})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown field")
 
@@ -51,7 +51,7 @@ func TestCLIUnknownFieldRejected(t *testing.T) {
 
 func TestCLINoRequest(t *testing.T) {
 	srv := cliServer(t)
-	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet"})
+	result, err := srv.cli(t.Context(), []string{"greet.v1.GreetService", "Greet"})
 	require.NoError(t, err)
 	assert.NotEmpty(t, result)
 }
@@ -61,7 +61,7 @@ func TestCLINoArgs(t *testing.T) {
 	result, err := srv.cli(t.Context(), nil)
 	require.NoError(t, err)
 	assert.Contains(t, result, "Usage:")
-	assert.Contains(t, result, "GreetService")
+	assert.Contains(t, result, "greet.v1.GreetService")
 	assert.Contains(t, result, "Greet")
 }
 
@@ -71,12 +71,14 @@ func TestCLIHelpFlag(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result, "Usage:")
 	assert.Contains(t, result, "Available methods:")
+	assert.Contains(t, result, "name                 string     (required)")
+	assert.Contains(t, result, "MOOD_UNSPECIFIED|MOOD_HAPPY|MOOD_SAD")
 }
 
 func TestCLIWithEnumAndTags(t *testing.T) {
 	srv := cliServer(t)
 	result, err := srv.cli(t.Context(), []string{
-		"GreetService", "Greet", "-r",
+		"greet.v1.GreetService", "Greet", "-r",
 		`{"name":"Alice","mood":"MOOD_HAPPY","tags":{"lang":"en"}}`,
 	})
 	require.NoError(t, err)
@@ -92,7 +94,7 @@ func TestCLIWithEnumAndTags(t *testing.T) {
 func TestCLIGreetGroup(t *testing.T) {
 	srv := cliServer(t)
 	result, err := srv.cli(t.Context(), []string{
-		"GreetService", "GreetGroup", "-r",
+		"greet.v1.GreetService", "GreetGroup", "-r",
 		`{"people":[{"name":"Alice"},{"name":"Bob"}]}`,
 	})
 	require.NoError(t, err)
@@ -107,7 +109,7 @@ func TestCLIGreetGroup(t *testing.T) {
 
 func TestCLIMissingMethod(t *testing.T) {
 	srv := cliServer(t)
-	_, err := srv.cli(t.Context(), []string{"GreetService"})
+	_, err := srv.cli(t.Context(), []string{"greet.v1.GreetService"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expected method")
 }
@@ -119,6 +121,25 @@ func TestCLIUnknownServiceMethod(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown service/method")
 }
 
+func TestCLIServiceResolutionIsFullyQualifiedAndCollisionFree(t *testing.T) {
+	server := &Server{tools: map[string]*Tool{
+		"one.v1.EchoService.Echo": {
+			Name:            "one.v1.EchoService.Echo",
+			ServiceFullName: "one.v1.EchoService",
+			MethodName:      "Echo",
+		},
+		"two.v1.EchoService.Echo": {
+			Name:            "two.v1.EchoService.Echo",
+			ServiceFullName: "two.v1.EchoService",
+			MethodName:      "Echo",
+		},
+	}}
+
+	assert.Equal(t, "one.v1.EchoService.Echo", server.resolveServiceMethod("one.v1.EchoService", "Echo"))
+	assert.Equal(t, "two.v1.EchoService.Echo", server.resolveServiceMethod("two.v1.EchoService", "Echo"))
+	assert.Empty(t, server.resolveServiceMethod("EchoService", "Echo"))
+}
+
 func TestCLIRequestUnsupportedExtension(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "*.yaml")
 	require.NoError(t, err)
@@ -128,7 +149,7 @@ func TestCLIRequestUnsupportedExtension(t *testing.T) {
 	f.Close()
 
 	srv := cliServer(t)
-	_, err = srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", f.Name()})
+	_, err = srv.cli(t.Context(), []string{"greet.v1.GreetService", "Greet", "-r", f.Name()})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported request file extension")
 }
@@ -142,7 +163,7 @@ func TestCLIRequestJSONFile(t *testing.T) {
 	f.Close()
 
 	srv := cliServer(t)
-	result, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", f.Name()})
+	result, err := srv.cli(t.Context(), []string{"greet.v1.GreetService", "Greet", "-r", f.Name()})
 	require.NoError(t, err)
 
 	var data map[string]any
@@ -163,7 +184,7 @@ func TestCLIRequestBinaryFiles(t *testing.T) {
 
 			result, err := cliServer(t).cli(
 				t.Context(),
-				[]string{"GreetService", "Greet", "-r", path},
+				[]string{"greet.v1.GreetService", "Greet", "-r", path},
 			)
 			require.NoError(t, err)
 			assert.Contains(t, result, "BinaryFile")
@@ -180,7 +201,7 @@ func TestCLIMalformedBinaryIsInvalidArgument(t *testing.T) {
 	for _, request := range []string{path, directory} {
 		_, err := cliServer(t).cli(
 			t.Context(),
-			[]string{"GreetService", "Greet", "-r", request},
+			[]string{"greet.v1.GreetService", "Greet", "-r", request},
 		)
 		require.Error(t, err)
 		assert.Equal(t, codes.InvalidArgument, status.Code(err))
@@ -203,7 +224,7 @@ func TestCLIStatusIsPreserved(t *testing.T) {
 	require.NoError(t, err)
 	greetpb.RegisterGreetServiceServer(srv, &cliStatusServicer{})
 
-	_, err = srv.cli(t.Context(), []string{"GreetService", "Greet", "-r", `{"name":"status"}`})
+	_, err = srv.cli(t.Context(), []string{"greet.v1.GreetService", "Greet", "-r", `{"name":"status"}`})
 	require.Error(t, err)
 	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 	assert.Equal(t, "cli status", status.Convert(err).Message())
@@ -237,7 +258,7 @@ func TestCLICancellationReachesHandler(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	result := make(chan error, 1)
 	go func() {
-		_, err := srv.cli(ctx, []string{"GreetService", "Greet", "-r", `{"name":"cancel"}`})
+		_, err := srv.cli(ctx, []string{"greet.v1.GreetService", "Greet", "-r", `{"name":"cancel"}`})
 		result <- err
 	}()
 
@@ -264,7 +285,7 @@ func TestCLICancellationReachesHandler(t *testing.T) {
 
 func TestCLIMissingRValue(t *testing.T) {
 	srv := cliServer(t)
-	_, err := srv.cli(t.Context(), []string{"GreetService", "Greet", "-r"})
+	_, err := srv.cli(t.Context(), []string{"greet.v1.GreetService", "Greet", "-r"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing value after -r")
 }

@@ -2,3 +2,5 @@ version: v2
 plugins:
   - protoc_builtin: python
     out: ../../python/tests/proto/gen
+  - protoc_builtin: pyi
+    out: ../../python/tests/proto/gen

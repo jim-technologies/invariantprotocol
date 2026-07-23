@@ -4,7 +4,8 @@ mod common;
 
 use common::{TestGreetService, greet, registered_server};
 use invariant::{
-    Code, MethodConfig, ProjectionContext, Response, Status, projections::http::http_router,
+    BoxResponseStream, Code, MethodConfig, ProjectionContext, Response, Status,
+    projections::http::http_router,
 };
 use prost::Message;
 use serde_json::json;
@@ -49,6 +50,16 @@ async fn unary_json_and_proto_use_the_registered_generated_implementation() {
                 message: format!("Projected {}", request.name),
                 mood: request.mood.unwrap_or_default(),
                 tags: request.tags,
+                response_label: if request.name == "ProtoJSON" {
+                    "canonical".into()
+                } else {
+                    String::new()
+                },
+                response_count: if request.name == "ProtoJSON" {
+                    9_007_199_254_740_993
+                } else {
+                    0
+                },
             }))
         }
     });
@@ -76,6 +87,19 @@ async fn unary_json_and_proto_use_the_registered_generated_implementation() {
 
     let response = client
         .post(format!("{url}/greet.v1.GreetService/Greet"))
+        .json(&serde_json::json!({"name": "ProtoJSON"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["wireDisplayLabel"], "canonical");
+    assert_eq!(body["wireResponseCount"], "9007199254740993");
+    assert!(body.get("response_label").is_none());
+    assert!(body.get("response_count").is_none());
+
+    let response = client
+        .post(format!("{url}/greet.v1.GreetService/Greet"))
         .header("content-type", "application/proto")
         .header("accept", "application/json")
         .body(
@@ -92,7 +116,7 @@ async fn unary_json_and_proto_use_the_registered_generated_implementation() {
     assert_eq!(response.headers()["content-type"], "application/proto");
     let response = greet::GreetResponse::decode(response.bytes().await.unwrap()).unwrap();
     assert_eq!(response.message, "Projected Proto");
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
     task.abort();
 }
 
@@ -769,7 +793,7 @@ async fn mcp_streamable_http_subset_enforces_current_transport_contract() {
     for request in [
         json!({"jsonrpc": "2.0", "id": 4, "method": "ping", "params": []}),
         json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": [], "arguments": {}}}),
-        json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "GreetService.Greet", "arguments": []}}),
+        json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "greet.v1.GreetService.Greet", "arguments": []}}),
     ] {
         let response = client
             .post(&endpoint)
@@ -828,6 +852,103 @@ async fn mcp_http_responses_use_the_global_unary_response_limit() {
 }
 
 #[tokio::test]
+async fn mcp_http_bounds_server_stream_collection_before_handler_completion() {
+    let produced = Arc::new(AtomicUsize::new(0));
+    let service = TestGreetService::default().with_stream({
+        let produced = produced.clone();
+        move |request| {
+            let produced = produced.clone();
+            async move {
+                let request = request.into_inner();
+                let stream = async_stream::stream! {
+                    for index in 0..request.count {
+                        produced.fetch_add(1, Ordering::SeqCst);
+                        yield Ok(greet::GreetResponse {
+                            message: format!("chunk-{index}-xxxxxxxxxxxxxxxx"),
+                            ..Default::default()
+                        });
+                    }
+                    if request.name == "error" {
+                        yield Err(Status::invalid_argument("x".repeat(2048)));
+                    }
+                };
+                Ok(Response::new(Box::pin(stream) as BoxResponseStream<_>))
+            }
+        }
+    });
+    let server = registered_server(service);
+    server.set_max_unary_response_bytes(512).unwrap();
+
+    let direct = invariant::projections::mcp::mcp_dispatch(
+        &server,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": "direct",
+            "method": "tools/call",
+            "params": {
+                "name": "greet.v1.GreetService.StreamGreet",
+                "arguments": {"name": "direct", "count": 20}
+            }
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(direct["result"]["content"].as_array().unwrap().len(), 20);
+    assert_eq!(produced.load(Ordering::SeqCst), 20);
+
+    let (url, task) = start_http(server).await;
+    let response = reqwest::Client::new()
+        .post(format!("{url}/mcp"))
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2025-11-25")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "bounded",
+            "method": "tools/call",
+            "params": {
+                "name": "greet.v1.GreetService.StreamGreet",
+                "arguments": {"name": "bounded", "count": 1000}
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 429);
+    let body = response.bytes().await.unwrap();
+    assert!(body.len() <= 512);
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["code"], "resource_exhausted");
+    assert!(produced.load(Ordering::SeqCst) < 1020);
+
+    let produced_before_error = produced.load(Ordering::SeqCst);
+    let response = reqwest::Client::new()
+        .post(format!("{url}/mcp"))
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2025-11-25")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": "bounded-error",
+            "method": "tools/call",
+            "params": {
+                "name": "greet.v1.GreetService.StreamGreet",
+                "arguments": {"name": "error", "count": 1}
+            }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 429);
+    let body = response.bytes().await.unwrap();
+    assert!(body.len() <= 512);
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["code"], "resource_exhausted");
+    assert_eq!(produced.load(Ordering::SeqCst), produced_before_error + 1);
+    task.abort();
+}
+
+#[tokio::test]
 async fn mcp_http_transport_timeout_is_a_bounded_connect_error() {
     let service = TestGreetService::default().with_greet(|_| async {
         let deadline = std::time::Instant::now() + Duration::from_millis(20);
@@ -850,7 +971,7 @@ async fn mcp_http_transport_timeout_is_a_bounded_connect_error() {
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": "GreetService.Greet",
+                "name": "greet.v1.GreetService.Greet",
                 "arguments": {"name": "slow"}
             }
         }))

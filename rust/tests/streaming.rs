@@ -55,7 +55,7 @@ async fn programmatic_streaming_projects_the_registered_typed_service() {
     let server = registered_server(TestGreetService::default());
     let request = dynamic_stream_request(&server, "Programmatic", 3);
     let mut stream = server
-        .invoke_stream("GreetService.StreamGreet", Request::new(request))
+        .invoke_stream("greet.v1.GreetService.StreamGreet", Request::new(request))
         .await
         .unwrap()
         .into_inner();
@@ -416,7 +416,7 @@ async fn mcp_and_cli_stream_the_same_registered_implementation() {
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": "GreetService.StreamGreet",
+                "name": "greet.v1.GreetService.StreamGreet",
                 "arguments": {"name": "MCP", "count": 2}
             }
         }),
@@ -433,7 +433,7 @@ async fn mcp_and_cli_stream_the_same_registered_implementation() {
         invariant::projections::cli::cli_write(
             cli_server,
             &[
-                "GreetService".into(),
+                "greet.v1.GreetService".into(),
                 "StreamGreet".into(),
                 "-r".into(),
                 r#"{"name":"CLI","count":2}"#.into(),
@@ -461,7 +461,7 @@ async fn mcp_stream_error_keeps_prior_chunks_and_standard_status() {
             "id": "stream-error",
             "method": "tools/call",
             "params": {
-                "name": "GreetService.StreamGreet",
+                "name": "greet.v1.GreetService.StreamGreet",
                 "arguments": {"name": "MCP"}
             }
         }),

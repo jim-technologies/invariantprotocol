@@ -7,10 +7,13 @@ whose request id matches the notification's `requestId` is cancelled.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
-from typing import TYPE_CHECKING
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any, cast
 
+import grpc
 from google.protobuf import json_format
 
 from invariant.errors import (
@@ -25,6 +28,7 @@ if TYPE_CHECKING:
 
 _PROTOCOL_VERSION = "2025-11-25"
 _MAX_SAFE_INTEGER_ID = (1 << 53) - 1
+_RESPONSE_LIMIT_MESSAGE = "encoded MCP response exceeds configured byte limit"
 
 
 async def serve_mcp(server: Server) -> None:
@@ -41,11 +45,11 @@ class _StdioMCP:
         # always finds the entry.
         self._inflight: dict[str, asyncio.Task] = {}
         self._protocol_cancelled: set[str] = set()
+        self._background: set[asyncio.Task[None]] = set()
 
     async def run(self) -> None:
         reader = await _stdin_reader()
 
-        background: list[asyncio.Task] = []
         try:
             while True:
                 line = await reader.readline()
@@ -94,23 +98,24 @@ class _StdioMCP:
                 def finished(_task, *, request_key=key):
                     self._inflight.pop(request_key, None)
                     self._protocol_cancelled.discard(request_key)
+                    self._background.discard(_task)
 
                 task.add_done_callback(finished)
-                background.append(task)
+                self._background.add(task)
         except BaseException:
             # Cancelling the stdio projection must also cancel application work;
             # otherwise a multi-projection shutdown could hang on a tool call.
-            for task in background:
+            for task in self._background:
                 if not task.done():
                     task.cancel()
-            if background:
-                await asyncio.gather(*background, return_exceptions=True)
+            if self._background:
+                await asyncio.gather(*self._background, return_exceptions=True)
             raise
         else:
             # Normal stdin EOF drains calls that were not explicitly cancelled,
             # so their responses are not lost merely because input closed.
-            if background:
-                await asyncio.gather(*background, return_exceptions=True)
+            if self._background:
+                await asyncio.gather(*self._background, return_exceptions=True)
 
     async def _handle_request(self, msg: dict, key: str) -> None:
         resp = await self._dispatch(msg)
@@ -149,7 +154,13 @@ def _build_request(tool, arguments: dict):
     return msg
 
 
-async def mcp_dispatch(server: Server, msg: dict, context: ProjectionContext | None = None) -> dict | None:
+async def mcp_dispatch(
+    server: Server,
+    msg: dict,
+    context: ProjectionContext | None = None,
+    *,
+    max_response_bytes: int | None = None,
+) -> dict | None:
     """Dispatch a single MCP JSON-RPC request.
 
     Shared by stdio and the HTTP /mcp transport. Returns None for
@@ -196,7 +207,13 @@ async def mcp_dispatch(server: Server, msg: dict, context: ProjectionContext | N
     if method == "tools/call":
         if not isinstance(params.get("name"), str) or not isinstance(params.get("arguments", {}), dict):
             return _err(msg_id, -32602, "Invalid params")
-        return await mcp_call_tool(server, msg_id, params, context=context)
+        return await mcp_call_tool(
+            server,
+            msg_id,
+            params,
+            context=context,
+            max_response_bytes=max_response_bytes,
+        )
 
     if method == "ping":
         return _ok(msg_id, {})
@@ -259,6 +276,7 @@ async def mcp_call_tool(
     params: dict,
     *,
     context: ProjectionContext | None = None,
+    max_response_bytes: int | None = None,
 ) -> dict:
     """Execute a tools/call — unary or server-streaming."""
     tool_name = params.get("name", "")
@@ -274,7 +292,14 @@ async def mcp_call_tool(
 
     if tool.server_streaming:
         try:
-            return await _call_stream_tool(server, msg_id, tool, arguments, context)
+            return await _call_stream_tool(
+                server,
+                msg_id,
+                tool,
+                arguments,
+                context,
+                max_response_bytes=max_response_bytes,
+            )
         finally:
             if owns_context:
                 context.finish(cancelled=context.cancelled())
@@ -287,7 +312,7 @@ async def mcp_call_tool(
         response = await server._invoke(tool, request, context)
 
         if response is not None:
-            result_dict = json_format.MessageToDict(response, preserving_proto_field_name=True)
+            result_dict = json_format.MessageToDict(response)
             text = json.dumps(result_dict, indent=2)
         else:
             text = "{}"
@@ -306,6 +331,8 @@ async def _call_stream_tool(
     tool,
     arguments: dict,
     context: ProjectionContext,
+    *,
+    max_response_bytes: int | None,
 ) -> dict:
     """Run a server-streaming tool, collecting each chunk as a text block in
     the response content. Errors mid-stream become an isError result preserving
@@ -318,14 +345,39 @@ async def _call_stream_tool(
         return _error_result(msg_id, as_invariant_error(e))
 
     content: list[dict] = []
+    encoded_response_bytes = len(json.dumps(_ok(msg_id, {"content": content})).encode())
+    if max_response_bytes is not None and encoded_response_bytes > max_response_bytes:
+        raise InvariantError(grpc.StatusCode.RESOURCE_EXHAUSTED, _RESPONSE_LIMIT_MESSAGE)
+
+    responses = cast(AsyncGenerator[Any], server._invoke_stream(tool, request, context))
+    response_limit_error: InvariantError | None = None
     try:
-        async for response in server._invoke_stream(tool, request, context):
-            chunk = json_format.MessageToDict(response, preserving_proto_field_name=True)
-            content.append({"type": "text", "text": json.dumps(chunk, indent=2)})
+        async for response in responses:
+            chunk = json_format.MessageToDict(response)
+            block = {"type": "text", "text": json.dumps(chunk, indent=2)}
+            next_response_bytes = encoded_response_bytes + len(json.dumps(block).encode())
+            if content:
+                next_response_bytes += len(", ")
+            if max_response_bytes is not None and next_response_bytes > max_response_bytes:
+                response_limit_error = InvariantError(
+                    grpc.StatusCode.RESOURCE_EXHAUSTED,
+                    _RESPONSE_LIMIT_MESSAGE,
+                )
+                raise response_limit_error
+            content.append(block)
+            encoded_response_bytes = next_response_bytes
     except Exception as e:
+        if e is response_limit_error:
+            raise
         err = as_invariant_error(e)
         content.append({"type": "text", "text": err.message})
         return _ok(msg_id, {"content": content, "isError": True, "error": err.to_payload()})
+    finally:
+        if response_limit_error is None:
+            await responses.aclose()
+        else:
+            with contextlib.suppress(Exception):
+                await responses.aclose()
 
     return _ok(msg_id, {"content": content})
 

@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// benchServicer is a no-allocation servicer for benchmarks.
+// benchServicer keeps application work small so benchmarks emphasize dispatch.
 type benchServicer struct {
 	greetpb.UnimplementedGreetServiceServer
 }
@@ -67,7 +67,7 @@ func BenchmarkInvokeDirect(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
-		if _, err := srv.Invoke(ctx, "GreetService.Greet", req); err != nil {
+		if _, err := srv.Invoke(ctx, "greet.v1.GreetService.Greet", req); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -85,7 +85,7 @@ func BenchmarkInvokeWithInterceptor(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for range b.N {
-		if _, err := srv.Invoke(ctx, "GreetService.Greet", req); err != nil {
+		if _, err := srv.Invoke(ctx, "greet.v1.GreetService.Greet", req); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -197,10 +197,8 @@ func startGRPCBenchmark(b *testing.B) (string, func()) {
 	return lis.Addr().String(), srv.Stop
 }
 
-// BenchmarkInvokeStreamDirect measures the in-process streaming path —
-// fanout cost per emitted message including the interceptor chain. With
-// no interceptors and a 10-chunk stream we expect order-of-magnitude
-// parity with BenchmarkInvokeDirect divided by 10.
+// BenchmarkInvokeStreamDirect measures one in-process invocation that emits
+// ten messages. Divide its result by ten for an approximate per-message cost.
 func BenchmarkInvokeStreamDirect(b *testing.B) {
 	srv := benchServer(b)
 	ctx := b.Context()
@@ -208,7 +206,7 @@ func BenchmarkInvokeStreamDirect(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		err := srv.InvokeStream(ctx, "GreetService.StreamGreet", req,
+		err := srv.InvokeStream(ctx, "greet.v1.GreetService.StreamGreet", req,
 			func(proto.Message) error { return nil })
 		if err != nil {
 			b.Fatal(err)

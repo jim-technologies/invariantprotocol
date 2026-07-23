@@ -626,7 +626,7 @@ function reflectionPackageDefinition(
   reflectedMethods: ReadonlyMap<string, ReadonlySet<string>>,
 ): PackageDefinition {
   const out: Record<string, unknown> = {};
-  for (const file of server.parsed.fds.file) {
+  for (const file of server[serverInternal].parsed().fds.file) {
     const reflectedFile = fromBinary(FileDescriptorProtoSchema, toBinary(FileDescriptorProtoSchema, file));
     reflectedFile.service = reflectedFile.service.filter((service) => {
       const serviceName = file.package ? `${file.package}.${service.name}` : service.name;

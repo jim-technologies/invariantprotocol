@@ -14,13 +14,52 @@ from invariant import InvariantError, Server
 
 
 async def test_greet_cli(server):
-    result = await server._cli(["GreetService", "Greet", "-r", '{"name": "World"}'])
+    result = await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "World"}'])
     assert result["message"] == "Hi World"
+
+
+async def test_greet_cli_to_dict_uses_canonical_proto_json_names(server):
+    result = await server._cli(
+        [
+            "greet.v1.GreetService",
+            "Greet",
+            "-r",
+            '{"name":"Canonical","wireSequenceId":"9007199254740993"}',
+        ]
+    )
+    assert result == {
+        "message": "Hi Canonical",
+        "wireDisplayLabel": "Canonical",
+        "wireResponseCount": "9007199254740993",
+    }
+
+
+async def test_stream_cli_uses_canonical_proto_json_names(server):
+    from invariant.projections.cli import stream_cli
+
+    written: list[str] = []
+    await stream_cli(
+        server,
+        [
+            "greet.v1.GreetService",
+            "Greet",
+            "-r",
+            '{"name":"Canonical","wireSequenceId":"9007199254740993"}',
+        ],
+        written.append,
+    )
+
+    assert len(written) == 1
+    assert json.loads(written[0]) == {
+        "message": "Hi Canonical",
+        "wireDisplayLabel": "Canonical",
+        "wireResponseCount": "9007199254740993",
+    }
 
 
 async def test_greet_cli_inline_invalid_json(server):
     with pytest.raises(InvariantError, match="Cannot parse inline value as JSON") as exc:
-        await server._cli(["GreetService", "Greet", "-r", "not json"])
+        await server._cli(["greet.v1.GreetService", "Greet", "-r", "not json"])
     assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
 
 
@@ -30,7 +69,7 @@ async def test_greet_cli_unsupported_extension(server):
         f.flush()
         try:
             with pytest.raises(InvariantError, match="unsupported request file extension"):
-                await server._cli(["GreetService", "Greet", "-r", f.name])
+                await server._cli(["greet.v1.GreetService", "Greet", "-r", f.name])
         finally:
             os.unlink(f.name)
 
@@ -40,7 +79,7 @@ async def test_greet_cli_request_json_file(server):
         json.dump({"name": "Claude"}, f)
         f.flush()
         try:
-            result = await server._cli(["GreetService", "Greet", "-r", f.name])
+            result = await server._cli(["greet.v1.GreetService", "Greet", "-r", f.name])
             assert result["message"] == "Hi Claude"
         finally:
             os.unlink(f.name)
@@ -53,7 +92,7 @@ async def test_greet_cli_request_binary_file_preserves_unknown_fields(server, tm
     path = tmp_path / f"request{extension}"
     path.write_bytes(request)
 
-    result = await server._cli(["GreetService", "Greet", "-r", str(path)])
+    result = await server._cli(["greet.v1.GreetService", "Greet", "-r", str(path)])
     assert result["message"] == "Hi BinaryFile"
 
 
@@ -65,12 +104,12 @@ async def test_greet_cli_malformed_request_files_are_invalid_argument(server, tm
 
     for path in (malformed_json, malformed_binary):
         with pytest.raises(InvariantError) as exc:
-            await server._cli(["GreetService", "Greet", "-r", str(path)])
+            await server._cli(["greet.v1.GreetService", "Greet", "-r", str(path)])
         assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
 
 
 async def test_greet_cli_no_request(server):
-    result = await server._cli(["GreetService", "Greet"])
+    result = await server._cli(["greet.v1.GreetService", "Greet"])
     assert "message" in result
 
 
@@ -82,7 +121,7 @@ async def test_greet_cli_unknown_tool(server):
 async def test_greet_cli_no_arguments_shows_help(server):
     result = await server._cli([])
     assert "Usage:" in result
-    assert "GreetService" in result
+    assert "greet.v1.GreetService" in result
     assert "Greet" in result
 
 
@@ -94,7 +133,7 @@ async def test_greet_cli_help_flag(server):
 
 async def test_greet_cli_missing_method(server):
     with pytest.raises(ValueError, match="Expected Method"):
-        await server._cli(["GreetService"])
+        await server._cli(["greet.v1.GreetService"])
 
 
 async def test_greet_cli_with_enum_and_tags(server):
@@ -102,7 +141,7 @@ async def test_greet_cli_with_enum_and_tags(server):
         json.dump({"name": "World", "mood": "MOOD_HAPPY", "tags": {"lang": "en"}}, f)
         f.flush()
         try:
-            result = await server._cli(["GreetService", "Greet", "-r", f.name])
+            result = await server._cli(["greet.v1.GreetService", "Greet", "-r", f.name])
             assert result["message"] == "Hi World"
             assert result["mood"] == "MOOD_HAPPY"
             assert result["tags"]["lang"] == "en"
@@ -118,7 +157,7 @@ async def test_greet_group_cli(server):
         )
         f.flush()
         try:
-            result = await server._cli(["GreetService", "GreetGroup", "-r", f.name])
+            result = await server._cli(["greet.v1.GreetService", "GreetGroup", "-r", f.name])
             assert result["messages"] == ["Hi Alice", "Hi Bob"]
             assert result["count"] == 2
         finally:
@@ -127,14 +166,14 @@ async def test_greet_group_cli(server):
 
 async def test_greet_cli_missing_r_value(server):
     with pytest.raises(ValueError, match="Missing value after -r"):
-        await server._cli(["GreetService", "Greet", "-r"])
+        await server._cli(["greet.v1.GreetService", "Greet", "-r"])
 
 
 @pytest.mark.parametrize(
     "args",
     [
-        ["GreetService", "Greet", "extra"],
-        ["GreetService", "Greet", "-r", "{}", "extra"],
+        ["greet.v1.GreetService", "Greet", "extra"],
+        ["greet.v1.GreetService", "Greet", "-r", "{}", "extra"],
     ],
 )
 async def test_greet_cli_rejects_unexpected_arguments(server, args):
@@ -144,7 +183,7 @@ async def test_greet_cli_rejects_unexpected_arguments(server, args):
 
 async def test_greet_cli_unknown_field_rejected(server):
     with pytest.raises(InvariantError, match='field named "extra"') as exc:
-        await server._cli(["GreetService", "Greet", "-r", '{"name": "World", "extra": "x"}'])
+        await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "World", "extra": "x"}'])
     assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
     payload = exc.value.to_payload()
     assert payload["code"] == "invalid_argument"
@@ -160,7 +199,7 @@ async def test_greet_cli_preserves_status():
     register_greet(server, StatusServicer())
     try:
         with pytest.raises(InvariantError) as exc:
-            await server._cli(["GreetService", "Greet", "-r", '{"name":"status"}'])
+            await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"status"}'])
         assert exc.value.code == grpc.StatusCode.FAILED_PRECONDITION
         assert exc.value.message == "cli status"
     finally:
@@ -183,7 +222,7 @@ async def test_greet_cli_task_cancellation_reaches_handler():
 
     server = Server.from_descriptor(DESCRIPTOR_PATH)
     register_greet(server, BlockingServicer())
-    task = asyncio.create_task(server._cli(["GreetService", "Greet", "-r", '{"name":"cancel"}']))
+    task = asyncio.create_task(server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"cancel"}']))
     try:
         await asyncio.wait_for(started.wait(), timeout=1)
         task.cancel()

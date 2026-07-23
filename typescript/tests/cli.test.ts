@@ -71,7 +71,7 @@ afterEach(() => {
 describe("CLI projection", () => {
   test("loads JSON, .binpb, and .pb request files with canonical decoding", async () => {
     const jsonOutput = await runCli(registeredServer(), [
-      "GreetService",
+      "greet.v1.GreetService",
       "Greet",
       "-r",
       requestFile(".json", '{"name":"JsonFile"}'),
@@ -84,13 +84,19 @@ describe("CLI projection", () => {
     ]);
 
     for (const extension of [".binpb", ".pb"]) {
-      const output = await runCli(registeredServer(), ["GreetService", "Greet", "-r", requestFile(extension, encoded)]);
+      const output = await runCli(registeredServer(), [
+        "greet.v1.GreetService",
+        "Greet",
+        "-r",
+        requestFile(extension, encoded),
+      ]);
       expect(JSON.parse(output)).toMatchObject({ message: "Hi BinaryFile" });
     }
   });
 
   test("rejects malformed and unsupported request files as invalid_argument", async () => {
     const server = registeredServer();
+    await expect(runCli(server, ["GreetService", "Greet"])).rejects.toThrow(/Unknown service\/method/);
     for (const request of [
       '{"name":"Ada","extra":"x"}',
       requestFile(".json", "{"),
@@ -98,7 +104,7 @@ describe("CLI projection", () => {
       requestFile(".yaml", "name: Ada"),
       requestDirectory(),
     ]) {
-      await expect(runCli(server, ["GreetService", "Greet", "-r", request])).rejects.toMatchObject({
+      await expect(runCli(server, ["greet.v1.GreetService", "Greet", "-r", request])).rejects.toMatchObject({
         code: "invalid_argument",
       });
     }
@@ -113,15 +119,17 @@ describe("CLI projection", () => {
       }
       return next(request);
     });
-    expect(JSON.parse(await runCli(server, ["GreetService", "Greet", "-r", '{"name":"Unary"}']))).toMatchObject({
+    expect(
+      JSON.parse(await runCli(server, ["greet.v1.GreetService", "Greet", "-r", '{"name":"Unary"}'])),
+    ).toMatchObject({
       message: "Hi Unary",
     });
 
-    const stream = await runCli(server, ["GreetService", "StreamGreet", "-r", '{"name":"Stream","count":2}']);
+    const stream = await runCli(server, ["greet.v1.GreetService", "StreamGreet", "-r", '{"name":"Stream","count":2}']);
     expect(stream.split("\n").map((line) => JSON.parse(line).message)).toEqual(["Hi Stream #0", "Hi Stream #1"]);
     expect(streamInterceptors).toEqual(["invariant-cli:///greet.v1.GreetService/StreamGreet"]);
 
-    await expect(runCli(server, ["GreetService", "Greet", "-r", '{"name":"status"}'])).rejects.toMatchObject({
+    await expect(runCli(server, ["greet.v1.GreetService", "Greet", "-r", '{"name":"status"}'])).rejects.toMatchObject({
       code: Code.FailedPrecondition,
       rawMessage: "cli status",
     });
@@ -129,7 +137,7 @@ describe("CLI projection", () => {
 
   test("freezes registration even when only rendering help", async () => {
     const server = registeredServer();
-    expect(await runCli(server, ["--help"])).toContain("GreetService Greet");
+    expect(await runCli(server, ["--help"])).toContain("greet.v1.GreetService Greet");
     expect(() => server.use((next) => next)).toThrow(/cannot be changed after execution begins/);
   });
 });

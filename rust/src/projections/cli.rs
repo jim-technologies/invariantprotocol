@@ -1,4 +1,4 @@
-//! CLI projection — `ServiceName Method [-r request]`. Writes either a single
+//! CLI projection — `package.ServiceName Method [-r request]`. Writes either a single
 //! pretty-printed JSON response (unary) or one compact JSON line per chunk
 //! (streaming). Mirrors `go/cli.go` and `python/.../cli.py`.
 
@@ -73,13 +73,13 @@ where
 fn split_args(args: &[String]) -> Result<(String, String, Option<String>), Status> {
     if args.is_empty() || args[0].starts_with('-') {
         return Err(Status::invalid_argument(
-            "expected ServiceName as first argument",
+            "expected package.ServiceName as first argument",
         ));
     }
     let service = args[0].clone();
     if args.len() < 2 || args[1].starts_with('-') {
         return Err(Status::invalid_argument(
-            "expected Method name after ServiceName",
+            "expected Method name after package.ServiceName",
         ));
     }
     let method = args[1].clone();
@@ -143,15 +143,9 @@ fn build_request(
 }
 
 fn resolve_tool(server: &Server, service: &str, method: &str) -> Result<String, Status> {
-    for tool in server.tools_snapshot() {
-        let svc = tool
-            .service_full_name
-            .rsplit('.')
-            .next()
-            .unwrap_or(&tool.service_full_name);
-        if svc == service && tool.method_name == method {
-            return Ok(tool.name.clone());
-        }
+    let tool_name = format!("{service}.{method}");
+    if server.tool(&tool_name).is_some() {
+        return Ok(tool_name);
     }
     Err(Status::not_found(format!(
         "unknown service/method: {service} {method}"
@@ -159,7 +153,7 @@ fn resolve_tool(server: &Server, service: &str, method: &str) -> Result<String, 
 }
 
 fn serialize_pretty(msg: &DynamicMessage) -> String {
-    let opts = SerializeOptions::new().use_proto_field_name(true);
+    let opts = SerializeOptions::new();
     let mut buf = Vec::with_capacity(128);
     let mut ser = serde_json::Serializer::pretty(&mut buf);
     let _ = msg.serialize_with_options(&mut ser, &opts);
@@ -167,7 +161,7 @@ fn serialize_pretty(msg: &DynamicMessage) -> String {
 }
 
 fn serialize_compact(msg: &DynamicMessage) -> String {
-    let opts = SerializeOptions::new().use_proto_field_name(true);
+    let opts = SerializeOptions::new();
     let mut buf = Vec::with_capacity(128);
     let mut ser = serde_json::Serializer::new(&mut buf);
     let _ = msg.serialize_with_options(&mut ser, &opts);
@@ -177,7 +171,7 @@ fn serialize_compact(msg: &DynamicMessage) -> String {
 fn cli_help(server: &Server) -> String {
     let mut out = String::new();
     out.push_str(
-        "Usage: <binary> <ServiceName> <Method> [-r request.json|request.binpb|'{json}']\n\n",
+        "Usage: <binary> <package.ServiceName> <Method> [-r request.json|request.binpb|'{json}']\n\n",
     );
     let tools = server.tools_snapshot();
     if tools.is_empty() {
@@ -186,12 +180,10 @@ fn cli_help(server: &Server) -> String {
     }
     out.push_str("Available methods:\n\n");
     for tool in tools {
-        let svc = tool
-            .service_full_name
-            .rsplit('.')
-            .next()
-            .unwrap_or(&tool.service_full_name);
-        out.push_str(&format!("  {svc} {}\n", tool.method_name));
+        out.push_str(&format!(
+            "  {} {}\n",
+            tool.service_full_name, tool.method_name
+        ));
         if !tool.description.is_empty() && tool.description != tool.name {
             out.push_str(&format!("    {}\n", tool.description));
         }

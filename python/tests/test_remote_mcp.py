@@ -23,12 +23,12 @@ async def test_connect_registers_tools(server):
         remote.connect_grpc(channel)
 
         try:
-            assert "GreetService.Greet" in remote.tools
-            assert "GreetService.GreetGroup" in remote.tools
+            assert "greet.v1.GreetService.Greet" in remote.tools
+            assert "greet.v1.GreetService.GreetGroup" in remote.tools
             assert len(remote.tools) == 2
 
-            local_schema = server.tools["GreetService.Greet"].input_schema
-            remote_schema = remote.tools["GreetService.Greet"].input_schema
+            local_schema = server.tools["greet.v1.GreetService.Greet"].input_schema
+            remote_schema = remote.tools["greet.v1.GreetService.Greet"].input_schema
             assert local_schema == remote_schema
         finally:
             await remote.stop()
@@ -49,7 +49,7 @@ async def test_connect_greet(server):
 
         try:
             req = greet_pb2.GreetRequest(name="World")
-            resp = await remote.tools["GreetService.Greet"].handler(req, None)
+            resp = await remote.invoke("greet.v1.GreetService.Greet", req)
             assert resp.message == "Hi World"
         finally:
             await remote.stop()
@@ -74,7 +74,7 @@ async def test_connect_greet_with_enum_and_tags(server):
                 mood=greet_pb2.MOOD_HAPPY,
                 tags={"lang": "en"},
             )
-            resp = await remote.tools["GreetService.Greet"].handler(req, None)
+            resp = await remote.invoke("greet.v1.GreetService.Greet", req)
             assert resp.message == "Hi World"
             assert resp.mood == greet_pb2.MOOD_HAPPY
             assert resp.tags["lang"] == "en"
@@ -102,7 +102,7 @@ async def test_connect_greet_group(server):
                     greet_pb2.Person(name="Bob", mood=greet_pb2.MOOD_SAD),
                 ]
             )
-            resp = await remote.tools["GreetService.GreetGroup"].handler(req, None)
+            resp = await remote.invoke("greet.v1.GreetService.GreetGroup", req)
             assert list(resp.messages) == ["Hi Alice", "Hi Bob"]
             assert resp.count == 2
         finally:
@@ -194,8 +194,8 @@ async def test_remote_mcp_tools_list(server):
         tools = responses[1]["result"]["tools"]
         assert len(tools) == 2
         tools_by_name = {t["name"]: t for t in tools}
-        assert "GreetService.Greet" in tools_by_name
-        assert "GreetService.GreetGroup" in tools_by_name
+        assert "greet.v1.GreetService.Greet" in tools_by_name
+        assert "greet.v1.GreetService.GreetGroup" in tools_by_name
     finally:
         await server._stop_grpc()
 
@@ -211,7 +211,7 @@ async def test_remote_mcp_tool_call(server):
                 _mcp_request(
                     1,
                     "tools/call",
-                    {"name": "GreetService.Greet", "arguments": {"name": "Remote"}},
+                    {"name": "greet.v1.GreetService.Greet", "arguments": {"name": "Remote"}},
                 ),
             ],
         )
@@ -233,7 +233,7 @@ async def test_remote_mcp_tool_call_with_enum(server):
                     1,
                     "tools/call",
                     {
-                        "name": "GreetService.Greet",
+                        "name": "greet.v1.GreetService.Greet",
                         "arguments": {
                             "name": "World",
                             "mood": "MOOD_HAPPY",

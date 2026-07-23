@@ -207,10 +207,15 @@ func (h *httpDynamicHandler) applyDynamicHeaders(ctx context.Context, httpReq *h
 
 // ConnectHTTP registers tools that proxy to a remote HTTP endpoint.
 // Routes are derived from google.api.http annotations when present, otherwise
-// fallback to canonical RPC route: POST /{serviceFullName}/{method}.
+// fallback to canonical RPC route: POST /{serviceFullName}/{method}. With no
+// service name it registers every service in the descriptor; one name selects
+// that service, and more than one name is rejected.
 func (s *Server) ConnectHTTP(baseURL string, serviceName ...string) error {
 	if err := s.ensureRegistrationOpen("HTTP connection"); err != nil {
 		return err
+	}
+	if len(serviceName) > 1 {
+		return errors.New("connect HTTP accepts at most one service name")
 	}
 	if s.fds == nil {
 		return errors.New("connect HTTP requires a Server created via ServerFromDescriptor or ServerFromBytes")

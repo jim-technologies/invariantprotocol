@@ -1,6 +1,6 @@
 """CLI projection — call tools from command-line arguments or request files.
 
-Format: ServiceName Method [-r request]
+Format: package.ServiceName Method [-r request]
 
 Values for -r are auto-detected:
   - Existing file path → load by extension (.json, .binpb/.pb)
@@ -46,7 +46,7 @@ async def run_cli(server: Server, args: list[str]) -> Message | str:
         if tool.server_streaming:
             lines: list[str] = []
             async for msg in server._invoke_stream(tool, request, context):
-                lines.append(json_format.MessageToJson(msg, preserving_proto_field_name=True, indent=None))
+                lines.append(json_format.MessageToJson(msg, indent=None))
             return "\n".join(lines)
 
         return await server._invoke(tool, request, context)
@@ -79,14 +79,14 @@ async def stream_cli(server: Server, args: list[str], write) -> None:
     try:
         if tool.server_streaming:
             async for msg in server._invoke_stream(tool, request, context):
-                write(json_format.MessageToJson(msg, preserving_proto_field_name=True, indent=None))
+                write(json_format.MessageToJson(msg, indent=None))
             return
 
         response = await server._invoke(tool, request, context)
         if response is None:
             write("{}")
             return
-        write(json_format.MessageToJson(response, preserving_proto_field_name=True, indent=2))
+        write(json_format.MessageToJson(response, indent=2))
     finally:
         context.finish(cancelled=context.cancelled())
 
@@ -166,7 +166,7 @@ def _split_args(
 ) -> tuple[str, str, str | None]:
     """Split args into (service_name, method_name, request_value).
 
-    Format: ServiceName Method [-r request]
+    Format: package.ServiceName Method [-r request]
     """
     i = 0
 
@@ -197,11 +197,10 @@ def _split_args(
 
 
 def _resolve_tool(server: Server, service_name: str, method_name: str) -> str:
-    """Resolve ServiceName + Method to a tool name."""
-    for tool in server._tools.values():
-        svc_name = tool.service_full_name.rsplit(".", 1)[-1]
-        if svc_name == service_name and tool.method_name == method_name:
-            return tool.name
+    """Resolve a fully-qualified service and method to a tool name."""
+    tool_name = f"{service_name}.{method_name}"
+    if tool_name in server._tools:
+        return tool_name
     available = list(server._tools)
     raise ValueError(f"Unknown service/method: {service_name} {method_name}. Available: {available}")
 
@@ -209,7 +208,7 @@ def _resolve_tool(server: Server, service_name: str, method_name: str) -> str:
 def _cli_help(server: Server) -> str:
     """Generate help text listing all registered tools and their fields."""
     lines = [
-        'Usage: <binary> <ServiceName> <Method> [-r request.json|request.binpb|\'{"inline":"json"}\']',
+        'Usage: <binary> <package.ServiceName> <Method> [-r request.json|request.binpb|\'{"inline":"json"}\']',
         "",
     ]
 
@@ -217,11 +216,10 @@ def _cli_help(server: Server) -> str:
         lines.append("No tools registered.")
         return "\n".join(lines)
 
-    # Sort tools by service name then method name.
+    # Sort tools by fully-qualified service name then method name.
     entries = []
     for tool in server._tools.values():
-        svc_name = tool.service_full_name.rsplit(".", 1)[-1]
-        entries.append((svc_name, tool))
+        entries.append((tool.service_full_name, tool))
     entries.sort(key=lambda e: (e[0], e[1].method_name))
 
     lines.append("Available methods:")

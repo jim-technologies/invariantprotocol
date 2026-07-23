@@ -27,6 +27,8 @@ def main() -> int:
 
     if contract.get("schema_version") != 1:
         errors.append("feature contract schema_version must be 1")
+    if contract.get("core_maturity") != "stable":
+        errors.append("feature contract core_maturity must be stable")
     languages = tuple(contract.get("languages", ()))
     if languages != EXPECTED_LANGUAGES:
         errors.append(f"languages must be {EXPECTED_LANGUAGES}, got {languages}")

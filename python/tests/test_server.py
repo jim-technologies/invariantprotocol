@@ -4,6 +4,7 @@ import asyncio
 import os
 import subprocess
 import sys
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import greet_pb2
@@ -50,7 +51,61 @@ def test_generated_registration_captures_service_exactly_once():
     add_greet(srv)
     assert len(srv.tools) == 3
     assert list(srv._registered_services) == ["greet.v1.GreetService"]
-    assert type(srv.tools["GreetService.Greet"].new_request()) is greet_pb2.GreetRequest
+    tool = srv.tools["greet.v1.GreetService.Greet"]
+    assert tool.input_type == "greet.v1.GreetRequest"
+    assert not hasattr(tool, "handler")
+    assert not hasattr(tool, "request_factory")
+    assert not hasattr(tool, "rpc_handler")
+
+
+async def test_full_tool_names_allow_same_service_name_in_two_packages():
+    files = descriptor_pb2.FileDescriptorSet()
+    generated_pool = descriptor_pool.Default()
+    message_classes = {}
+    for package in ("invariant.tests.alpha", "invariant.tests.beta"):
+        file_proto = files.file.add(name=f"{package.replace('.', '/')}/common.proto", package=package, syntax="proto3")
+        message = file_proto.message_type.add(name="Value")
+        message.field.add(
+            name="text",
+            number=1,
+            label=descriptor_pb2.FieldDescriptorProto.LABEL_OPTIONAL,
+            type=descriptor_pb2.FieldDescriptorProto.TYPE_STRING,
+        )
+        service = file_proto.service.add(name="CommonService")
+        method = service.method.add(name="Call")
+        method.input_type = f".{package}.Value"
+        method.output_type = f".{package}.Value"
+        generated_pool.Add(file_proto)
+        message_classes[package] = message_factory.GetMessageClass(
+            generated_pool.FindMessageTypeByName(f"{package}.Value")
+        )
+
+    server = Server.from_bytes(files.SerializeToString())
+    for package, message_class in message_classes.items():
+
+        async def call(request, context, *, package=package, message_class=message_class):
+            del context
+            return message_class(text=f"{package}:{request.text}")
+
+        server.add_registered_method_handlers(
+            f"{package}.CommonService",
+            {
+                "Call": grpc.unary_unary_rpc_method_handler(
+                    call,
+                    request_deserializer=message_class.FromString,
+                    response_serializer=message_class.SerializeToString,
+                )
+            },
+        )
+
+    assert set(server.tools) == {
+        "invariant.tests.alpha.CommonService.Call",
+        "invariant.tests.beta.CommonService.Call",
+    }
+    for package, message_class in message_classes.items():
+        response = await server.invoke(f"{package}.CommonService.Call", message_class(text="ok"))
+        assert response.text == f"{package}:ok"
+    await server.stop()
 
 
 def test_tools_are_read_only_snapshots_and_registration_freezes_on_projection_build():
@@ -59,10 +114,12 @@ def test_tools_are_read_only_snapshots_and_registration_freezes_on_projection_bu
 
     tools = srv.tools
     with pytest.raises(TypeError):
-        tools["new"] = tools["GreetService.Greet"]
+        tools["new"] = tools["greet.v1.GreetService.Greet"]
+    with pytest.raises(FrozenInstanceError):
+        tools["greet.v1.GreetService.Greet"].name = "changed"
 
-    tools["GreetService.Greet"].input_schema["mutated"] = True
-    assert "mutated" not in srv.tools["GreetService.Greet"].input_schema
+    tools["greet.v1.GreetService.Greet"].input_schema["mutated"] = True
+    assert "mutated" not in srv.tools["greet.v1.GreetService.Greet"].input_schema
     catalog = srv.tool_catalog()
     catalog[0]["inputSchema"]["mutated"] = True
     assert "mutated" not in srv.tool_catalog()[0]["inputSchema"]
@@ -72,6 +129,28 @@ def test_tools_are_read_only_snapshots_and_registration_freezes_on_projection_bu
         add_greet(srv)
     with pytest.raises(RuntimeError, match="cannot be changed"):
         srv.exclude("*")
+
+
+def test_descriptor_and_schema_generator_views_are_detached_from_server_state():
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    parsed = srv.parsed
+    parsed.services.clear()
+    parsed.messages.clear()
+    schema_gen = srv.schema_gen
+    schema_gen.parsed.services.clear()
+    schema_gen.parsed.messages.clear()
+
+    assert "greet.v1.GreetService" in srv.parsed.services
+    assert "greet.v1.GreetRequest" in srv.parsed.messages
+    assert schema_gen.message_to_schema("greet.v1.GreetRequest") == {"type": "object"}
+    with pytest.raises(AttributeError):
+        srv.parsed = parsed
+
+    add_greet(srv)
+    tool = srv.tools["greet.v1.GreetService.Greet"]
+    assert "name" in tool.input_schema["properties"]
+    catalog = {entry["name"]: entry for entry in srv.tool_catalog()}
+    assert "name" in catalog[tool.name]["inputSchema"]["properties"]
 
 
 def test_register_rejects_duplicate_service():
@@ -165,7 +244,7 @@ def test_include_filter():
     srv.include("greet.v1.GreetService.Greet")
     add_greet(srv)
     assert len(srv.tools) == 1
-    assert "GreetService.Greet" in srv.tools
+    assert "greet.v1.GreetService.Greet" in srv.tools
 
 
 def test_exclude_filter():
@@ -173,7 +252,7 @@ def test_exclude_filter():
     srv.exclude("*GreetGroup")
     add_greet(srv)
     assert len(srv.tools) == 2
-    assert "GreetService.Greet" in srv.tools
+    assert "greet.v1.GreetService.Greet" in srv.tools
 
 
 def test_include_exclude_combined():
@@ -182,7 +261,7 @@ def test_include_exclude_combined():
     srv.exclude("*GreetGroup")
     add_greet(srv)
     assert len(srv.tools) == 2
-    assert "GreetService.Greet" in srv.tools
+    assert "greet.v1.GreetService.Greet" in srv.tools
 
 
 def test_projection_filters_freeze_at_first_registration():
@@ -200,7 +279,7 @@ def test_include_env_var(monkeypatch):
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
     add_greet(srv)
     assert len(srv.tools) == 1
-    assert "GreetService.Greet" in srv.tools
+    assert "greet.v1.GreetService.Greet" in srv.tools
 
 
 def test_exclude_env_var(monkeypatch):
@@ -208,7 +287,7 @@ def test_exclude_env_var(monkeypatch):
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
     add_greet(srv)
     assert len(srv.tools) == 2
-    assert "GreetService.Greet" in srv.tools
+    assert "greet.v1.GreetService.Greet" in srv.tools
 
 
 async def test_stop_idempotent():
@@ -365,8 +444,7 @@ async def main():
     server = Server.from_bytes(descriptor.SerializeToString())
     channel = grpc.aio.insecure_channel("localhost:1")
     server.connect_grpc(channel, "greet.v1.GreetService")
-    request = server.tools["GreetService.Greet"].new_request()
-    assert request.DESCRIPTOR.full_name == "greet.v1.GreetRequest"
+    assert server.tools["greet.v1.GreetService.Greet"].input_type == "greet.v1.GreetRequest"
     native = server.grpc_server()
     port = native.add_insecure_port("127.0.0.1:0")
     await native.start()
@@ -395,8 +473,7 @@ async def main():
 
     server = Server.from_descriptor({DESCRIPTOR_PATH!r})
     server.connect_http("http://localhost:1")
-    request = server.tools["GreetService.Greet"].new_request()
-    assert request.DESCRIPTOR.full_name == "greet.v1.GreetRequest"
+    assert server.tools["greet.v1.GreetService.Greet"].input_type == "greet.v1.GreetRequest"
     await server.stop()
 
 asyncio.run(main())
@@ -425,7 +502,7 @@ async def test_cli_and_mcp_supply_standard_projection_contexts():
 
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
     add_greet(srv, ContextServicer())
-    await srv._cli(["GreetService", "Greet", "-r", '{"name":"cli"}'])
+    await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"cli"}'])
 
     from invariant.projections.mcp import mcp_dispatch
 
@@ -435,9 +512,38 @@ async def test_cli_and_mcp_supply_standard_projection_contexts():
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "GreetService.Greet", "arguments": {"name": "mcp"}},
+            "params": {"name": "greet.v1.GreetService.Greet", "arguments": {"name": "mcp"}},
         },
     )
     assert response is not None
     assert peers == ["invariant:cli", "invariant:mcp"]
     await srv.stop()
+
+
+async def test_projection_context_metadata_is_typed_cached_and_isolated():
+    from invariant.projection_context import ProjectionContext
+
+    source = [("X-Request-ID", "one")]
+    first = ProjectionContext(peer="invariant:first", invocation_metadata=source)
+    second = ProjectionContext(peer="invariant:second")
+    source.append(("x-late", "ignored"))
+
+    invocation = first.invocation_metadata()
+    assert isinstance(invocation, grpc.aio.Metadata)
+    assert first.invocation_metadata() is invocation
+    assert tuple(invocation) == (("x-request-id", "one"),)
+
+    initial = first.initial_metadata()
+    trailing = first.trailing_metadata()
+    assert isinstance(initial, grpc.aio.Metadata)
+    assert isinstance(trailing, grpc.aio.Metadata)
+    initial.add("x-header", "leading")
+    trailing.add("x-trailer", "trailing")
+    assert first.initial_metadata() is initial
+    assert first.trailing_metadata() is trailing
+    assert tuple(first.initial_metadata()) == (("x-header", "leading"),)
+    assert tuple(first.trailing_metadata()) == (("x-trailer", "trailing"),)
+
+    assert tuple(second.invocation_metadata()) == ()
+    assert tuple(second.initial_metadata()) == ()
+    assert tuple(second.trailing_metadata()) == ()

@@ -47,6 +47,12 @@ their runtime surface exists:
 4. **Invoke dispatch** (`mcp.go:invoke` / `server.py:_invoke`) — proto-in/proto-out core with interceptor chain
 5. **Projections** — boundary converters that translate each protocol's wire format to/from proto messages
 
+Public discovery catalogs expose metadata snapshots only. Executable handlers,
+generated descriptors, and mutable registration records remain server-owned;
+clone caller-supplied descriptor bytes before retaining them. Every adapter
+must resolve through the internal registry and shared dispatch chain rather
+than accepting caller-fabricated tool records.
+
 ### Shape mirror, not literal mirror
 
 Go, Python, Rust, and TypeScript share the same dispatch pipeline, but the
@@ -108,6 +114,21 @@ There is no sync-compat layer and no detect-and-await.
 Every runtime exposes idiomatic `invoke` and `invoke_stream` forms for dispatch
 without binding a projection. These are useful for in-process callers and
 tests, but they still freeze registration and use the shared dispatch chain.
+
+### Canonical identities and JSON
+
+Use `package.Service.Method` for projection tool names, CLI lookup, MCP
+`tools/call`, and programmatic invocation. Never reintroduce short
+`Service.Method` aliases: two protobuf packages may legitimately use the same
+short service name. Native gRPC, Connect, interceptor, and context method paths
+remain `/{package.Service}/{Method}`.
+
+Every JSON boundary emits canonical ProtoJSON. Schema properties and response
+objects use each field's descriptor `json_name`; 64-bit integer values use
+decimal strings; non-finite floats use the standard string spellings; and
+well-known types keep their ProtoJSON shapes. Parsers may retain protobuf's
+standard acceptance of source field names, but emitted projection JSON and
+tool schemas must not force snake_case source names.
 
 ### Graceful shutdown
 
@@ -333,6 +354,10 @@ gRPC frame parser or a port-owning native projection.
   per message, not to the lifetime of a stream.
 - Native receive/send limits remain ordinary grpc-go, grpcio, Tonic, or
   grpc-js controls. They do not govern standalone HTTP JSON bytes.
+- `POST /mcp` is one buffered JSON-RPC response and uses the server-wide HTTP
+  unary response limit. Streamed tool chunks are counted while they are
+  collected so an unbounded source cannot grow memory indefinitely. Per-method
+  overrides apply to canonical Connect routes, not to this aggregate MCP route.
 - `Connect-Timeout-Ms` is honored on every HTTP path: unary, streaming, and
   the `/mcp` JSON-RPC transport. The header is a positive integer of at most
   ten ASCII digits; malformed values return `invalid_argument`. The one
@@ -468,7 +493,7 @@ client responses return `202 Accepted` with no body, `GET /mcp` returns `405`,
 and an `Origin` header is rejected with `403`. Reuse the same dispatch helper
 as stdio; do not add a second tool registry.
 
-## Not yet implemented
+## Intentional scope boundaries
 
 - Full `connect_http` client path-template grammar beyond `{field}`, `{field=*}`, `{field=**}`
 - `connect_http` client selection among `additional_bindings`

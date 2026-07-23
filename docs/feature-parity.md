@@ -6,7 +6,7 @@ spelling or identical implementation structure.
 
 `conformance/feature-parity.json` is the machine-readable release contract.
 `make parity` validates it during development; `make parity-release` rejects a
-release while any Core row is incomplete.
+release while any Core row is incomplete or the Core maturity is not `stable`.
 
 ## Release rule
 
@@ -45,7 +45,8 @@ streaming; Go's standard API intentionally has separate unary and stream types.
 ## Capability classes
 
 - **Core** means portable runtime behavior and must be supported in all four
-  languages before release.
+  languages before release. `supported` is a stable, production-ready status;
+  preview or experimental work cannot satisfy the release gate.
 - **Build tool** means one language-neutral program consumes protobuf artifacts.
   The SchemaBundle compiler belongs here because four inference engines would
   create four competing canonical mappings.
@@ -58,6 +59,11 @@ The common MCP contract is the non-SSE tool-server subset of `2025-11-25`. The
 common HTTP contract is Connect on canonical full method paths, including four
 independent HTTP message limits and a reviewed metadata mapper. Native gRPC
 continues to use each language's normal transport controls and lifecycle.
+Projection tool identities are always `package.Service.Method`, and every JSON
+surface and generated input schema follows canonical ProtoJSON names and scalar
+representations. The stateless `/mcp` endpoint applies the server-wide unary
+response limit to its aggregate JSON-RPC document; per-method overrides remain
+attached to canonical Connect routes.
 
 When a runtime has a useful extra integration, document it as such without
 quietly expanding a Core row. For example, Go, Python, and TypeScript currently

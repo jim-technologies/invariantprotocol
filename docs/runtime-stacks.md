@@ -5,6 +5,32 @@ one protobuf/gRPC programming model. A dependency is not preferred merely
 because it is newer or more feature-rich: it must be supported, idiomatic, and
 fit the canonical generated-service architecture.
 
+## Architecture boundary
+
+Invariant uses a deliberately small ports-and-adapters architecture, not a
+ceremonial enterprise DDD layer stack:
+
+- authored protobuf plus generated service interfaces are the canonical service
+  contract;
+- registered typed dispatch is the application core and the only execution
+  path for shared middleware, status, metadata, deadlines, and cancellation;
+- native gRPC, HTTP/Connect, MCP, and CLI are inbound adapters over that core;
+- remote gRPC and HTTP clients are outbound adapters; gRPC connections remain
+  caller-owned, while HTTP transport ownership follows each language's
+  idiomatic client API; and
+- the schema compiler and its Arrow, Parquet, Iceberg, and PostgreSQL renderers
+  form a separate data-schema boundary around the shared `SchemaBundle` model.
+
+`Server` is the composition root and convenience facade, so it may construct
+adapters. An adapter must still re-enter the registered typed dispatch path; it
+must not introduce a second handler model or a hidden transport hop. There are
+no repository, aggregate, or use-case abstractions because this framework has
+no application business domain for them to model.
+
+Applications may still keep richer internal domain models behind their
+generated service implementations; Invariant governs contract projection, not
+the application's business-modeling strategy.
+
 ## Selected stacks
 
 | Runtime | Canonical RPC stack | Projection host | Policy |

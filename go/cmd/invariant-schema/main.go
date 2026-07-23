@@ -19,7 +19,6 @@ import (
 	"github.com/jim-technologies/invariantprotocol/go/data/parquet"
 	"github.com/jim-technologies/invariantprotocol/go/data/postgres"
 	datav1 "github.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1"
-	"google.golang.org/protobuf/proto"
 )
 
 func main() {
@@ -113,7 +112,7 @@ func runCompile(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(bundle)
+	encoded, err := data.MarshalSchemaBundle(bundle)
 	if err != nil {
 		return fmt.Errorf("compile: marshal schema bundle: %w", err)
 	}
@@ -131,9 +130,9 @@ func loadPreviousBundle(path string) (*datav1.SchemaBundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compile: read previous schema bundle %q: %w", path, err)
 	}
-	previous := new(datav1.SchemaBundle)
-	if err := proto.Unmarshal(encoded, previous); err != nil {
-		return nil, fmt.Errorf("compile: decode previous schema bundle %q: %w", path, err)
+	previous, err := data.ParseSchemaBundle(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("compile: parse previous schema bundle %q: %w", path, err)
 	}
 	return previous, nil
 }
@@ -160,9 +159,6 @@ func runRender(target string, args []string, stdout, stderr io.Writer) error {
 
 	bundle, err := readBundle(bundlePath)
 	if err != nil {
-		return fmt.Errorf("%s: %w", target, err)
-	}
-	if err := validateBundleVersion(bundle); err != nil {
 		return fmt.Errorf("%s: %w", target, err)
 	}
 	dataset, err := selectDataset(bundle, messageName)
@@ -192,21 +188,11 @@ func readBundle(path string) (*datav1.SchemaBundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read schema bundle %q: %w", path, err)
 	}
-	bundle := new(datav1.SchemaBundle)
-	if err := proto.Unmarshal(encoded, bundle); err != nil {
-		return nil, fmt.Errorf("decode schema bundle %q: %w", path, err)
+	bundle, err := data.ParseSchemaBundle(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("parse schema bundle %q: %w", path, err)
 	}
 	return bundle, nil
-}
-
-func validateBundleVersion(bundle *datav1.SchemaBundle) error {
-	if bundle.GetIrVersion() != data.IRVersion {
-		return fmt.Errorf("bundle ir_version is %d, want %d", bundle.GetIrVersion(), data.IRVersion)
-	}
-	if bundle.GetMappingVersion() != data.MappingVersion {
-		return fmt.Errorf("bundle mapping_version is %d, want %d", bundle.GetMappingVersion(), data.MappingVersion)
-	}
-	return nil
 }
 
 func selectDataset(bundle *datav1.SchemaBundle, messageName string) (*datav1.DatasetSchema, error) {

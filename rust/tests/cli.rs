@@ -49,7 +49,12 @@ async fn json_and_binary_request_files_use_canonical_decoding() {
     let json_path = write_request("json", br#"{"name":"JsonFile"}"#);
     let output = run_cli(
         registered_server(TestGreetService::default()),
-        &["GreetService", "Greet", "-r", json_path.to_str().unwrap()],
+        &[
+            "greet.v1.GreetService",
+            "Greet",
+            "-r",
+            json_path.to_str().unwrap(),
+        ],
     )
     .await
     .unwrap();
@@ -58,6 +63,23 @@ async fn json_and_binary_request_files_use_canonical_decoding() {
         serde_json::from_str::<Value>(&output).unwrap()["message"],
         "Hi JsonFile"
     );
+
+    let canonical = run_cli(
+        registered_server(TestGreetService::default()),
+        &[
+            "greet.v1.GreetService",
+            "Greet",
+            "-r",
+            r#"{"name":"ProtoJSON"}"#,
+        ],
+    )
+    .await
+    .unwrap();
+    let canonical: Value = serde_json::from_str(&canonical).unwrap();
+    assert_eq!(canonical["wireDisplayLabel"], "canonical");
+    assert_eq!(canonical["wireResponseCount"], "9007199254740993");
+    assert!(canonical.get("response_label").is_none());
+    assert!(canonical.get("response_count").is_none());
 
     let mut request = greet::GreetRequest {
         name: "BinaryFile".into(),
@@ -70,7 +92,12 @@ async fn json_and_binary_request_files_use_canonical_decoding() {
         let path = write_request(extension, &request);
         let output = run_cli(
             registered_server(TestGreetService::default()),
-            &["GreetService", "Greet", "-r", path.to_str().unwrap()],
+            &[
+                "greet.v1.GreetService",
+                "Greet",
+                "-r",
+                path.to_str().unwrap(),
+            ],
         )
         .await
         .unwrap();
@@ -83,12 +110,19 @@ async fn json_and_binary_request_files_use_canonical_decoding() {
 #[tokio::test]
 async fn request_parsing_is_strict_and_reports_invalid_argument() {
     let server = registered_server(TestGreetService::default());
+    assert_eq!(
+        run_cli(server.clone(), &["GreetService", "Greet"])
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
     for args in [
-        vec!["GreetService", "Greet", "extra"],
-        vec!["GreetService", "Greet", "-r", "{}", "extra"],
-        vec!["GreetService", "Greet", "-r", "{}", "-r", "{}"],
+        vec!["greet.v1.GreetService", "Greet", "extra"],
+        vec!["greet.v1.GreetService", "Greet", "-r", "{}", "extra"],
+        vec!["greet.v1.GreetService", "Greet", "-r", "{}", "-r", "{}"],
         vec![
-            "GreetService",
+            "greet.v1.GreetService",
             "Greet",
             "-r",
             r#"{"name":"Ada","extra":"x"}"#,
@@ -108,7 +142,12 @@ async fn request_parsing_is_strict_and_reports_invalid_argument() {
         let path = write_request(extension, bytes);
         let status = run_cli(
             server.clone(),
-            &["GreetService", "Greet", "-r", path.to_str().unwrap()],
+            &[
+                "greet.v1.GreetService",
+                "Greet",
+                "-r",
+                path.to_str().unwrap(),
+            ],
         )
         .await
         .unwrap_err();
@@ -120,7 +159,12 @@ async fn request_parsing_is_strict_and_reports_invalid_argument() {
     std::fs::create_dir(&directory).unwrap();
     let status = run_cli(
         server,
-        &["GreetService", "Greet", "-r", directory.to_str().unwrap()],
+        &[
+            "greet.v1.GreetService",
+            "Greet",
+            "-r",
+            directory.to_str().unwrap(),
+        ],
     )
     .await
     .unwrap_err();
@@ -156,7 +200,12 @@ async fn unary_cli_uses_the_typed_shared_chain_and_preserves_status() {
 
     let output = run_cli(
         server.clone(),
-        &["GreetService", "Greet", "-r", r#"{"name":"Typed"}"#],
+        &[
+            "greet.v1.GreetService",
+            "Greet",
+            "-r",
+            r#"{"name":"Typed"}"#,
+        ],
     )
     .await
     .unwrap();
@@ -167,7 +216,12 @@ async fn unary_cli_uses_the_typed_shared_chain_and_preserves_status() {
 
     let status = run_cli(
         server,
-        &["GreetService", "Greet", "-r", r#"{"name":"status"}"#],
+        &[
+            "greet.v1.GreetService",
+            "Greet",
+            "-r",
+            r#"{"name":"status"}"#,
+        ],
     )
     .await
     .unwrap_err();
@@ -200,7 +254,7 @@ async fn streaming_cli_uses_the_typed_shared_chain_and_ndjson() {
     let output = run_cli(
         server,
         &[
-            "GreetService",
+            "greet.v1.GreetService",
             "StreamGreet",
             "-r",
             r#"{"name":"Stream","count":2}"#,

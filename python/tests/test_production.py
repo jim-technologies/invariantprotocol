@@ -36,10 +36,9 @@ async def raising_server():
 
 
 async def test_unary_handler_exception_propagates_as_invariant_error(raising_server):
-    tool = raising_server.tools["GreetService.Greet"]
     request = greet_pb2.GreetRequest(name="x")
     with pytest.raises(InvariantError, match="kaboom") as exc:
-        await raising_server._invoke(tool, request, None)
+        await raising_server.invoke("greet.v1.GreetService.Greet", request)
     assert exc.value.code == grpc.StatusCode.INTERNAL
     assert "/greet.v1.GreetService/Greet" in exc.value.message
 
@@ -159,8 +158,12 @@ async def test_stream_interceptor_ordering():
     srv.use(StreamInterceptor("outer"))
     srv.use(StreamInterceptor("inner"))
 
-    tool = srv.tools["GreetService.StreamGreet"]
-    msgs = [m async for m in srv._invoke_stream(tool, greet_pb2.StreamGreetRequest(name="x"), None)]
+    msgs = [
+        message
+        async for message in srv.invoke_stream(
+            "greet.v1.GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="x")
+        )
+    ]
     assert len(msgs) == 1
     assert order == ["outer-before", "inner-before", "inner-after", "outer-after"]
     await srv.stop()
@@ -190,11 +193,10 @@ async def test_stream_cancellation_stops_producer():
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
     register_greet(srv, S())
 
-    tool = srv.tools["GreetService.StreamGreet"]
     received = []
 
     async def consumer():
-        async for msg in srv._invoke_stream(tool, greet_pb2.StreamGreetRequest(name="x"), None):
+        async for msg in srv.invoke_stream("greet.v1.GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="x")):
             received.append(msg.message)
 
     task = asyncio.create_task(consumer())
@@ -219,11 +221,10 @@ async def test_stream_invariant_error_preserves_code():
 
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
     register_greet(srv, S())
-    tool = srv.tools["GreetService.StreamGreet"]
 
     async def drain():
         out = []
-        async for msg in srv._invoke_stream(tool, greet_pb2.StreamGreetRequest(name="x"), None):
+        async for msg in srv.invoke_stream("greet.v1.GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="x")):
             out.append(msg.message)
         return out
 

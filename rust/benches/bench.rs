@@ -36,7 +36,7 @@ fn bench_invoke_stream_direct(c: &mut Criterion) {
         b.to_async(&rt).iter(|| async {
             let dyn_req = DynamicMessage::decode(desc.clone(), &req_bytes[..]).unwrap();
             let mut stream = server
-                .invoke_stream("GreetService.StreamGreet", Request::new(dyn_req))
+                .invoke_stream("greet.v1.GreetService.StreamGreet", Request::new(dyn_req))
                 .await
                 .unwrap()
                 .into_inner();
@@ -65,7 +65,7 @@ fn bench_invoke_direct(c: &mut Criterion) {
         b.to_async(&rt).iter(|| async {
             let dyn_req = DynamicMessage::decode(desc.clone(), &req_bytes[..]).unwrap();
             let resp = server
-                .invoke("GreetService.Greet", Request::new(dyn_req))
+                .invoke("greet.v1.GreetService.Greet", Request::new(dyn_req))
                 .await
                 .unwrap();
             black_box(resp);

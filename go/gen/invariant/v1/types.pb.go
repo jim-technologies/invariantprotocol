@@ -332,6 +332,7 @@ type FieldInfo struct {
 	Comment       string                 `protobuf:"bytes,6,opt,name=comment,proto3" json:"comment,omitempty"`
 	OneofIndex    *int32                 `protobuf:"varint,7,opt,name=oneof_index,json=oneofIndex,proto3,oneof" json:"oneof_index,omitempty"`
 	Optional      bool                   `protobuf:"varint,8,opt,name=optional,proto3" json:"optional,omitempty"`
+	JsonName      string                 `protobuf:"bytes,9,opt,name=json_name,json=jsonName,proto3" json:"json_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -420,6 +421,13 @@ func (x *FieldInfo) GetOptional() bool {
 		return x.Optional
 	}
 	return false
+}
+
+func (x *FieldInfo) GetJsonName() string {
+	if x != nil {
+		return x.JsonName
+	}
+	return ""
 }
 
 // Information about a oneof group.
@@ -657,7 +665,7 @@ const file_invariant_v1_types_proto_rawDesc = "" +
 	"\x06oneofs\x18\x04 \x03(\v2\x17.invariant.v1.OneofInfoR\x06oneofs\x12\x18\n" +
 	"\acomment\x18\x05 \x01(\tR\acomment\x12 \n" +
 	"\fis_map_entry\x18\x06 \x01(\bR\n" +
-	"isMapEntry\"\xea\x01\n" +
+	"isMapEntry\"\x87\x02\n" +
 	"\tFieldInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06number\x18\x02 \x01(\x05R\x06number\x12\x12\n" +
@@ -667,7 +675,8 @@ const file_invariant_v1_types_proto_rawDesc = "" +
 	"\acomment\x18\x06 \x01(\tR\acomment\x12$\n" +
 	"\voneof_index\x18\a \x01(\x05H\x00R\n" +
 	"oneofIndex\x88\x01\x01\x12\x1a\n" +
-	"\boptional\x18\b \x01(\bR\boptionalB\x0e\n" +
+	"\boptional\x18\b \x01(\bR\boptional\x12\x1b\n" +
+	"\tjson_name\x18\t \x01(\tR\bjsonNameB\x0e\n" +
 	"\f_oneof_index\"Z\n" +
 	"\tOneofInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +

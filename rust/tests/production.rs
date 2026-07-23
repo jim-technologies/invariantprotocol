@@ -43,7 +43,7 @@ async fn handler_panics_become_internal_status_without_crashing_the_process() {
     let server = registered_server(service);
     let status = server
         .invoke(
-            "GreetService.Greet",
+            "greet.v1.GreetService.Greet",
             Request::new(dynamic_greet_request(&server)),
         )
         .await
@@ -70,7 +70,7 @@ async fn stream_setup_panics_become_internal_status() {
         .unwrap();
     let status = match server
         .invoke_stream(
-            "GreetService.StreamGreet",
+            "greet.v1.GreetService.StreamGreet",
             Request::new(DynamicMessage::new(descriptor)),
         )
         .await
@@ -97,7 +97,7 @@ async fn synchronous_shared_middleware_panics_become_internal_status() {
         .unwrap();
     let status = unary
         .invoke(
-            "GreetService.Greet",
+            "greet.v1.GreetService.Greet",
             Request::new(dynamic_greet_request(&unary)),
         )
         .await
@@ -119,7 +119,7 @@ async fn synchronous_shared_middleware_panics_become_internal_status() {
         .unwrap();
     let status = match streaming
         .invoke_stream(
-            "GreetService.StreamGreet",
+            "greet.v1.GreetService.StreamGreet",
             Request::new(DynamicMessage::new(descriptor)),
         )
         .await
@@ -209,7 +209,7 @@ async fn shared_middleware_midstream_panics_become_internal_projection_status() 
     )
     .unwrap();
     let mut stream = server
-        .invoke_stream("GreetService.StreamGreet", Request::new(request))
+        .invoke_stream("greet.v1.GreetService.StreamGreet", Request::new(request))
         .await
         .unwrap()
         .into_inner();
@@ -327,7 +327,7 @@ async fn mcp_notifications_have_no_response_and_unknown_methods_are_json_rpc_err
     for request in [
         json!({"jsonrpc": "2.0", "id": 8, "method": "ping", "params": []}),
         json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": [], "arguments": {}}}),
-        json!({"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {"name": "GreetService.Greet", "arguments": []}}),
+        json!({"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {"name": "greet.v1.GreetService.Greet", "arguments": []}}),
     ] {
         let response = invariant::projections::mcp::mcp_dispatch(&server, &request)
             .await

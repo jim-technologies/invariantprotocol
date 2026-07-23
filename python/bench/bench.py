@@ -3,7 +3,8 @@
 Run:
     cd python && uv run python bench/bench.py
 
-Reports ns/op and allocs/op-equivalent (approximate via tracemalloc).
+Reports elapsed time and ns/op. Repeat runs on an otherwise idle host when
+comparing revisions; the script does not enforce a release threshold.
 """
 
 from __future__ import annotations
@@ -64,7 +65,7 @@ async def bench_invoke_direct():
     req = greet_pb2.GreetRequest(name="World")
 
     async def call():
-        await srv.invoke("GreetService.Greet", req)
+        await srv.invoke("greet.v1.GreetService.Greet", req)
 
     await bench("InvokeDirect", call, 50_000)
 
@@ -80,7 +81,7 @@ async def bench_invoke_with_interceptor():
     req = greet_pb2.GreetRequest(name="World")
 
     async def call():
-        await srv.invoke("GreetService.Greet", req)
+        await srv.invoke("greet.v1.GreetService.Greet", req)
 
     await bench("InvokeWithInterceptor", call, 50_000)
 

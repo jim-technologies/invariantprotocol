@@ -59,7 +59,7 @@ func TestInterceptorFiresOnMCP(t *testing.T) {
 	sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.Greet",
+			"name":      "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{"name": "Test"},
 		},
 	})
@@ -102,7 +102,7 @@ func TestInterceptorFiresOnCLI(t *testing.T) {
 	srv := interceptorServer(t, trackingInterceptor("A", &log))
 
 	result, err := srv.cli(t.Context(), []string{
-		"GreetService", "Greet", "-r", `{"name":"CLI"}`,
+		"greet.v1.GreetService", "Greet", "-r", `{"name":"CLI"}`,
 	})
 	require.NoError(t, err)
 	assert.Contains(t, result, "Hello, CLI")
@@ -121,7 +121,7 @@ func TestInterceptorChainOrder(t *testing.T) {
 	sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.Greet",
+			"name":      "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{"name": "Test"},
 		},
 	})
@@ -143,7 +143,7 @@ func TestInterceptorShortCircuit(t *testing.T) {
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.Greet",
+			"name":      "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{"name": "Test"},
 		},
 	})
@@ -167,7 +167,7 @@ func TestInterceptorFullMethod(t *testing.T) {
 	sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.Greet",
+			"name":      "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{"name": "Test"},
 		},
 	})

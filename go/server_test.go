@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 type testGreetServicer struct {
@@ -34,18 +36,45 @@ func TestInvokeUnknownToolReturnsNotFound(t *testing.T) {
 	assert.Equal(t, codes.NotFound, st.Code())
 }
 
+func TestInvokeRequiresTheRegisteredRequestType(t *testing.T) {
+	srv := streamServer(t, &streamServicer{})
+
+	_, err := srv.Invoke(
+		t.Context(),
+		"greet.v1.GreetService.Greet",
+		&greetpb.GreetResponse{Message: "wrong protobuf type"},
+	)
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Contains(t, err.Error(), "greet.v1.GreetResponse")
+	assert.Contains(t, err.Error(), "greet.v1.GreetRequest")
+
+	// The same protobuf identity from an isolated descriptor pool remains valid:
+	// protobuf wire conversion bridges it to the generated request type.
+	descriptor, err := findMessageDescriptor(srv.protoFiles, "greet.v1.GreetRequest")
+	require.NoError(t, err)
+	dynamicRequest := dynamicpb.NewMessage(descriptor)
+	dynamicRequest.Set(
+		descriptor.Fields().ByName(protoreflect.Name("name")),
+		protoreflect.ValueOfString("Dynamic"),
+	)
+	response, err := srv.Invoke(t.Context(), "greet.v1.GreetService.Greet", dynamicRequest)
+	require.NoError(t, err)
+	assert.Equal(t, "Hello Dynamic", response.(*greetpb.GreetResponse).GetMessage())
+}
+
 func TestToolSnapshotsDoNotExposeSchemaSlices(t *testing.T) {
 	srv := registeredServer(t)
 
 	tools := srv.Tools()
-	schema := tools["GreetService.Greet"].InputSchema
+	schema := tools["greet.v1.GreetService.Greet"].InputSchema
 	required := schema["required"].([]string)
 	required[0] = "mutated"
 	properties := schema["properties"].(map[string]any)
 	mood := properties["mood"].(map[string]any)
 	mood["enum"].([]string)[0] = "MUTATED"
 
-	freshTool := srv.Tools()["GreetService.Greet"].InputSchema
+	freshTool := srv.Tools()["greet.v1.GreetService.Greet"].InputSchema
 	assert.NotContains(t, freshTool["required"].([]string), "mutated")
 	freshProperties := freshTool["properties"].(map[string]any)
 	assert.NotContains(t, freshProperties["mood"].(map[string]any)["enum"].([]string), "MUTATED")
@@ -92,7 +121,7 @@ func TestIncludeFilter(t *testing.T) {
 	srv.Include("greet.v1.GreetService.Greet")
 	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
 	assert.Len(t, srv.tools, 1)
-	assert.Contains(t, srv.tools, "GreetService.Greet")
+	assert.Contains(t, srv.tools, "greet.v1.GreetService.Greet")
 }
 
 func TestExcludeFilter(t *testing.T) {
@@ -101,8 +130,8 @@ func TestExcludeFilter(t *testing.T) {
 	srv.Exclude("*GreetGroup")
 	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
 	assert.Len(t, srv.tools, 2)
-	assert.Contains(t, srv.tools, "GreetService.Greet")
-	assert.Contains(t, srv.tools, "GreetService.StreamGreet")
+	assert.Contains(t, srv.tools, "greet.v1.GreetService.Greet")
+	assert.Contains(t, srv.tools, "greet.v1.GreetService.StreamGreet")
 }
 
 func TestIncludeExcludeCombined(t *testing.T) {
@@ -112,8 +141,8 @@ func TestIncludeExcludeCombined(t *testing.T) {
 	srv.Exclude("*GreetGroup")
 	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
 	assert.Len(t, srv.tools, 2)
-	assert.Contains(t, srv.tools, "GreetService.Greet")
-	assert.Contains(t, srv.tools, "GreetService.StreamGreet")
+	assert.Contains(t, srv.tools, "greet.v1.GreetService.Greet")
+	assert.Contains(t, srv.tools, "greet.v1.GreetService.StreamGreet")
 }
 
 func TestProjectionFiltersFreezeAtFirstRegistration(t *testing.T) {
@@ -169,7 +198,7 @@ func TestIncludeEnvVar(t *testing.T) {
 	require.NoError(t, err)
 	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
 	assert.Len(t, srv.tools, 1)
-	assert.Contains(t, srv.tools, "GreetService.Greet")
+	assert.Contains(t, srv.tools, "greet.v1.GreetService.Greet")
 }
 
 func TestExcludeEnvVar(t *testing.T) {
@@ -178,6 +207,6 @@ func TestExcludeEnvVar(t *testing.T) {
 	require.NoError(t, err)
 	greetpb.RegisterGreetServiceServer(srv, &testGreetServicer{})
 	assert.Len(t, srv.tools, 2)
-	assert.Contains(t, srv.tools, "GreetService.Greet")
-	assert.Contains(t, srv.tools, "GreetService.StreamGreet")
+	assert.Contains(t, srv.tools, "greet.v1.GreetService.Greet")
+	assert.Contains(t, srv.tools, "greet.v1.GreetService.StreamGreet")
 }

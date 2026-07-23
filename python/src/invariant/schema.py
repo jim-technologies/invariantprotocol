@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from google.protobuf.descriptor_pb2 import (
-    FieldDescriptorProto,  # ty: ignore[unresolved-import] — real; stubs omit it
-)
+import copy
+from typing import Any
+
+from google.protobuf.descriptor_pb2 import FieldDescriptorProto
 
 from invariant.descriptor import ParsedDescriptor
 from invariant.gen.invariant.v1 import types_pb2 as invpb
@@ -30,20 +31,25 @@ TYPE_SINT64 = FieldDescriptorProto.TYPE_SINT64
 
 LABEL_REPEATED = FieldDescriptorProto.LABEL_REPEATED
 
+_SIGNED_64_PATTERN = r"^(0|-?[1-9][0-9]*)$"
+_UNSIGNED_64_PATTERN = r"^(0|[1-9][0-9]*)$"
+_FLOAT_WRAPPERS = {"google.protobuf.DoubleValue", "google.protobuf.FloatValue"}
+
 # Well-known type mappings
-_WKT = {
+_WKT: dict[str, dict[str, Any]] = {
     "google.protobuf.Timestamp": {"type": "string", "format": "date-time"},
     "google.protobuf.Duration": {
         "type": "string",
-        "description": "Duration e.g. '300s', '1.5h'",
+        "pattern": r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]{1,9})?s$",
     },
     "google.protobuf.Any": {"type": "object"},
     "google.protobuf.Struct": {"type": "object"},
     "google.protobuf.Value": {},
-    "google.protobuf.DoubleValue": {"type": "number"},
-    "google.protobuf.FloatValue": {"type": "number"},
-    "google.protobuf.Int64Value": {"type": "integer"},
-    "google.protobuf.UInt64Value": {"type": "integer", "minimum": 0},
+    "google.protobuf.ListValue": {"type": "array", "items": {}},
+    "google.protobuf.FieldMask": {"type": "string"},
+    "google.protobuf.Empty": {"type": "object", "additionalProperties": False},
+    "google.protobuf.Int64Value": {"type": "string", "pattern": _SIGNED_64_PATTERN},
+    "google.protobuf.UInt64Value": {"type": "string", "pattern": _UNSIGNED_64_PATTERN},
     "google.protobuf.Int32Value": {"type": "integer"},
     "google.protobuf.UInt32Value": {"type": "integer", "minimum": 0},
     "google.protobuf.BoolValue": {"type": "boolean"},
@@ -86,7 +92,8 @@ class SchemaGenerator:
             if field.comment:
                 prop["description"] = field.comment
 
-            properties[field.name] = prop
+            property_name = field.json_name or field.name
+            properties[property_name] = prop
 
             if (
                 field.label != LABEL_REPEATED
@@ -94,7 +101,7 @@ class SchemaGenerator:
                 and not field.HasField("oneof_index")
                 and not field.optional
             ):
-                required.append(field.name)
+                required.append(property_name)
 
         schema: dict = {
             "type": "object",
@@ -109,11 +116,15 @@ class SchemaGenerator:
         t = field.type
 
         if t in (TYPE_DOUBLE, TYPE_FLOAT):
-            return {"type": "number"}
-        if t in (TYPE_INT32, TYPE_INT64, TYPE_SINT32, TYPE_SINT64, TYPE_SFIXED32, TYPE_SFIXED64):
+            return _float_schema()
+        if t in (TYPE_INT32, TYPE_SINT32, TYPE_SFIXED32):
             return {"type": "integer"}
-        if t in (TYPE_UINT32, TYPE_UINT64, TYPE_FIXED32, TYPE_FIXED64):
+        if t in (TYPE_UINT32, TYPE_FIXED32):
             return {"type": "integer", "minimum": 0}
+        if t in (TYPE_INT64, TYPE_SINT64, TYPE_SFIXED64):
+            return {"type": "string", "pattern": _SIGNED_64_PATTERN}
+        if t in (TYPE_UINT64, TYPE_FIXED64):
+            return {"type": "string", "pattern": _UNSIGNED_64_PATTERN}
         if t == TYPE_BOOL:
             return {"type": "boolean"}
         if t == TYPE_STRING:
@@ -127,8 +138,10 @@ class SchemaGenerator:
         return {}
 
     def _message_type_schema(self, type_name: str, visiting: set[str]) -> dict:
+        if type_name in _FLOAT_WRAPPERS:
+            return _float_schema()
         if type_name in _WKT:
-            return dict(_WKT[type_name])
+            return copy.deepcopy(_WKT[type_name])
 
         if type_name in visiting:
             return {"type": "object"}
@@ -141,6 +154,8 @@ class SchemaGenerator:
         return schema
 
     def _enum_schema(self, type_name: str) -> dict:
+        if type_name == "google.protobuf.NullValue":
+            return {"type": "null"}
         enum = self.parsed.enums.get(type_name)
         if enum is None:
             return {"type": "string"}
@@ -153,14 +168,33 @@ class SchemaGenerator:
         return msg is not None and msg.is_map_entry
 
     def _map_schema(self, map_entry_msg: invpb.MessageInfo, visiting: set[str]) -> dict:
+        key_field = None
         value_field = None
         for f in map_entry_msg.fields:
+            if f.name == "key":
+                key_field = f
             if f.name == "value":
                 value_field = f
-                break
         if value_field is None:
             return {"type": "object"}
-        return {
+        schema = {
             "type": "object",
             "additionalProperties": self._field_type_schema(value_field, visiting),
         }
+        if key_field is not None:
+            if key_field.type == TYPE_BOOL:
+                schema["propertyNames"] = {"enum": ["false", "true"]}
+            elif key_field.type in (TYPE_INT32, TYPE_INT64, TYPE_SINT32, TYPE_SINT64, TYPE_SFIXED32, TYPE_SFIXED64):
+                schema["propertyNames"] = {"pattern": _SIGNED_64_PATTERN}
+            elif key_field.type in (TYPE_UINT32, TYPE_UINT64, TYPE_FIXED32, TYPE_FIXED64):
+                schema["propertyNames"] = {"pattern": _UNSIGNED_64_PATTERN}
+        return schema
+
+
+def _float_schema() -> dict:
+    return {
+        "oneOf": [
+            {"type": "number"},
+            {"type": "string", "enum": ["NaN", "Infinity", "-Infinity"]},
+        ]
+    }

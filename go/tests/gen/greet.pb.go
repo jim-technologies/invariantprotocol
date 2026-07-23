@@ -84,9 +84,11 @@ type GreetRequest struct {
 	// Optional mood for the greeting.
 	Mood *Mood `protobuf:"varint,2,opt,name=mood,proto3,enum=greet.v1.Mood,oneof" json:"mood,omitempty"`
 	// Optional metadata tags.
-	Tags          map[string]string `protobuf:"bytes,3,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Tags map[string]string `protobuf:"bytes,3,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Optional 64-bit sequence with an explicit ProtoJSON field name.
+	AccountSequence *int64 `protobuf:"varint,4,opt,name=account_sequence,json=wireSequenceId,proto3,oneof" json:"account_sequence,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GreetRequest) Reset() {
@@ -140,6 +142,13 @@ func (x *GreetRequest) GetTags() map[string]string {
 	return nil
 }
 
+func (x *GreetRequest) GetAccountSequence() int64 {
+	if x != nil && x.AccountSequence != nil {
+		return *x.AccountSequence
+	}
+	return 0
+}
+
 // Response from the Greet RPC.
 type GreetResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -148,7 +157,11 @@ type GreetResponse struct {
 	// Mood used in the greeting.
 	Mood Mood `protobuf:"varint,2,opt,name=mood,proto3,enum=greet.v1.Mood" json:"mood,omitempty"`
 	// Tags echoed back.
-	Tags          map[string]string `protobuf:"bytes,3,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Tags map[string]string `protobuf:"bytes,3,rep,name=tags,proto3" json:"tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// A label with an explicit ProtoJSON field name.
+	ResponseLabel string `protobuf:"bytes,4,opt,name=response_label,json=wireDisplayLabel,proto3" json:"response_label,omitempty"`
+	// A 64-bit count emitted as a ProtoJSON string.
+	ResponseCount int64 `protobuf:"varint,5,opt,name=response_count,json=wireResponseCount,proto3" json:"response_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -202,6 +215,20 @@ func (x *GreetResponse) GetTags() map[string]string {
 		return x.Tags
 	}
 	return nil
+}
+
+func (x *GreetResponse) GetResponseLabel() string {
+	if x != nil {
+		return x.ResponseLabel
+	}
+	return ""
+}
+
+func (x *GreetResponse) GetResponseCount() int64 {
+	if x != nil {
+		return x.ResponseCount
+	}
+	return 0
 }
 
 // A person in a group.
@@ -419,19 +446,23 @@ var File_greet_proto protoreflect.FileDescriptor
 
 const file_greet_proto_rawDesc = "" +
 	"\n" +
-	"\vgreet.proto\x12\bgreet.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1cgoogle/api/annotations.proto\"\xcc\x01\n" +
+	"\vgreet.proto\x12\bgreet.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1cgoogle/api/annotations.proto\"\x90\x02\n" +
 	"\fGreetRequest\x12\x1b\n" +
 	"\x04name\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x04name\x12'\n" +
 	"\x04mood\x18\x02 \x01(\x0e2\x0e.greet.v1.MoodH\x00R\x04mood\x88\x01\x01\x124\n" +
-	"\x04tags\x18\x03 \x03(\v2 .greet.v1.GreetRequest.TagsEntryR\x04tags\x1a7\n" +
+	"\x04tags\x18\x03 \x03(\v2 .greet.v1.GreetRequest.TagsEntryR\x04tags\x12-\n" +
+	"\x10account_sequence\x18\x04 \x01(\x03H\x01R\x0ewireSequenceId\x88\x01\x01\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\a\n" +
-	"\x05_mood\"\xbd\x01\n" +
+	"\x05_moodB\x13\n" +
+	"\x11_account_sequence\"\x92\x02\n" +
 	"\rGreetResponse\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12\"\n" +
 	"\x04mood\x18\x02 \x01(\x0e2\x0e.greet.v1.MoodR\x04mood\x125\n" +
-	"\x04tags\x18\x03 \x03(\v2!.greet.v1.GreetResponse.TagsEntryR\x04tags\x1a7\n" +
+	"\x04tags\x18\x03 \x03(\v2!.greet.v1.GreetResponse.TagsEntryR\x04tags\x12(\n" +
+	"\x0eresponse_label\x18\x04 \x01(\tR\x10wireDisplayLabel\x12)\n" +
+	"\x0eresponse_count\x18\x05 \x01(\x03R\x11wireResponseCount\x1a7\n" +
 	"\tTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"@\n" +

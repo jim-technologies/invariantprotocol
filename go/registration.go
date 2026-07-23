@@ -12,7 +12,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -385,7 +384,7 @@ func (s *Server) registeredTool(
 	unaryDesc *grpc.MethodDesc,
 	streamDesc *grpc.StreamDesc,
 ) *Tool {
-	toolName := svcInfo.Name + "." + methodName
+	toolName := svcInfo.FullName + "." + methodName
 	description := methodInfo.Comment
 	if description == "" {
 		description = toolName
@@ -458,24 +457,27 @@ func copyProtoMessage(dst, src any) error {
 	if !ok {
 		return fmt.Errorf("request does not implement proto.Message: %T", src)
 	}
+	dstDescriptor := dstMsg.ProtoReflect().Descriptor()
+	srcDescriptor := srcMsg.ProtoReflect().Descriptor()
+	if dstDescriptor.FullName() != srcDescriptor.FullName() {
+		return status.Errorf(
+			codes.InvalidArgument,
+			"request message type %q does not match expected %q",
+			srcDescriptor.FullName(),
+			dstDescriptor.FullName(),
+		)
+	}
 	proto.Reset(dstMsg)
 	if reflect.TypeOf(dstMsg) == reflect.TypeOf(srcMsg) &&
-		dstMsg.ProtoReflect().Descriptor() == srcMsg.ProtoReflect().Descriptor() {
+		dstDescriptor == srcDescriptor {
 		proto.Merge(dstMsg, srcMsg)
 		return nil
 	}
-	if dstMsg.ProtoReflect().Descriptor().FullName() == srcMsg.ProtoReflect().Descriptor().FullName() {
-		data, err := proto.Marshal(srcMsg)
-		if err != nil {
-			return err
-		}
-		return proto.Unmarshal(data, dstMsg)
-	}
-	data, err := protojson.Marshal(srcMsg)
+	data, err := proto.Marshal(srcMsg)
 	if err != nil {
 		return err
 	}
-	return (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(data, dstMsg)
+	return proto.Unmarshal(data, dstMsg)
 }
 
 func (s *Server) freeze() {

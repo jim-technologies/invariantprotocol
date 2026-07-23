@@ -91,8 +91,8 @@ async fn full_generated_service_remains_native_while_projections_stay_bounded() 
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect::<Vec<_>>(),
         [
-            "AllCardinalityService.ServerStream",
-            "AllCardinalityService.Unary"
+            "cardinality.v1.AllCardinalityService.ServerStream",
+            "cardinality.v1.AllCardinalityService.Unary"
         ]
     );
 

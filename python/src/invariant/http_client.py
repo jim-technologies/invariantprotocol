@@ -11,6 +11,7 @@ import os
 import random
 import time
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from typing import Any, cast
@@ -22,6 +23,13 @@ from google.protobuf import any_pb2, descriptor_pool, duration_pb2, json_format,
 from google.rpc import error_details_pb2
 
 from invariant.errors import InvariantError, invalid_argument
+from invariant.http_types import (
+    ChannelOptions,
+    HTTPAuth,
+    HTTPResponseObserver,
+    OutboundHTTPRequest,
+    OutboundHTTPResponse,
+)
 from invariant.version import package_version
 
 _DEFAULT_USER_AGENT = f"invariant-protocol/{package_version()}"
@@ -104,13 +112,11 @@ class HTTPConnection:
         self,
         *,
         base_url: str,
-        auth: Any = None,
+        auth: HTTPAuth | Callable[[OutboundHTTPRequest], dict[str, str] | None] | None = None,
         service_config: dict[str, Any] | None = None,
-        options: Any = None,
-        observer: Any = None,
+        options: ChannelOptions | None = None,
+        observer: HTTPResponseObserver | None = None,
     ) -> None:
-        from invariant.server import ChannelOptions, HTTPAuth
-
         self.base_url = _validated_base_url(base_url)
         if auth is None:
             self.auth = HTTPAuth()
@@ -124,21 +130,7 @@ class HTTPConnection:
         self.options = options or ChannelOptions()
         self._method_configs = _parse_method_configs(service_config)
         self._headers = _outbound_http_headers_from_env()
-        self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                connect=self.options.connect_timeout,
-                read=self.options.read_timeout,
-                write=self.options.write_timeout,
-                pool=self.options.pool_timeout,
-            ),
-            limits=httpx.Limits(
-                max_connections=self.options.max_connections,
-                max_keepalive_connections=self.options.max_keepalive_connections,
-                keepalive_expiry=self.options.keepalive_expiry,
-            ),
-            proxy=self.options.proxy,
-            http2=self.options.http2,
-        )
+        self._client: httpx.AsyncClient | None = None
 
     @property
     def headers(self) -> dict[str, str]:
@@ -146,6 +138,22 @@ class HTTPConnection:
 
     @property
     def client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    connect=self.options.connect_timeout,
+                    read=self.options.read_timeout,
+                    write=self.options.write_timeout,
+                    pool=self.options.pool_timeout,
+                ),
+                limits=httpx.Limits(
+                    max_connections=self.options.max_connections,
+                    max_keepalive_connections=self.options.max_keepalive_connections,
+                    keepalive_expiry=self.options.keepalive_expiry,
+                ),
+                proxy=self.options.proxy,
+                http2=self.options.http2,
+            )
         return self._client
 
     def retry_policy_for(self, method_path: str) -> _RetryPolicy | None:
@@ -161,7 +169,7 @@ class HTTPConnection:
         return best
 
     async def aclose(self) -> None:
-        if not self._client.is_closed:
+        if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
 
 
@@ -273,13 +281,12 @@ class HTTPDynamicHandler:
         output_type: str,
         method_path: str,
         input_type: str | None = None,
-        pool: descriptor_pool.DescriptorPool | None = None,
+        pool: descriptor_pool.DescriptorPool,
     ) -> None:
         self._connection = connection
         self._binding = binding
         self._method_path = method_path
         self._retry_policy = connection.retry_policy_for(method_path)
-        pool = pool or descriptor_pool.Default()
         resp_desc = pool.FindMessageTypeByName(output_type)
         self._resp_class = message_factory.GetMessageClass(resp_desc)
         self._httpbody_response = output_type == _HTTPBODY_TYPE
@@ -382,10 +389,11 @@ class HTTPDynamicHandler:
                 # Return the raw body verbatim in a google.api.HttpBody — for
                 # endpoints whose payload isn't worth modeling as a message.
                 out = self._resp_class()
-                out.data = raw
+                http_body = cast(Any, out)
+                http_body.data = raw
                 content_type = response.headers.get("content-type")
                 if content_type:
-                    out.content_type = content_type
+                    http_body.content_type = content_type
                 return out
 
             out = self._resp_class()
@@ -422,8 +430,6 @@ class HTTPDynamicHandler:
         """
         if self._connection.auth.query_provider is None:
             return target
-        from invariant.server import OutboundHTTPRequest
-
         try:
             extra = self._connection.auth.query_provider(
                 OutboundHTTPRequest(
@@ -470,11 +476,6 @@ class HTTPDynamicHandler:
         # An observer is best-effort (archival/metrics); it must never break the
         # call path, so anything it raises is suppressed.
         with contextlib.suppress(Exception):
-            from invariant.server import (
-                OutboundHTTPRequest,
-                OutboundHTTPResponse,
-            )
-
             self._connection.observer(
                 OutboundHTTPResponse(
                     method_path=self._method_path,
@@ -524,8 +525,6 @@ class HTTPDynamicHandler:
             return
 
         try:
-            from invariant.server import OutboundHTTPRequest
-
             dynamic_headers = self._connection.auth.header_provider(
                 OutboundHTTPRequest(
                     method_path=self._method_path,

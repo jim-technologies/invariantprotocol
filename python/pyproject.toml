@@ -1,8 +1,9 @@
 [project]
 name = "invariant-protocol"
-version = "0.8.3"
+version = "0.9.0"
 description = "Project protobuf/gRPC services into MCP, CLI, HTTP, and logical data schemas"
 requires-python = ">=3.14"
+license = "Apache-2.0"
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "protobuf>=7.35.1",
@@ -20,6 +21,9 @@ data = ["pyarrow>=25.0.0"]
 [project.scripts]
 invariant-check-proto-comments = "invariant.proto_comments:main"
 
+[project.urls]
+Repository = "https://github.com/jim-technologies/invariantprotocol"
+
 [dependency-groups]
 dev = [
     "grpcio-tools>=1.82.1",
@@ -27,8 +31,11 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ty>=0.0.59",
+    "mypy>=2.3.0",
     "pip-audit>=2.10.1",
+    "types-grpcio>=1.82.1.20260711",
+    "types-grpcio-reflection>=1.0.0.20260508",
+    "types-protobuf>=7.34.1.20260518",
 ]
 
 [build-system]
@@ -40,7 +47,7 @@ packages = ["src/invariant", "src/buf"]
 
 [tool.ruff]
 line-length = 120
-exclude = ["gen/", "*_pb2.py", "*_pb2_grpc.py"]
+exclude = ["gen/", "*_pb2.py", "*_pb2.pyi", "*_pb2_grpc.py"]
 
 [tool.ruff.lint]
 select = [
@@ -68,33 +75,24 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S310", "S603", "PT015", "PT017", "B011"]
 
-# ── ty: static type checker (Astral, pre-1.0) ──
-[tool.ty.environment]
-python-version = "3.14"
+# ── mypy: stable static type checker ──
+[tool.mypy]
+python_version = "3.14"
+files = ["src/invariant"]
+exclude = ["^src/invariant/gen/"]
+check_untyped_defs = true
+no_implicit_optional = true
+show_error_codes = true
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_unused_ignores = true
 
-[tool.ty.src]
-include = ["src"]
-
-[tool.ty.rules]
-# The protobuf Python generator does not emit type stubs, so generated module
-# attributes need narrow file-level exceptions below. Keep general call,
-# operator, reference, and attribute checking enabled everywhere else.
-possibly-unresolved-reference = "error"
-
-[[tool.ty.overrides]]
-include = [
-    "src/invariant/data_arrow.py",
-    "src/invariant/descriptor.py",
-    "src/invariant/errors.py",
-    "src/invariant/http_client.py",
-    "src/invariant/proto_comments.py",
-    "src/invariant/projections/grpc.py",
-    "src/invariant/schema.py",
-    "src/invariant/server.py",
-]
-
-[tool.ty.overrides.rules]
-unresolved-attribute = "ignore"
+[[tool.mypy.overrides]]
+module = ["google.api.*", "google.rpc.*", "pyarrow"]
+# These generated/extension modules do not publish PEP 561 metadata. Keep the
+# exception at the dependency boundary; authored Invariant code stays checked.
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

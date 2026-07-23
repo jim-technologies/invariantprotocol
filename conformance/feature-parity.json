@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
+  "core_maturity": "stable",
   "languages": ["go", "python", "rust", "typescript"],
   "features": [
     {
       "id": "descriptor_runtime",
       "kind": "core",
-      "description": "Load descriptor.binpb with source comments and build JSON Schema/tool metadata.",
+      "description": "Load descriptor.binpb with source comments and build collision-free tool metadata plus JSON Schema using canonical ProtoJSON names and scalar representations.",
       "api": {
         "go": "ServerFromDescriptor / ServerFromBytes",
         "python": "Server.from_descriptor / Server.from_bytes",
@@ -41,7 +42,7 @@
     {
       "id": "programmatic_invoke",
       "kind": "core",
-      "description": "Invoke unary and server-streaming methods in process with canonical method identity.",
+      "description": "Invoke unary and server-streaming methods in process with the canonical package.Service.Method tool identity.",
       "api": {
         "go": "Invoke / InvokeStream",
         "python": "invoke / invoke_stream",
@@ -77,7 +78,7 @@
     {
       "id": "http_connect_projection",
       "kind": "core",
-      "description": "Serve Connect unary and server-streaming JSON/protobuf routes plus catalog, descriptor, health, and MCP HTTP endpoints.",
+      "description": "Serve Connect unary and server-streaming canonical ProtoJSON/protobuf routes plus catalog, descriptor, health, and bounded MCP HTTP endpoints.",
       "api": {
         "go": "HTTPHandler",
         "python": "asgi_app",
@@ -106,7 +107,12 @@
       "tests": {
         "go": ["go/mcp_test.go", "go/mcp_http_test.go"],
         "python": ["python/tests/test_mcp.py", "python/tests/test_streaming.py"],
-        "rust": ["rust/tests/http.rs", "rust/tests/production.rs", "rust/tests/streaming.rs"],
+        "rust": [
+          "rust/src/projections/mcp.rs",
+          "rust/tests/http.rs",
+          "rust/tests/production.rs",
+          "rust/tests/streaming.rs"
+        ],
         "typescript": ["typescript/tests/semantics.test.ts"]
       }
     },

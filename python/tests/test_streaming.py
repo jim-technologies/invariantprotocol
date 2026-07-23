@@ -7,6 +7,7 @@ adds StreamGreet so we can exercise the streaming path end-to-end.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import struct
 
@@ -50,7 +51,11 @@ class StreamGreetServicer:
     async def StreamGreet(self, request, context):
         n = request.count or 1
         for i in range(n):
-            yield greet_pb2.GreetResponse(message=f"Hi {request.name} #{i}")
+            yield greet_pb2.GreetResponse(
+                message=f"Hi {request.name} #{i}",
+                response_label=f"label {i}",
+                response_count=9007199254740993 + i,
+            )
 
 
 class StreamErrorServicer:
@@ -79,7 +84,7 @@ async def stream_err_server():
 
 
 def test_register_streaming_marks_tool_as_streaming(stream_server):
-    tool = stream_server.tools["GreetService.StreamGreet"]
+    tool = stream_server.tools["greet.v1.GreetService.StreamGreet"]
     assert tool.server_streaming is True
 
 
@@ -87,11 +92,11 @@ def test_tool_catalog_marks_streaming_tools(stream_server):
     catalog = stream_server.tool_catalog()
     by_name = {entry["name"]: entry for entry in catalog}
 
-    stream = by_name["GreetService.StreamGreet"]
+    stream = by_name["greet.v1.GreetService.StreamGreet"]
     assert stream["_meta"] == {"streaming": True}
 
     # Unary tools intentionally have no _meta so the wire shape stays compact.
-    unary = by_name["GreetService.Greet"]
+    unary = by_name["greet.v1.GreetService.Greet"]
     assert "_meta" not in unary
 
 
@@ -107,9 +112,10 @@ def test_register_rejects_non_async_gen_stream_handler():
 
 
 async def test_invoke_stream_collects_chunks(stream_server):
-    tool = stream_server.tools["GreetService.StreamGreet"]
     request = greet_pb2.StreamGreetRequest(name="Alice", count=3)
-    msgs = [m.message async for m in stream_server._invoke_stream(tool, request, None)]
+    msgs = [
+        message.message async for message in stream_server.invoke_stream("greet.v1.GreetService.StreamGreet", request)
+    ]
     assert msgs == ["Hi Alice #0", "Hi Alice #1", "Hi Alice #2"]
 
 
@@ -137,9 +143,8 @@ async def test_stream_interceptor_chain(stream_server):
 
     stream_server.use(Trace())
 
-    tool = stream_server.tools["GreetService.StreamGreet"]
     request = greet_pb2.StreamGreetRequest(name="Z", count=2)
-    out = [m async for m in stream_server._invoke_stream(tool, request, None)]
+    out = [message async for message in stream_server.invoke_stream("greet.v1.GreetService.StreamGreet", request)]
     assert len(out) == 2
     assert seen[0] == ("/greet.v1.GreetService/StreamGreet", greet_pb2.StreamGreetRequest)
     assert "Hi Z #0" in seen
@@ -157,7 +162,7 @@ async def test_mcp_tools_call_collects_stream_chunks(stream_server):
         "id": 1,
         "method": "tools/call",
         "params": {
-            "name": "GreetService.StreamGreet",
+            "name": "greet.v1.GreetService.StreamGreet",
             "arguments": {"name": "Stream", "count": 3},
         },
     }
@@ -170,6 +175,8 @@ async def test_mcp_tools_call_collects_stream_chunks(stream_server):
         assert block["type"] == "text"
         chunk = json.loads(block["text"])
         assert chunk["message"] == f"Hi Stream #{i}"
+        assert chunk["wireDisplayLabel"] == f"label {i}"
+        assert chunk["wireResponseCount"] == str(9007199254740993 + i)
 
 
 async def test_mcp_tools_call_stream_error_surfaces(stream_err_server):
@@ -179,7 +186,7 @@ async def test_mcp_tools_call_stream_error_surfaces(stream_err_server):
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {"name": "GreetService.StreamGreet", "arguments": {"name": "x"}},
+        "params": {"name": "greet.v1.GreetService.StreamGreet", "arguments": {"name": "x"}},
     }
     resp = await mcp_dispatch(stream_err_server, msg)
     result = resp["result"]
@@ -217,13 +224,15 @@ async def test_cli_streams_ndjson(stream_server):
             )
 
     stream_server.use(Trace())
-    out = await run_cli(stream_server, ["GreetService", "StreamGreet", "-r", '{"name":"Z","count":2}'])
+    out = await run_cli(stream_server, ["greet.v1.GreetService", "StreamGreet", "-r", '{"name":"Z","count":2}'])
     assert isinstance(out, str)
     lines = out.split("\n")
     assert len(lines) == 2
     parsed = [json.loads(line) for line in lines]
     assert parsed[0]["message"] == "Hi Z #0"
     assert parsed[1]["message"] == "Hi Z #1"
+    assert parsed[0]["wireDisplayLabel"] == "label 0"
+    assert parsed[0]["wireResponseCount"] == "9007199254740993"
     assert seen == [("/greet.v1.GreetService/StreamGreet", greet_pb2.StreamGreetRequest)]
 
 
@@ -240,7 +249,11 @@ async def test_stream_cli_flushes_per_chunk():
 
     class GatedServicer:
         async def StreamGreet(self, request, context):
-            yield greet_pb2.GreetResponse(message=f"Hi {request.name} #0")
+            yield greet_pb2.GreetResponse(
+                message=f"Hi {request.name} #0",
+                response_label="first",
+                response_count=9007199254740993,
+            )
             await gate.wait()
             yield greet_pb2.GreetResponse(message=f"Hi {request.name} #1")
 
@@ -256,13 +269,15 @@ async def test_stream_cli_flushes_per_chunk():
             flushed_first.set()
 
     runner = asyncio.create_task(
-        stream_cli(srv, ["GreetService", "StreamGreet", "-r", '{"name":"X","count":2}'], write)
+        stream_cli(srv, ["greet.v1.GreetService", "StreamGreet", "-r", '{"name":"X","count":2}'], write)
     )
 
     await asyncio.wait_for(flushed_first.wait(), timeout=2.0)
     assert len(written) == 1
     chunk0 = json.loads(written[0])
     assert chunk0["message"] == "Hi X #0"
+    assert chunk0["wireDisplayLabel"] == "first"
+    assert chunk0["wireResponseCount"] == "9007199254740993"
 
     gate.set()
     await asyncio.wait_for(runner, timeout=2.0)
@@ -361,6 +376,37 @@ async def test_http_connect_stream_envelopes(stream_server):
         await stream_server._stop_http()
 
 
+async def test_http_connect_stream_uses_canonical_proto_json_names():
+    class JsonNameStreamServicer:
+        async def StreamGreet(self, request, context):
+            del request, context
+            yield greet_pb2.GreetResponse(
+                response_label="canonical",
+                response_count=9007199254740993,
+            )
+
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    register_greet(server, JsonNameStreamServicer())
+    port = await server._start_http(port=0)
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            response = await client.post(
+                "/greet.v1.GreetService/StreamGreet",
+                content=_pack_envelope(0, b'{"name":"canonical","count":1}'),
+                headers={"Content-Type": "application/connect+json"},
+            )
+
+        assert response.status_code == 200
+        frames = _read_frames(response.content)
+        assert json.loads(frames[0][1]) == {
+            "wireDisplayLabel": "canonical",
+            "wireResponseCount": "9007199254740993",
+        }
+    finally:
+        await server._stop_http()
+        await server.stop()
+
+
 async def test_http_connect_stream_rejects_wrong_content_type(stream_server):
     port = await stream_server._start_http(port=0)
     try:
@@ -448,7 +494,11 @@ async def test_mcp_http_tools_list_includes_stream(stream_server):
                 headers=_MCP_HEADERS,
             )
         names = [t["name"] for t in r.json()["result"]["tools"]]
-        assert set(names) == {"GreetService.Greet", "GreetService.GreetGroup", "GreetService.StreamGreet"}
+        assert set(names) == {
+            "greet.v1.GreetService.Greet",
+            "greet.v1.GreetService.GreetGroup",
+            "greet.v1.GreetService.StreamGreet",
+        }
     finally:
         await stream_server._stop_http()
 
@@ -463,7 +513,7 @@ async def test_mcp_http_unary_tools_call(stream_server):
                     "jsonrpc": "2.0",
                     "id": 3,
                     "method": "tools/call",
-                    "params": {"name": "GreetService.Greet", "arguments": {"name": "World"}},
+                    "params": {"name": "greet.v1.GreetService.Greet", "arguments": {"name": "World"}},
                 },
                 headers=_MCP_HEADERS,
             )
@@ -485,7 +535,7 @@ async def test_mcp_http_stream_tools_call_collects_chunks(stream_server):
                     "id": 4,
                     "method": "tools/call",
                     "params": {
-                        "name": "GreetService.StreamGreet",
+                        "name": "greet.v1.GreetService.StreamGreet",
                         "arguments": {"name": "Stream", "count": 3},
                     },
                 },
@@ -645,6 +695,52 @@ async def test_mcp_http_response_limit(stream_server):
         assert response.json()["code"] == "resource_exhausted"
     finally:
         await stream_server._stop_http()
+
+
+async def test_mcp_http_stream_response_limit_stops_source_early():
+    yielded: list[int] = []
+    closed = asyncio.Event()
+
+    class FiniteStreamServicer:
+        async def StreamGreet(self, request, context):
+            del request, context
+            try:
+                for index in range(50):
+                    yielded.append(index)
+                    yield greet_pb2.GreetResponse(message=f"chunk {index}")
+            finally:
+                closed.set()
+
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    register_greet(server, FiniteStreamServicer())
+    server.set_max_unary_response_bytes(256)
+    port = await server._start_http(port=0)
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            response = await client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "greet.v1.GreetService.StreamGreet",
+                        "arguments": {"name": "bounded", "count": 50},
+                    },
+                },
+                headers=_MCP_HEADERS,
+            )
+
+        assert response.status_code == 429
+        assert response.json() == {
+            "code": "resource_exhausted",
+            "message": "encoded MCP response exceeds configured byte limit",
+        }
+        assert 0 < len(yielded) < 50
+        assert closed.is_set()
+    finally:
+        await server._stop_http()
+        await server.stop()
 
 
 async def test_mcp_http_transport_headers_and_get(stream_server):

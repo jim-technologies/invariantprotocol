@@ -7,7 +7,7 @@ debug clients work out of the box.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import Executor
 from typing import TYPE_CHECKING, Any
 
@@ -18,7 +18,7 @@ from grpc_reflection.v1alpha import reflection, reflection_pb2
 from invariant.errors import InvariantError, as_invariant_error
 
 if TYPE_CHECKING:
-    from invariant.server import Server, Tool
+    from invariant.server import Server, _Tool
 
 
 def _build_grpc_server(
@@ -46,7 +46,9 @@ def _build_grpc_server(
     for service_name, method_handlers in projected_handlers.items():
         generic_handler = grpc.method_handlers_generic_handler(service_name, method_handlers)
         grpc_server.add_generic_rpc_handlers((generic_handler,))
-        grpc_server.add_registered_method_handlers(service_name, method_handlers)
+        # Available since grpcio 1.32; the third-party typing package does not
+        # yet expose it on the async Server protocol.
+        grpc_server.add_registered_method_handlers(service_name, method_handlers)  # type: ignore[attr-defined]
 
     # Enable reflection for the registered services.
     reflected_methods = _reflected_methods(server)
@@ -167,8 +169,10 @@ def _projected_handlers(server: Server) -> dict[str, dict[str, grpc.RpcMethodHan
     return projected
 
 
-def _wrap_tool(server: Server, tool: Tool) -> grpc.RpcMethodHandler:
+def _wrap_tool(server: Server, tool: _Tool) -> grpc.RpcMethodHandler:
     generated = tool.rpc_handler
+    request_deserializer: Callable[[bytes], Any] | None
+    response_serializer: Callable[[Any], bytes] | None
     if generated is None:
 
         def deserialize(data: bytes):

@@ -1,10 +1,6 @@
 package invariant
 
-import (
-	"maps"
-
-	invpb "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1"
-)
+import invpb "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1"
 
 // Proto field type constants (matching google.protobuf.FieldDescriptorProto.Type).
 const (
@@ -32,19 +28,27 @@ const (
 // Well-known type mappings.
 var wkt = map[string]map[string]any{
 	"google.protobuf.Timestamp":   {"type": "string", "format": "date-time"},
-	"google.protobuf.Duration":    {"type": "string", "description": "Duration e.g. '300s', '1.5h'"},
+	"google.protobuf.Duration":    {"type": "string", "pattern": `^-?(?:0|[1-9][0-9]*)(?:\.[0-9]{1,9})?s$`},
 	"google.protobuf.Any":         {"type": "object"},
 	"google.protobuf.Struct":      {"type": "object"},
 	"google.protobuf.Value":       {},
-	"google.protobuf.DoubleValue": {"type": "number"},
-	"google.protobuf.FloatValue":  {"type": "number"},
-	"google.protobuf.Int64Value":  {"type": "integer"},
-	"google.protobuf.UInt64Value": {"type": "integer", "minimum": 0},
+	"google.protobuf.Int64Value":  {"type": "string", "pattern": `^(0|-?[1-9][0-9]*)$`},
+	"google.protobuf.UInt64Value": {"type": "string", "pattern": `^(0|[1-9][0-9]*)$`},
 	"google.protobuf.Int32Value":  {"type": "integer"},
 	"google.protobuf.UInt32Value": {"type": "integer", "minimum": 0},
 	"google.protobuf.BoolValue":   {"type": "boolean"},
 	"google.protobuf.StringValue": {"type": "string"},
 	"google.protobuf.BytesValue":  {"type": "string", "contentEncoding": "base64"},
+	"google.protobuf.FieldMask":   {"type": "string"},
+	"google.protobuf.ListValue":   {"type": "array", "items": map[string]any{}},
+	"google.protobuf.Empty":       {"type": "object", "additionalProperties": false},
+}
+
+func protoJSONFloatSchema() map[string]any {
+	return map[string]any{"oneOf": []any{
+		map[string]any{"type": "number"},
+		map[string]any{"type": "string", "enum": []string{"NaN", "Infinity", "-Infinity"}},
+	}}
 }
 
 // schemaGenerator converts parsed proto types to JSON Schema.
@@ -81,6 +85,10 @@ func (sg *schemaGenerator) messageSchema(msg *invpb.MessageInfo) map[string]any 
 
 	for _, field := range msg.Fields {
 		var prop map[string]any
+		propertyName := field.JsonName
+		if propertyName == "" {
+			propertyName = field.Name
+		}
 
 		switch {
 		case sg.isMapField(field):
@@ -100,13 +108,13 @@ func (sg *schemaGenerator) messageSchema(msg *invpb.MessageInfo) map[string]any 
 			prop["description"] = field.Comment
 		}
 
-		properties[field.Name] = prop
+		properties[propertyName] = prop
 
 		if field.Label != labelRepeated &&
 			!oneofFields[field.Name] &&
 			field.OneofIndex == nil &&
 			!field.Optional {
-			required = append(required, field.Name)
+			required = append(required, propertyName)
 		}
 	}
 
@@ -124,11 +132,15 @@ func (sg *schemaGenerator) messageSchema(msg *invpb.MessageInfo) map[string]any 
 func (sg *schemaGenerator) fieldTypeSchema(field *invpb.FieldInfo) map[string]any {
 	switch field.Type {
 	case typeDouble, typeFloat:
-		return map[string]any{"type": "number"}
-	case typeInt32, typeInt64, typeSint32, typeSint64, typeSfixed32, typeSfixed64:
+		return protoJSONFloatSchema()
+	case typeInt32, typeSint32, typeSfixed32:
 		return map[string]any{"type": "integer"}
-	case typeUint32, typeUint64, typeFixed32, typeFixed64:
+	case typeInt64, typeSint64, typeSfixed64:
+		return map[string]any{"type": "string", "pattern": `^(0|-?[1-9][0-9]*)$`}
+	case typeUint32, typeFixed32:
 		return map[string]any{"type": "integer", "minimum": 0}
+	case typeUint64, typeFixed64:
+		return map[string]any{"type": "string", "pattern": `^(0|[1-9][0-9]*)$`}
 	case typeBool:
 		return map[string]any{"type": "boolean"}
 	case typeString:
@@ -144,10 +156,11 @@ func (sg *schemaGenerator) fieldTypeSchema(field *invpb.FieldInfo) map[string]an
 }
 
 func (sg *schemaGenerator) messageTypeSchema(typeName string) map[string]any {
+	if typeName == "google.protobuf.DoubleValue" || typeName == "google.protobuf.FloatValue" {
+		return protoJSONFloatSchema()
+	}
 	if w, ok := wkt[typeName]; ok {
-		result := make(map[string]any, len(w))
-		maps.Copy(result, w)
-		return result
+		return cloneMap(w)
 	}
 	if sg.visiting[typeName] {
 		return map[string]any{"type": "object"}
@@ -163,6 +176,9 @@ func (sg *schemaGenerator) messageTypeSchema(typeName string) map[string]any {
 }
 
 func (sg *schemaGenerator) enumSchema(typeName string) map[string]any {
+	if typeName == "google.protobuf.NullValue" {
+		return map[string]any{"type": "null"}
+	}
 	enumInfo, ok := sg.parsed.Enums[typeName]
 	if !ok {
 		return map[string]any{"type": "string"}
@@ -183,18 +199,33 @@ func (sg *schemaGenerator) isMapField(field *invpb.FieldInfo) bool {
 }
 
 func (sg *schemaGenerator) mapSchema(mapEntryMsg *invpb.MessageInfo) map[string]any {
+	var keyField *invpb.FieldInfo
 	var valueField *invpb.FieldInfo
 	for _, f := range mapEntryMsg.Fields {
-		if f.Name == "value" {
+		switch f.Name {
+		case "key":
+			keyField = f
+		case "value":
 			valueField = f
-			break
 		}
 	}
 	if valueField == nil {
 		return map[string]any{"type": "object"}
 	}
-	return map[string]any{
+	schema := map[string]any{
 		"type":                 "object",
 		"additionalProperties": sg.fieldTypeSchema(valueField),
 	}
+	if keyField == nil {
+		return schema
+	}
+	switch keyField.Type {
+	case typeBool:
+		schema["propertyNames"] = map[string]any{"enum": []string{"false", "true"}}
+	case typeInt32, typeInt64, typeSint32, typeSint64, typeSfixed32, typeSfixed64:
+		schema["propertyNames"] = map[string]any{"pattern": `^(0|-?[1-9][0-9]*)$`}
+	case typeUint32, typeUint64, typeFixed32, typeFixed64:
+		schema["propertyNames"] = map[string]any{"pattern": `^(0|[1-9][0-9]*)$`}
+	}
+	return schema
 }

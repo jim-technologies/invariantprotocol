@@ -131,8 +131,8 @@ func TestConnectRegistersTools(t *testing.T) {
 	srv := connectServer(t, addr)
 
 	assert.Len(t, srv.tools, 2)
-	assert.Contains(t, srv.tools, "GreetService.Greet")
-	assert.Contains(t, srv.tools, "GreetService.GreetGroup")
+	assert.Contains(t, srv.tools, "greet.v1.GreetService.Greet")
+	assert.Contains(t, srv.tools, "greet.v1.GreetService.GreetGroup")
 }
 
 func TestConnectToolSchemaMatches(t *testing.T) {
@@ -144,8 +144,8 @@ func TestConnectToolSchemaMatches(t *testing.T) {
 	local := registeredServer(t)
 
 	assert.Equal(t,
-		local.tools["GreetService.Greet"].InputSchema,
-		remote.tools["GreetService.Greet"].InputSchema,
+		local.tools["greet.v1.GreetService.Greet"].InputSchema,
+		remote.tools["greet.v1.GreetService.Greet"].InputSchema,
 	)
 }
 
@@ -172,7 +172,7 @@ func TestConnectMCPToolCall(t *testing.T) {
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.Greet",
+			"name":      "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{"name": "Remote"},
 		},
 	})
@@ -195,7 +195,7 @@ func TestConnectMCPToolCallWithEnum(t *testing.T) {
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name": "GreetService.Greet",
+			"name": "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{
 				"name": "World",
 				"mood": "MOOD_HAPPY",
@@ -222,7 +222,7 @@ func TestConnectMCPToolCallGreetGroup(t *testing.T) {
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name": "GreetService.GreetGroup",
+			"name": "greet.v1.GreetService.GreetGroup",
 			"arguments": map[string]any{
 				"people": []any{
 					map[string]any{"name": "Alice"},
@@ -246,7 +246,7 @@ func TestConnectProgrammaticInvoke(t *testing.T) {
 
 	srv := connectServer(t, addr)
 
-	result, err := srv.Invoke(t.Context(), "GreetService.Greet", &greetpb.GreetRequest{Name: "Direct"})
+	result, err := srv.Invoke(t.Context(), "greet.v1.GreetService.Greet", &greetpb.GreetRequest{Name: "Direct"})
 	require.NoError(t, err)
 	assert.Equal(t, "Hello, Direct", result.(*greetpb.GreetResponse).GetMessage())
 }
@@ -257,7 +257,7 @@ func TestConnectProgrammaticJSONRejectsUnknownField(t *testing.T) {
 
 	srv := connectServer(t, addr)
 
-	tool := srv.tools["GreetService.Greet"]
+	tool := srv.tools["greet.v1.GreetService.Greet"]
 	_, err := srv.invokeJSON(t.Context(), tool, []byte(`{"name":"Direct","extra":"x"}`))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown field")
@@ -276,7 +276,7 @@ func TestConnectIncludeExclude(t *testing.T) {
 	t.Cleanup(func() { conn.Close() })
 	require.NoError(t, srv.ConnectGRPC(conn))
 	assert.Len(t, srv.Tools(), 1)
-	assert.Contains(t, srv.Tools(), "GreetService.Greet")
+	assert.Contains(t, srv.Tools(), "greet.v1.GreetService.Greet")
 }
 
 func TestConnectMultipleRequests(t *testing.T) {
@@ -295,7 +295,7 @@ func TestConnectMultipleRequests(t *testing.T) {
 		map[string]any{
 			"jsonrpc": "2.0", "id": 3, "method": "tools/call",
 			"params": map[string]any{
-				"name":      "GreetService.Greet",
+				"name":      "greet.v1.GreetService.Greet",
 				"arguments": map[string]any{"name": "Multi"},
 			},
 		},
@@ -321,7 +321,7 @@ func TestConnectEmptyArgs(t *testing.T) {
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.Greet",
+			"name":      "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{},
 		},
 	})

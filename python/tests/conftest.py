@@ -17,11 +17,15 @@ DESCRIPTOR_PATH = os.path.join(os.path.dirname(__file__), "proto", "descriptor.b
 
 class GreetServicer:
     async def Greet(self, request, context):
-        return greet_pb2.GreetResponse(
+        response = greet_pb2.GreetResponse(
             message=f"Hi {request.name}",
             mood=request.mood,
             tags=dict(request.tags),
         )
+        if request.HasField("account_sequence"):
+            response.response_label = request.name
+            response.response_count = request.account_sequence
+        return response
 
     async def GreetGroup(self, request, context):
         messages = [f"Hi {p.name}" for p in request.people]

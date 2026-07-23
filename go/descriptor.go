@@ -1,5 +1,6 @@
-// Package invariant parses FileDescriptorSets into typed descriptor info and
-// projects gRPC services into MCP/CLI/HTTP tools.
+// Package invariant uses generated gRPC services as the canonical programming
+// model and projects their registered implementations onto native gRPC,
+// HTTP/Connect, MCP, and CLI adapters.
 package invariant
 
 import (
@@ -50,7 +51,7 @@ func parseFileDescriptorSet(fds *descriptorpb.FileDescriptorSet) *invpb.ParsedDe
 
 		for i, msgProto := range file.GetMessageType() {
 			fullName := qualifiedName(pkg, msgProto.GetName())
-			parseMessage(pd, msgProto, fullName, comments, []int32{4, int32(i)})
+			parseMessage(pd, msgProto, fullName, comments, []int32{4, int32(i)}, file.GetSyntax())
 		}
 
 		for i, svcProto := range file.GetService() {
@@ -85,6 +86,7 @@ func parseMessage(
 	fullName string,
 	comments map[string]string,
 	pathPrefix []int32,
+	fileSyntax string,
 ) {
 	// Nested enums
 	for i, enumProto := range msgProto.GetEnumType() {
@@ -95,7 +97,7 @@ func parseMessage(
 	// Nested messages
 	for i, nestedProto := range msgProto.GetNestedType() {
 		nestedFullName := fullName + "." + nestedProto.GetName()
-		parseMessage(pd, nestedProto, nestedFullName, comments, append(sliceClone(pathPrefix), 3, int32(i)))
+		parseMessage(pd, nestedProto, nestedFullName, comments, append(sliceClone(pathPrefix), 3, int32(i)), fileSyntax)
 	}
 
 	// Oneofs
@@ -123,15 +125,19 @@ func parseMessage(
 
 		typeName := strings.TrimPrefix(fieldProto.GetTypeName(), ".")
 
+		optional := fieldProto.GetProto3Optional() ||
+			((fileSyntax == "" || fileSyntax == "proto2") &&
+				fieldProto.GetLabel() == descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL)
 		field := &invpb.FieldInfo{
 			Name:       fieldProto.GetName(),
+			JsonName:   fieldProto.GetJsonName(),
 			Number:     fieldProto.GetNumber(),
 			Type:       int32(fieldProto.GetType()),
 			TypeName:   typeName,
 			Label:      int32(fieldProto.GetLabel()),
 			Comment:    comments[pathKey(append(sliceClone(pathPrefix), 2, int32(i)))],
 			OneofIndex: oneofIdx,
-			Optional:   fieldProto.GetProto3Optional(),
+			Optional:   optional,
 		}
 		fields = append(fields, field)
 

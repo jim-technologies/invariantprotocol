@@ -10,16 +10,18 @@ from invariant.data_schema import (
     validate_schema_bundle,
 )
 from invariant.errors import InvariantError
-from invariant.server import (
+from invariant.http_types import (
     ChannelOptions,
     HTTPAuth,
     HTTPHeaderProvider,
     HTTPMetadataMapper,
     HTTPQueryProvider,
     HTTPResponseObserver,
-    MethodConfig,
     OutboundHTTPRequest,
     OutboundHTTPResponse,
+)
+from invariant.server import (
+    MethodConfig,
     Server,
     Tool,
 )

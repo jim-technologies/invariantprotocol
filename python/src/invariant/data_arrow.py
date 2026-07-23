@@ -20,10 +20,10 @@ from google.protobuf.message import Message
 
 from invariant.gen.invariant.data.v1 import schema_pb2
 from invariant.gen.invariant.data.v1.schema_pb2 import (
-    DatasetSchema,  # ty: ignore[unresolved-import] — generated member
-    DataType,  # ty: ignore[unresolved-import] — generated member
-    Field,  # ty: ignore[unresolved-import] — generated member
-    MappingDiagnostic,  # ty: ignore[unresolved-import] — generated member
+    DatasetSchema,
+    DataType,
+    Field,
+    MappingDiagnostic,
 )
 
 if TYPE_CHECKING:
@@ -212,7 +212,9 @@ def _map_field(pa: Any, field: Field, path: str) -> tuple[Any, list[MappingDiagn
     return mapped, [diagnostic, *children]
 
 
-def _map_type(pa: Any, data_type: DataType, path: str) -> tuple[Any, list[MappingDiagnostic], int, str]:
+def _map_type(
+    pa: Any, data_type: DataType, path: str
+) -> tuple[Any, list[MappingDiagnostic], schema_pb2.MappingCompatibility, str]:
     kind = data_type.WhichOneof("kind")
     if kind == "primitive":
         mapped = _map_primitive(pa, data_type.primitive.kind)
@@ -329,7 +331,7 @@ def _map_type(pa: Any, data_type: DataType, path: str) -> tuple[Any, list[Mappin
     raise ValueError(f"arrow: field {path!r} has an unspecified logical type")
 
 
-def _json_range_reduction(kind: int) -> str:
+def _json_range_reduction(kind: schema_pb2.JsonKind) -> str:
     if kind == schema_pb2.JSON_KIND_ANY:
         return (
             "standard protobuf JSON requires each populated Any type URL to resolve to a known message descriptor; "
@@ -343,7 +345,7 @@ def _json_range_reduction(kind: int) -> str:
     return "standard protobuf JSON requires an explicitly supported dynamic JSON kind"
 
 
-def _map_primitive(pa: Any, kind: int) -> Any:
+def _map_primitive(pa: Any, kind: schema_pb2.PrimitiveKind) -> Any:
     if kind == schema_pb2.PRIMITIVE_KIND_DOUBLE:
         return pa.float64()
     if kind == schema_pb2.PRIMITIVE_KIND_FLOAT:
@@ -517,7 +519,7 @@ def _validate_synthetic_field(
     actual: Any,
     number_path: tuple[int, ...],
     path: str,
-    role: int,
+    role: schema_pb2.SyntheticRole,
     proto_full_name: str,
     field_protos: dict[int, tuple[Any, dict[str, descriptor_pb2.FieldDescriptorProto]]],
 ) -> None:
@@ -703,7 +705,9 @@ def _message_row(
         _validate_message_descriptor(dataset, descriptor, field_protos)
         validated_descriptors[descriptor_id] = descriptor
     if not message.IsInitialized():
-        missing = ", ".join(message.FindInitializationErrors())
+        # Present in the protobuf runtime; types-protobuf omits this legacy
+        # compatibility spelling from its base Message stub.
+        missing = ", ".join(message.FindInitializationErrors())  # type: ignore[attr-defined]
         raise ValueError(f"arrow: protobuf message {actual_type!r} is missing required fields: {missing}")
     return {field.name: _field_value(message, field, field.name) for field in dataset.fields}
 

@@ -1,14 +1,3 @@
-// CLI projection — call tools from command-line arguments or request files.
-//
-// Format: ServiceName Method [-r request]
-//
-// Values for -r are auto-detected:
-//   - Existing file path → load by extension (.json, .binpb, .pb)
-//   - Otherwise → parse as inline JSON
-//
-// Internally proto-first: input is deserialized directly into a proto.Message,
-// passed through invoke() (proto in/out), then marshaled to JSON only at the
-// terminal output boundary.
 package invariant
 
 import (
@@ -40,8 +29,11 @@ func (s *Server) cli(ctx context.Context, args []string) (string, error) {
 	return strings.TrimRight(buf.String(), "\n"), nil
 }
 
-// cliWrite is the streaming-aware CLI executor. Each chunk of a server-
-// streaming response is flushed to w as it arrives.
+// cliWrite is the streaming-aware CLI executor for
+// "package.ServiceName Method [-r request]". Request values are loaded from
+// .json, .binpb, or .pb files when the argument names an existing file and are
+// otherwise parsed as inline JSON. Each server-streaming response chunk is
+// flushed to w as it arrives.
 func (s *Server) cliWrite(ctx context.Context, args []string, w io.Writer) error {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		_, err := io.WriteString(w, s.cliHelp())
@@ -88,7 +80,7 @@ func (s *Server) cliWrite(ctx context.Context, args []string, w io.Writer) error
 		_, err := io.WriteString(w, "{}")
 		return err
 	}
-	out, err := (protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}).Marshal(resp)
+	out, err := (protojson.MarshalOptions{Indent: "  "}).Marshal(resp)
 	if err != nil {
 		return fmt.Errorf("marshal response: %w", err)
 	}
@@ -101,7 +93,7 @@ func (s *Server) cliWrite(ctx context.Context, args []string, w io.Writer) error
 // unbuffered consumer (`./app StreamGreet | jq`) sees output in real time.
 func (s *Server) cliStream(ctx context.Context, tool *Tool, req proto.Message, w io.Writer) error {
 	flusher := newAutoFlushWriter(w)
-	marshalOpts := protojson.MarshalOptions{UseProtoNames: true}
+	marshalOpts := protojson.MarshalOptions{}
 	return s.invokeStream(ctx, tool, req, func(msg proto.Message) error {
 		raw, err := marshalOpts.Marshal(msg)
 		if err != nil {
@@ -221,7 +213,7 @@ func (s *Server) serveCLI(ctx context.Context) error {
 	return nil
 }
 
-// splitCLIArgs parses: ServiceName Method [-r request].
+// splitCLIArgs parses: package.ServiceName Method [-r request].
 func splitCLIArgs(args []string) (serviceName, methodName, requestValue string, err error) {
 	i := 0
 
@@ -255,23 +247,21 @@ func splitCLIArgs(args []string) (serviceName, methodName, requestValue string, 
 // cliHelp returns a help string listing all registered tools and their fields.
 func (s *Server) cliHelp() string {
 	var b strings.Builder
-	b.WriteString("Usage: <binary> <ServiceName> <Method> [-r request.json|request.binpb|'{\"inline\":\"json\"}']\n\n")
+	b.WriteString("Usage: <binary> <package.ServiceName> <Method> [-r request.json|request.binpb|'{\"inline\":\"json\"}']\n\n")
 
 	if len(s.tools) == 0 {
 		b.WriteString("No tools registered.\n")
 		return b.String()
 	}
 
-	// Group tools by service name for clean output.
+	// Group tools by fully-qualified service name for unambiguous output.
 	type entry struct {
 		serviceName string
 		tool        *Tool
 	}
 	var entries []entry
 	for _, tool := range s.tools {
-		parts := strings.Split(tool.ServiceFullName, ".")
-		svcName := parts[len(parts)-1]
-		entries = append(entries, entry{serviceName: svcName, tool: tool})
+		entries = append(entries, entry{serviceName: tool.ServiceFullName, tool: tool})
 	}
 	slices.SortFunc(entries, func(a, b entry) int {
 		if a.serviceName != b.serviceName {
@@ -288,12 +278,10 @@ func (s *Server) cliHelp() string {
 		}
 
 		props, _ := e.tool.InputSchema["properties"].(map[string]any)
-		requiredSlice, _ := e.tool.InputSchema["required"].([]any)
+		requiredSlice, _ := e.tool.InputSchema["required"].([]string)
 		required := make(map[string]bool)
 		for _, r := range requiredSlice {
-			if s, ok := r.(string); ok {
-				required[s] = true
-			}
+			required[r] = true
 		}
 
 		if len(props) > 0 {
@@ -329,14 +317,8 @@ func (s *Server) cliHelp() string {
 // For enums, it returns "val1|val2|..." instead of "string".
 // For arrays of objects, it returns "array<object>".
 func fieldType(schema map[string]any) string {
-	if vals, ok := schema["enum"].([]any); ok && len(vals) > 0 {
-		var names []string
-		for _, v := range vals {
-			if s, ok := v.(string); ok {
-				names = append(names, s)
-			}
-		}
-		return strings.Join(names, "|")
+	if vals, ok := schema["enum"].([]string); ok && len(vals) > 0 {
+		return strings.Join(vals, "|")
 	}
 	typ, _ := schema["type"].(string)
 	if typ == "" {
@@ -353,14 +335,11 @@ func fieldType(schema map[string]any) string {
 	return typ
 }
 
-// resolveServiceMethod matches ServiceName + Method to a registered tool name.
+// resolveServiceMethod matches package.ServiceName + Method to a registered tool name.
 func (s *Server) resolveServiceMethod(service, method string) string {
-	for _, tool := range s.tools {
-		parts := strings.Split(tool.ServiceFullName, ".")
-		svcName := parts[len(parts)-1]
-		if svcName == service && tool.MethodName == method {
-			return tool.Name
-		}
+	toolName := service + "." + method
+	if _, ok := s.tools[toolName]; ok {
+		return toolName
 	}
 	return ""
 }

@@ -2,13 +2,16 @@
 
 Routes:
   - POST /{package.Service}/{Method}      — invoke a tool (Connect protocol)
+  - POST /mcp                            — MCP Streamable HTTP request
   - GET  /                                — tool catalog (same shape as MCP tools/list)
   - GET  /__invariant/tools               — tool catalog
   - GET  /__invariant/descriptor.binpb    — raw FileDescriptorSet bytes
+  - GET  /healthz                         — liveness probe
+  - GET  /readyz                          — readiness probe
 
 Content types:
-  - application/json (default)
-  - application/proto (binary proto, Connect-standard)
+  - application/json and application/proto for unary calls
+  - application/connect+json and application/connect+proto for streaming calls
 
 Headers honored:
   - Connect-Timeout-Ms: server cancels the call after the requested deadline.
@@ -37,6 +40,7 @@ from invariant.errors import (
     invalid_argument_from_json_error,
     not_found,
 )
+from invariant.http_types import DEFAULT_HTTP_MESSAGE_BYTES
 from invariant.projection_context import Metadata, ProjectionContext
 
 if TYPE_CHECKING:
@@ -46,10 +50,10 @@ PROTO_CONTENT_TYPE = "application/proto"
 CONNECT_STREAM_JSON = "application/connect+json"
 CONNECT_STREAM_PROTO = "application/connect+proto"
 CONNECT_END_STREAM_FLAG = 0x02
-CONNECT_STREAM_MAX_REQUEST = 16 * 1024 * 1024  # 16 MiB safety cap on streaming request envelopes
-CONNECT_STREAM_MAX_RESPONSE = 16 * 1024 * 1024
-HTTP_MAX_UNARY_REQUEST = 16 * 1024 * 1024  # 16 MiB safety cap on unary request bodies
-HTTP_MAX_UNARY_RESPONSE = 16 * 1024 * 1024
+CONNECT_STREAM_MAX_REQUEST = DEFAULT_HTTP_MESSAGE_BYTES
+CONNECT_STREAM_MAX_RESPONSE = DEFAULT_HTTP_MESSAGE_BYTES
+HTTP_MAX_UNARY_REQUEST = DEFAULT_HTTP_MESSAGE_BYTES
+HTTP_MAX_UNARY_RESPONSE = DEFAULT_HTTP_MESSAGE_BYTES
 CONNECT_CONTROL_MAX = 1024 * 1024
 SequenceHeader = tuple[tuple[bytes, bytes], ...]
 
@@ -203,9 +207,7 @@ def build_asgi_app(server: Server):
                 )
                 return
 
-            resp_dict = (
-                json_format.MessageToDict(response, preserving_proto_field_name=True) if response is not None else {}
-            )
+            resp_dict = json_format.MessageToDict(response) if response is not None else {}
             await _send_json(
                 send,
                 200,
@@ -259,17 +261,6 @@ def _headers_dict(raw_headers: list) -> _HTTPHeaders:
     return out
 
 
-def default_http_metadata_mapper(headers: Mapping[str, str]) -> Sequence[tuple[str, str | bytes]]:
-    """Forward only common tracing and correlation headers by default."""
-    mapped: list[tuple[str, str]] = []
-    for key in ("traceparent", "tracestate", "baggage", "x-request-id"):
-        if isinstance(headers, _HTTPHeaders):
-            mapped.extend((key, value) for value in headers.values_for(key))
-        elif key in headers:
-            mapped.append((key, headers[key]))
-    return tuple(mapped)
-
-
 def _inbound_http_metadata(server: Server, headers: Mapping[str, str]) -> Metadata:
     mapped = server._http_metadata_mapper(headers)
     out: list[tuple[str, str | bytes]] = []
@@ -290,7 +281,7 @@ def _inbound_http_metadata(server: Server, headers: Mapping[str, str]) -> Metada
             continue
         if isinstance(raw_value, str) and _valid_ascii_metadata_value(raw_value):
             out.append((key, raw_value))
-    return tuple(out)
+    return Metadata(*out)
 
 
 def _reserved_inbound_metadata(key: str) -> bool:
@@ -889,10 +880,7 @@ async def _drain_stream(
     """Iterate the stream handler and pack each message into an envelope."""
     async for msg in server._invoke_stream(tool, request, context):
         _raise_if_deadline_expired(context, timeout)
-        if binary:
-            payload = msg.SerializeToString()
-        else:
-            payload = json_format.MessageToJson(msg, preserving_proto_field_name=True, indent=None).encode()
+        payload = msg.SerializeToString() if binary else json_format.MessageToJson(msg, indent=None).encode()
         if max_response_bytes > 0 and len(payload) > max_response_bytes:
             raise InvariantError(
                 grpc.StatusCode.RESOURCE_EXHAUSTED,
@@ -977,7 +965,12 @@ async def _serve_mcp_http(
 
             _raise_if_deadline_expired(context, timeout)
             response = await _run_until_disconnect(
-                mcp_dispatch(server, msg, context=context),
+                mcp_dispatch(
+                    server,
+                    msg,
+                    context=context,
+                    max_response_bytes=server._http_max_unary_response,
+                ),
                 receive,
                 context,
             )

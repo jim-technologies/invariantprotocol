@@ -33,7 +33,7 @@ func TestValidationPassesWhenConstraintsSatisfied(t *testing.T) {
 	require.NoError(t, err)
 	srv.Use(v)
 
-	resp, err := srv.Invoke(t.Context(), "GreetService.Greet", &greetpb.GreetRequest{Name: "World"})
+	resp, err := srv.Invoke(t.Context(), "greet.v1.GreetService.Greet", &greetpb.GreetRequest{Name: "World"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.(*greetpb.GreetResponse).Message, "Hi World")
 }
@@ -47,7 +47,7 @@ func TestValidationRejectsConstraintViolation(t *testing.T) {
 	require.NoError(t, err)
 	srv.Use(v)
 
-	_, err = srv.Invoke(t.Context(), "GreetService.Greet", &greetpb.GreetRequest{Name: ""})
+	_, err = srv.Invoke(t.Context(), "greet.v1.GreetService.Greet", &greetpb.GreetRequest{Name: ""})
 	require.Error(t, err)
 
 	st, ok := status.FromError(err)
@@ -67,7 +67,7 @@ func TestValidationStreamRejectsConstraintViolation(t *testing.T) {
 
 	// Empty name violates string.min_len = 1 on StreamGreetRequest.name.
 	var emitted int
-	err = srv.InvokeStream(t.Context(), "GreetService.StreamGreet",
+	err = srv.InvokeStream(t.Context(), "greet.v1.GreetService.StreamGreet",
 		&greetpb.StreamGreetRequest{Name: "", Count: 3},
 		func(proto.Message) error {
 			emitted++
@@ -91,7 +91,7 @@ func TestValidationStreamPassesWhenSatisfied(t *testing.T) {
 	srv.UseStream(vs)
 
 	var emitted int
-	err = srv.InvokeStream(t.Context(), "GreetService.StreamGreet",
+	err = srv.InvokeStream(t.Context(), "greet.v1.GreetService.StreamGreet",
 		&greetpb.StreamGreetRequest{Name: "ok", Count: 2},
 		func(proto.Message) error {
 			emitted++

@@ -7,6 +7,12 @@ service onto native gRPC, HTTP/Connect, MCP, and CLI. Application code uses
 generated messages and generated service APIs; Invariant does not introduce a
 second RPC model or route production calls through an in-memory gRPC hop.
 
+Go, Python, Rust, and TypeScript are supported production runtimes, not preview
+or experimental implementations. A release is blocked unless every Core row in
+the cross-language feature contract has behavioral evidence in all four
+runtimes. Language-specific ecosystem adapters remain explicit rather than
+being mistaken for portable runtime features.
+
 Annotated protobuf dataset messages can also compile into one versioned data
 schema for Arrow, Parquet, Iceberg, and PostgreSQL. Explicit `--message`
 selection remains available for controlled builds.
@@ -23,8 +29,12 @@ selection remains available for controlled builds.
 ```
 
 Proto comments become MCP tool descriptions, CLI help, JSON Schema field
-descriptions, and constrained enum choices. Full method identities stay in the
-normal `/{package.Service}/{Method}` form.
+descriptions, and constrained enum choices. Transport and interceptor method
+paths use `/{package.Service}/{Method}`; tool catalogs, CLI resolution, and
+in-process invocation use the collision-free `package.Service.Method` identity.
+Every JSON projection emits canonical ProtoJSON field names and scalar forms,
+including explicit `json_name` overrides and decimal strings for 64-bit
+integers.
 
 ## Build contract
 
@@ -105,7 +115,8 @@ Python is async-only and accepts grpcio's generated
 native port and credentials to the one returned `grpc.aio.Server`.
 
 ```python
-import grpc
+import asyncio
+
 from invariant import Server
 import greet_pb2
 import greet_pb2_grpc
@@ -115,19 +126,31 @@ class Greeter(greet_pb2_grpc.GreetServiceServicer):
     async def Greet(self, request, context):
         return greet_pb2.GreetResponse(message=f"Hi {request.name}")
 
+    async def GreetGroup(self, request, context):
+        messages = [f"Hi {person.name}" for person in request.people]
+        return greet_pb2.GreetGroupResponse(messages=messages, count=len(messages))
 
-server = Server.from_descriptor("descriptor.binpb")
-greet_pb2_grpc.add_GreetServiceServicer_to_server(Greeter(), server)
+    async def StreamGreet(self, request, context):
+        for _ in range(request.count or 1):
+            yield greet_pb2.GreetResponse(message=f"Hi {request.name}")
 
-native = server.grpc_server(
-    options=(
-        ("grpc.max_receive_message_length", 16 * 1024 * 1024),
-        ("grpc.max_send_message_length", 16 * 1024 * 1024),
+
+async def main():
+    server = Server.from_descriptor("descriptor.binpb")
+    greet_pb2_grpc.add_GreetServiceServicer_to_server(Greeter(), server)
+
+    native = server.grpc_server(
+        options=(
+            ("grpc.max_receive_message_length", 16 * 1024 * 1024),
+            ("grpc.max_send_message_length", 16 * 1024 * 1024),
+        )
     )
-)
-native.add_insecure_port("[::]:50051")
-await native.start()
-await native.wait_for_termination()
+    native.add_insecure_port("[::]:50051")
+    await native.start()
+    await native.wait_for_termination()
+
+
+asyncio.run(main())
 ```
 
 Sync handlers are rejected during generated registration. For TLS, call
@@ -243,6 +266,11 @@ local or remote registration. They filter optional projection catalogs only
 and never remove a method from a locally registered native gRPC service.
 Client-streaming and bidi methods are native-gRPC only.
 
+Per-method HTTP limits apply to the canonical Connect routes. `POST /mcp` is a
+single stateless JSON-RPC request whose buffered response uses the server-wide
+unary response limit; server-streaming tool collection stops as soon as that
+aggregate limit would be exceeded.
+
 ### MCP Streamable HTTP
 
 Invariant implements the non-SSE tool-server subset of MCP `2025-11-25`.
@@ -307,7 +335,8 @@ server.use(validation());
 
 Validation failures use `invalid_argument` with `google.rpc.BadRequest`
 details. Rust has no maintained framework adapter in this release; applications
-can validate inside their generated Tonic service or a Tower layer.
+can validate inside their generated Tonic service to cover every projection,
+or attach a Tower layer when validation is intentionally native-gRPC-only.
 
 ## HTTP metadata and limits
 
@@ -447,12 +476,14 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.8.3`; new releases do not create language-prefixed tags.
+tag `v0.9.0`; new releases do not create language-prefixed tags. The project
+follows Semantic Versioning; while it remains below 1.0, minor releases may
+refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.8.3
+go get github.com/jim-technologies/invariantprotocol/go@v0.9.0
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -462,26 +493,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.3#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.9.0#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.8.3#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.9.0#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.3" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.9.0" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.8.3" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.9.0" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.8.3"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.9.0"
 ```
 
 For reproducible production builds, replace the tag with a full commit

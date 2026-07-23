@@ -3,6 +3,7 @@ package invariant
 import (
 	"testing"
 
+	invpb "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,6 +81,109 @@ func TestSchemaFieldTypes(t *testing.T) {
 	msgs := p2["messages"].(map[string]any)
 	assert.Equal(t, "array", msgs["type"])
 	assert.Equal(t, "string", msgs["items"].(map[string]any)["type"])
+}
+
+func TestSchemaUsesProtoJSONNamesAnd64BitStrings(t *testing.T) {
+	sg := schemaGen(t)
+
+	greet := sg.MessageToSchema("greet.v1.GreetRequest")
+	greetProps := props(t, greet)
+	assert.NotContains(t, greetProps, "account_sequence")
+	sequence := greetProps["wireSequenceId"].(map[string]any)
+	assert.Equal(t, "string", sequence["type"])
+	assert.Equal(t, `^(0|-?[1-9][0-9]*)$`, sequence["pattern"])
+	assert.NotContains(t, toStringSlice(greet["required"]), "wireSequenceId")
+
+	record := props(t, sg.MessageToSchema("data.v1.CanonicalRecord"))
+	for _, name := range []string{"int64Value", "sfixed64Value", "sint64Value"} {
+		field := record[name].(map[string]any)
+		assert.Equal(t, "string", field["type"], name)
+		assert.Equal(t, `^(0|-?[1-9][0-9]*)$`, field["pattern"], name)
+	}
+	for _, name := range []string{"uint64Value", "fixed64Value"} {
+		field := record[name].(map[string]any)
+		assert.Equal(t, "string", field["type"], name)
+		assert.Equal(t, `^(0|[1-9][0-9]*)$`, field["pattern"], name)
+	}
+	assert.Equal(t, "integer", record["int32Value"].(map[string]any)["type"])
+	assert.Equal(
+		t,
+		"string",
+		record["counters"].(map[string]any)["additionalProperties"].(map[string]any)["type"],
+	)
+	assert.Equal(t, "string", props(t, record["nested"].(map[string]any))["id"].(map[string]any)["type"])
+
+	proto2 := sg.MessageToSchema("data.v1.Proto2Record")
+	assert.Equal(t, []string{"id"}, toStringSlice(proto2["required"]))
+	assert.Equal(t, "string", props(t, proto2)["id"].(map[string]any)["type"])
+}
+
+func TestSchemaCoversCanonicalProtoJSONSpecialValuesAndWellKnownTypes(t *testing.T) {
+	sg := schemaGen(t)
+
+	for _, schema := range []map[string]any{
+		sg.fieldTypeSchema(findField(t, sg.parsed.Messages["data.v1.CanonicalRecord"], "double_value")),
+		sg.fieldTypeSchema(findField(t, sg.parsed.Messages["data.v1.CanonicalRecord"], "float_value")),
+		sg.messageTypeSchema("google.protobuf.DoubleValue"),
+		sg.messageTypeSchema("google.protobuf.FloatValue"),
+	} {
+		choices := schema["oneOf"].([]any)
+		require.Len(t, choices, 2)
+		assert.Equal(t, "number", choices[0].(map[string]any)["type"])
+		assert.Equal(
+			t,
+			[]string{"NaN", "Infinity", "-Infinity"},
+			toStringSlice(choices[1].(map[string]any)["enum"]),
+		)
+	}
+
+	assert.Equal(t, map[string]any{"type": "string"}, sg.messageTypeSchema("google.protobuf.FieldMask"))
+	assert.Equal(
+		t,
+		map[string]any{"type": "array", "items": map[string]any{}},
+		sg.messageTypeSchema("google.protobuf.ListValue"),
+	)
+	assert.Equal(
+		t,
+		map[string]any{"type": "object", "additionalProperties": false},
+		sg.messageTypeSchema("google.protobuf.Empty"),
+	)
+	assert.Equal(t, map[string]any{"type": "null"}, sg.enumSchema("google.protobuf.NullValue"))
+	assert.Equal(
+		t,
+		map[string]any{
+			"type":    "string",
+			"pattern": `^-?(?:0|[1-9][0-9]*)(?:\.[0-9]{1,9})?s$`,
+		},
+		sg.messageTypeSchema("google.protobuf.Duration"),
+	)
+}
+
+func TestSchemaConstrainsCanonicalProtoJSONMapKeys(t *testing.T) {
+	sg := schemaGen(t)
+	for _, test := range []struct {
+		name       string
+		fieldType  int32
+		constraint map[string]any
+	}{
+		{name: "bool", fieldType: typeBool, constraint: map[string]any{"enum": []string{"false", "true"}}},
+		{name: "signed", fieldType: typeInt64, constraint: map[string]any{"pattern": `^(0|-?[1-9][0-9]*)$`}},
+		{name: "unsigned", fieldType: typeUint64, constraint: map[string]any{"pattern": `^(0|[1-9][0-9]*)$`}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			schema := sg.mapSchema(&invpb.MessageInfo{Fields: []*invpb.FieldInfo{
+				{Name: "key", Type: test.fieldType},
+				{Name: "value", Type: typeString},
+			}})
+			assert.Equal(t, test.constraint, schema["propertyNames"])
+		})
+	}
+
+	stringKey := sg.mapSchema(&invpb.MessageInfo{Fields: []*invpb.FieldInfo{
+		{Name: "key", Type: typeString},
+		{Name: "value", Type: typeString},
+	}})
+	assert.NotContains(t, stringKey, "propertyNames")
 }
 
 func TestSchemaNestedMessageAndDescriptions(t *testing.T) {

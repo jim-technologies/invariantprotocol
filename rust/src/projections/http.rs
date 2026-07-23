@@ -186,8 +186,9 @@ async fn mcp_http_handler(State(server): State<Arc<Server>>, req: Request) -> Re
         &msg,
         metadata,
         Some(projection.clone()),
+        Some(max_response_bytes),
     );
-    match until_projection_deadline(&projection, async { Ok(dispatch.await) }).await {
+    match until_projection_deadline(&projection, dispatch).await {
         Ok(Some(resp)) => mcp_json_response(StatusCode::OK, &resp, max_response_bytes),
         Ok(None) => mcp_empty_response(StatusCode::ACCEPTED),
         Err(status) => error_response_with_limit(&status, max_response_bytes),
@@ -455,7 +456,7 @@ fn build_connect_stream(
                     let payload = if binary {
                         msg.encode_to_vec()
                     } else {
-                        let opts = prost_reflect::SerializeOptions::new().use_proto_field_name(true);
+                        let opts = prost_reflect::SerializeOptions::new();
                         let mut buf = Vec::with_capacity(128);
                         let mut ser = serde_json::Serializer::new(&mut buf);
                         if msg.serialize_with_options(&mut ser, &opts).is_err() {
@@ -716,7 +717,7 @@ fn encode_response(
         append_response_metadata(response.headers_mut(), &metadata, false);
         return response;
     }
-    let opts = prost_reflect::SerializeOptions::new().use_proto_field_name(true);
+    let opts = prost_reflect::SerializeOptions::new();
     let mut buf = Vec::with_capacity(128);
     let mut ser = serde_json::Serializer::new(&mut buf);
     if let Err(e) = msg.serialize_with_options(&mut ser, &opts) {

@@ -49,6 +49,7 @@ message FieldInfo {
   string comment = 6;
   optional int32 oneof_index = 7;
   bool optional = 8;
+  string json_name = 9;
 }
 
 // Information about a oneof group.

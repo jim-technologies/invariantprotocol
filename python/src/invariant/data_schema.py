@@ -1,8 +1,8 @@
 """Read and write the derived, language-neutral protobuf data contract."""
 
 from invariant.gen.invariant.data.v1.schema_pb2 import (
-    DatasetSchema,  # ty: ignore[unresolved-import] — generated member
-    SchemaBundle,  # ty: ignore[unresolved-import] — generated member
+    DatasetSchema,
+    SchemaBundle,
 )
 
 SCHEMA_IR_VERSION = 2

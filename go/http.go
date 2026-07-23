@@ -64,9 +64,12 @@ type httpToolEntry struct {
 // Routes:
 //
 //	POST /{package.Service}/{Method}      — invoke a tool (Connect protocol)
+//	POST /mcp                            — MCP Streamable HTTP request
 //	GET  /                                — tool catalog (same shape as MCP tools/list)
 //	GET  /__invariant/tools               — tool catalog
 //	GET  /__invariant/descriptor.binpb    — raw FileDescriptorSet bytes
+//	GET  /healthz                         — liveness probe
+//	GET  /readyz                          — readiness probe
 func (s *Server) HTTPHandler() http.Handler {
 	s.freeze()
 	entries := make(map[string]*httpToolEntry, len(s.tools))
@@ -287,7 +290,7 @@ func (s *Server) handleHTTPStream(w http.ResponseWriter, r *http.Request, entry 
 
 	flusher, _ := w.(http.Flusher)
 
-	jsonOpts := protojson.MarshalOptions{UseProtoNames: true}
+	jsonOpts := protojson.MarshalOptions{}
 	committed := false
 	var stream *projectedServerStream
 	commit := func() {
@@ -414,9 +417,13 @@ func (s *Server) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.mcpDispatch(ctx, req)
+	resp, responseErr := s.mcpDispatchWithResponseLimit(ctx, req, s.httpMaxUnaryResponse)
 	if contextErr := ctx.Err(); contextErr != nil {
 		httpErrorWithLimit(w, status.FromContextError(contextErr).Err(), s.httpMaxUnaryResponse)
+		return
+	}
+	if responseErr != nil {
+		httpErrorWithLimit(w, responseErr, s.httpMaxUnaryResponse)
 		return
 	}
 	if resp == nil {

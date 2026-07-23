@@ -42,7 +42,7 @@ async def test_interceptor_fires_on_cli(server):
         return resp
 
     server.use(_shared_unary_interceptor(interceptor))
-    result = await server._cli(["GreetService", "Greet", "-r", '{"name": "CLI"}'])
+    result = await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "CLI"}'])
     assert result["message"] == "Hi CLI"
     assert log == ["A-before", "A-after"]
 
@@ -123,7 +123,7 @@ async def test_interceptor_chain_order(server):
 
     server.use(_shared_unary_interceptor(make_interceptor("A")))
     server.use(_shared_unary_interceptor(make_interceptor("B")))
-    result = await server._cli(["GreetService", "Greet", "-r", '{"name": "Order"}'])
+    result = await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "Order"}'])
     assert result["message"] == "Hi Order"
     assert log == ["A-before", "B-before", "B-after", "A-after"]
 
@@ -137,7 +137,7 @@ async def test_interceptor_short_circuit(server):
 
     server.use(_shared_unary_interceptor(blocking_interceptor))
     with pytest.raises(InvariantError, match=r"/greet\.v1\.GreetService/Greet.*blocked by interceptor") as exc:
-        await server._cli(["GreetService", "Greet", "-r", '{"name": "Blocked"}'])
+        await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "Blocked"}'])
     assert exc.value.code == grpc.StatusCode.INTERNAL
 
 
@@ -153,7 +153,7 @@ async def test_standard_interceptor_can_supply_handler_without_continuation(serv
             return grpc.unary_unary_rpc_method_handler(terminal)
 
     server.use(ShortCircuit())
-    result = await server._cli(["GreetService", "Greet", "-r", '{"name": "Ada"}'])
+    result = await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "Ada"}'])
     assert result["message"] == "intercepted Ada"
 
 
@@ -166,7 +166,7 @@ async def test_standard_interceptor_missing_handler_is_unimplemented(server):
 
     server.use(Missing())
     with pytest.raises(InvariantError, match="no handler") as exc:
-        await server._cli(["GreetService", "Greet", "-r", '{"name": "Ada"}'])
+        await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "Ada"}'])
     assert exc.value.code == grpc.StatusCode.UNIMPLEMENTED
 
 
@@ -178,14 +178,14 @@ async def test_interceptor_full_method(server):
         return await handler(request, context)
 
     server.use(_shared_unary_interceptor(interceptor))
-    result = await server._cli(["GreetService", "Greet", "-r", '{"name": "Method"}'])
+    result = await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "Method"}'])
     assert result["message"] == "Hi Method"
     assert captured["full_method"] == "/greet.v1.GreetService/Greet"
 
 
 async def test_no_interceptors(server):
     assert len(server._shared_interceptors) == 0
-    result = await server._cli(["GreetService", "Greet", "-r", '{"name": "Ada"}'])
+    result = await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "Ada"}'])
     assert result["message"] == "Hi Ada"
 
 
@@ -260,7 +260,7 @@ asyncio.run(main())
         "id": 1,
         "method": "tools/call",
         "params": {
-            "name": "GreetService.Greet",
+            "name": "greet.v1.GreetService.Greet",
             "arguments": {"name": "MCP"},
         },
     }

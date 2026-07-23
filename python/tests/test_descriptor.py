@@ -59,6 +59,9 @@ def test_parse_messages():
 
     mood_field = next(f for f in msg.fields if f.name == "mood")
     assert mood_field.optional is True
+    sequence_field = next(f for f in msg.fields if f.name == "account_sequence")
+    assert sequence_field.optional is True
+    assert sequence_field.json_name == "wireSequenceId"
 
     from google.protobuf.descriptor_pb2 import FieldDescriptorProto
 

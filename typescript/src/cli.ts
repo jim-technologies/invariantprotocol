@@ -4,7 +4,7 @@ import { extname } from "node:path";
 import { fromBinary, fromJsonString, toJsonString } from "@bufbuild/protobuf";
 
 import { invalidArgument } from "./errors.js";
-import { type Server, serverInternal, type Tool } from "./server.js";
+import { type RegisteredTool, type Server, serverInternal } from "./server.js";
 
 export async function runCli(server: Server, args: string[]): Promise<string> {
   server[serverInternal].freeze();
@@ -23,17 +23,16 @@ export async function runCli(server: Server, args: string[]): Promise<string> {
   try {
     if (tool.serverStreaming) {
       const lines: string[] = [];
-      for await (const chunk of server.invokeStreamTool(tool, request, context)) {
-        lines.push(toJsonString(tool.outputDesc, chunk, { useProtoFieldName: true, registry: server.parsed.registry }));
+      for await (const chunk of server[serverInternal].invokeStreamTool(tool, request, context)) {
+        lines.push(toJsonString(tool.outputDesc, chunk, { registry: server[serverInternal].parsed().registry }));
       }
       return lines.join("\n");
     }
 
-    const response = await server.invokeTool(tool, request, context);
+    const response = await server[serverInternal].invokeTool(tool, request, context);
     return toJsonString(tool.outputDesc, response, {
       prettySpaces: 2,
-      useProtoFieldName: true,
-      registry: server.parsed.registry,
+      registry: server[serverInternal].parsed().registry,
     });
   } finally {
     context.abort();
@@ -41,21 +40,22 @@ export async function runCli(server: Server, args: string[]): Promise<string> {
 }
 
 export function cliHelp(server: Server): string {
-  const lines = ['Usage: <binary> <ServiceName> <Method> [-r request.json|request.binpb|\'{"inline":"json"}\']', ""];
-  if (server.tools.size === 0) {
+  const lines = [
+    'Usage: <binary> <package.ServiceName> <Method> [-r request.json|request.binpb|\'{"inline":"json"}\']',
+    "",
+  ];
+  const tools = server[serverInternal].tools();
+  if (tools.length === 0) {
     lines.push("No tools registered.");
     return lines.join("\n");
   }
 
   lines.push("Available methods:", "");
-  const entries = [...server.tools.values()].sort((a, b) => {
-    const sa = a.serviceFullName.split(".").at(-1) ?? a.serviceFullName;
-    const sb = b.serviceFullName.split(".").at(-1) ?? b.serviceFullName;
-    return sa.localeCompare(sb) || a.methodName.localeCompare(b.methodName);
+  const entries = [...tools].sort((a, b) => {
+    return a.serviceFullName.localeCompare(b.serviceFullName) || a.methodName.localeCompare(b.methodName);
   });
   for (const tool of entries) {
-    const service = tool.serviceFullName.split(".").at(-1) ?? tool.serviceFullName;
-    lines.push(`  ${service} ${tool.methodName}`);
+    lines.push(`  ${tool.serviceFullName} ${tool.methodName}`);
     if (tool.description && tool.description !== tool.name) {
       lines.push(`    ${tool.description}`);
     }
@@ -80,10 +80,10 @@ function splitArgs(args: string[]): [string, string, string | undefined] {
   const service = args[0];
   const method = args[1];
   if (!service || service.startsWith("-")) {
-    throw new Error("Expected ServiceName as first argument.");
+    throw new Error("Expected package.ServiceName as first argument.");
   }
   if (!method || method.startsWith("-")) {
-    throw new Error("Expected Method name after ServiceName.");
+    throw new Error("Expected Method name after package.ServiceName.");
   }
 
   let request: string | undefined;
@@ -102,21 +102,21 @@ function splitArgs(args: string[]): [string, string, string | undefined] {
   return [service, method, request];
 }
 
-function resolveTool(server: Server, serviceName: string, methodName: string): Tool {
-  for (const tool of server.tools.values()) {
-    const service = tool.serviceFullName.split(".").at(-1);
-    if (service === serviceName && tool.methodName === methodName) {
-      return tool;
-    }
+function resolveTool(server: Server, serviceName: string, methodName: string): RegisteredTool {
+  const tool = server[serverInternal].tool(`${serviceName}.${methodName}`);
+  if (tool) {
+    return tool;
   }
   throw new Error(
-    `Unknown service/method: ${serviceName} ${methodName}. Available: ${JSON.stringify([...server.tools.keys()])}`,
+    `Unknown service/method: ${serviceName} ${methodName}. Available: ${JSON.stringify(
+      server[serverInternal].tools().map((candidate) => candidate.name),
+    )}`,
   );
 }
 
-function loadRequest(tool: Tool, value: string | undefined, server: Server) {
+function loadRequest(tool: RegisteredTool, value: string | undefined, server: Server) {
   if (!value) {
-    return server.coerceMessage(tool.inputDesc, {});
+    return server[serverInternal].coerceMessage(tool.inputDesc, {});
   }
 
   if (existsSync(value)) {
@@ -143,9 +143,9 @@ function loadRequest(tool: Tool, value: string | undefined, server: Server) {
   return parseJsonRequest(tool, value, server);
 }
 
-function parseJsonRequest(tool: Tool, value: string, server: Server) {
+function parseJsonRequest(tool: RegisteredTool, value: string, server: Server) {
   try {
-    return fromJsonString(tool.inputDesc, value, { registry: server.parsed.registry });
+    return fromJsonString(tool.inputDesc, value, { registry: server[serverInternal].parsed().registry });
   } catch (error) {
     throw invalidArgument(`decode protobuf JSON: ${errorMessage(error)}`);
   }

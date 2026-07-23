@@ -80,6 +80,15 @@ func TestParseMessages(t *testing.T) {
 	assert.True(t, moodField.Optional)
 	assert.Equal(t, int32(typeEnum), moodField.Type)
 
+	sequenceField := findField(t, msg, "account_sequence")
+	assert.Equal(t, "wireSequenceId", sequenceField.JsonName)
+	assert.True(t, sequenceField.Optional)
+
+	proto2 := pd.Messages["data.v1.Proto2Record"]
+	require.NotNil(t, proto2)
+	assert.False(t, findField(t, proto2, "id").Optional)
+	assert.True(t, findField(t, proto2, "label").Optional)
+
 	// Map entry messages
 	mapEntries := 0
 	for _, m := range pd.Messages {

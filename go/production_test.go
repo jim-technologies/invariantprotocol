@@ -38,7 +38,7 @@ func (panicServicer) StreamGreet(_ *greetpb.StreamGreetRequest, _ grpc.ServerStr
 
 func TestUnaryPanicBecomesInternalError(t *testing.T) {
 	srv := streamServer(t, panicServicer{})
-	tool := srv.tools["GreetService.Greet"]
+	tool := srv.tools["greet.v1.GreetService.Greet"]
 	_, err := srv.invoke(t.Context(), tool, &greetpb.GreetRequest{Name: "x"})
 	require.Error(t, err)
 	st, ok := status.FromError(err)
@@ -50,7 +50,7 @@ func TestUnaryPanicBecomesInternalError(t *testing.T) {
 
 func TestStreamPanicBecomesInternalError(t *testing.T) {
 	srv := streamServer(t, panicServicer{})
-	err := srv.InvokeStream(t.Context(), "GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "x"}, func(proto.Message) error { return nil })
+	err := srv.InvokeStream(t.Context(), "greet.v1.GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "x"}, func(proto.Message) error { return nil })
 	require.Error(t, err)
 	st, ok := status.FromError(err)
 	require.True(t, ok)
@@ -97,7 +97,7 @@ func TestStreamInterceptorOrdering(t *testing.T) {
 	})
 
 	var sent atomic.Int32
-	err := srv.InvokeStream(t.Context(), "GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "A", Count: 1}, func(proto.Message) error {
+	err := srv.InvokeStream(t.Context(), "greet.v1.GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "A", Count: 1}, func(proto.Message) error {
 		sent.Add(1)
 		return nil
 	})
@@ -144,7 +144,7 @@ func TestStreamCancellationStopsSend(t *testing.T) {
 
 	errc := make(chan error, 1)
 	go func() {
-		errc <- srv.InvokeStream(ctx, "GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "X"}, send)
+		errc <- srv.InvokeStream(ctx, "greet.v1.GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "X"}, send)
 	}()
 
 	<-started

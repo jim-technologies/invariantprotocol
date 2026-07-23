@@ -125,8 +125,8 @@ func TestNativeGeneratedRegistrationAndClients(t *testing.T) {
 
 	serviceInfo := server.GetServiceInfo()
 	require.Contains(t, serviceInfo, "greet.v1.GreetService")
-	assert.Contains(t, server.Tools(), "GreetService.Greet")
-	assert.Contains(t, server.Tools(), "GreetService.StreamGreet")
+	assert.Contains(t, server.Tools(), "greet.v1.GreetService.Greet")
+	assert.Contains(t, server.Tools(), "greet.v1.GreetService.StreamGreet")
 
 	client := nativeTestStart(t, server)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
@@ -308,9 +308,9 @@ func TestNativeGeneratedServiceSupportsAllCardinalities(t *testing.T) {
 	assert.Equal(t, int32(3), sharedCalls.Load())
 	assert.Equal(t, int32(5), nativeReceived.Load())
 	assert.Equal(t, int32(5), sharedReceived.Load())
-	assert.Contains(t, server.Tools(), "TestService.StreamingOutputCall")
-	assert.NotContains(t, server.Tools(), "TestService.StreamingInputCall")
-	assert.NotContains(t, server.Tools(), "TestService.FullDuplexCall")
+	assert.Contains(t, server.Tools(), "grpc.testing.TestService.StreamingOutputCall")
+	assert.NotContains(t, server.Tools(), "grpc.testing.TestService.StreamingInputCall")
+	assert.NotContains(t, server.Tools(), "grpc.testing.TestService.FullDuplexCall")
 }
 
 func descriptorSetForFile(root protoreflect.FileDescriptor) *descriptorpb.FileDescriptorSet {
@@ -340,8 +340,8 @@ func TestNativeFiltersOnlyOptionalProjections(t *testing.T) {
 	server.Include("greet.v1.GreetService.Greet")
 	greetpb.RegisterGreetServiceServer(server, &nativeTestService{})
 
-	assert.Contains(t, server.Tools(), "GreetService.Greet")
-	assert.NotContains(t, server.Tools(), "GreetService.GreetGroup")
+	assert.Contains(t, server.Tools(), "greet.v1.GreetService.Greet")
+	assert.NotContains(t, server.Tools(), "greet.v1.GreetService.GreetGroup")
 	client := nativeTestStart(t, server)
 	response, err := client.GreetGroup(t.Context(), &greetpb.GreetGroupRequest{
 		People: []*greetpb.Person{{Name: "one"}, {Name: "two"}},

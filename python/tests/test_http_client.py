@@ -13,9 +13,39 @@ import greet_pb2_grpc
 import grpc
 import pytest
 from conftest import DESCRIPTOR_PATH
+from google.protobuf import descriptor_pb2
 
 from invariant import ChannelOptions, HTTPAuth, InvariantError, Server
 from invariant.http_client import HTTPClientBinding, HTTPConnection, HTTPDynamicHandler
+from invariant.server import _build_descriptor_pool
+
+
+def _isolated_descriptor_pool(*generated_files):
+    with open(DESCRIPTOR_PATH, "rb") as descriptor_file:
+        fds = descriptor_pb2.FileDescriptorSet.FromString(descriptor_file.read())
+    known = {file.name for file in fds.file}
+
+    def include(file_descriptor):
+        for dependency in file_descriptor.dependencies:
+            include(dependency)
+        if file_descriptor.name not in known:
+            fds.file.add().ParseFromString(file_descriptor.serialized_pb)
+            known.add(file_descriptor.name)
+
+    for generated_file in generated_files:
+        include(generated_file)
+    return _build_descriptor_pool(fds)
+
+
+def test_http_dynamic_handler_requires_explicit_descriptor_pool():
+    connection = HTTPConnection(base_url="http://localhost:1")
+    with pytest.raises(TypeError, match="pool"):
+        HTTPDynamicHandler(  # type: ignore[call-arg]
+            connection=connection,
+            binding=HTTPClientBinding.new("GET", "/v1/greet/{name}", ""),
+            output_type="greet.v1.GreetResponse",
+            method_path="/greet.v1.GreetService/Greet",
+        )
 
 
 def _start_annotated_http_backend() -> tuple[ThreadingHTTPServer, int]:
@@ -111,7 +141,7 @@ async def test_shared_standard_interceptor_wraps_connect_http_projection():
     server.use(SharedInterceptor())
     try:
         server.connect_http(f"http://localhost:{port}")
-        result = await server._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+        result = await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
         assert result["message"] == "Hello, World"
         assert seen == [("greet.v1.GreetRequest", "/greet.v1.GreetService/Greet")]
     finally:
@@ -128,8 +158,8 @@ async def test_connect_http_filters_only_optional_catalog_not_native_grpc_or_ref
     server.exclude("*.Greet")
     try:
         server.connect_http(f"http://localhost:{port}")
-        assert "GreetService.Greet" not in server.tools
-        assert "GreetService.GreetGroup" in server.tools
+        assert "greet.v1.GreetService.Greet" not in server.tools
+        assert "greet.v1.GreetService.GreetGroup" in server.tools
 
         native = server.grpc_server()
         native_port = native.add_insecure_port("127.0.0.1:0")
@@ -304,6 +334,7 @@ async def test_connect_http_response_body_mapping():
             binding=HTTPClientBinding.new("GET", "/v1/greet/{name}", "", response_body="message"),
             output_type="greet.v1.GreetResponse",
             method_path="/greet.v1.GreetService/Greet",
+            pool=_isolated_descriptor_pool(),
         )
         try:
             resp = await handler(greet_pb2.GreetRequest(name="World"), None)
@@ -329,7 +360,7 @@ async def test_connect_http_response_observer_captures_raw_bytes():
 
         srv.connect_http(f"http://localhost:{port}", observer=observer)
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             # the observer saw the verbatim response bytes, before parsing
             assert seen["status"] == 200
@@ -371,7 +402,7 @@ async def test_connect_http_query_provider_adds_auth_params():
             auth=HTTPAuth(query_provider=lambda _req: {"apiKey": "secret", "v": "2"}),
         )
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert "apiKey=secret" in captured["path"]
             assert "v=2" in captured["path"]
@@ -382,7 +413,7 @@ async def test_connect_http_query_provider_adds_auth_params():
 
 
 async def test_connect_http_httpbody_response_returns_raw_bytes():
-    import google.api.httpbody_pb2 as hb  # noqa: F401  (registers HttpBody)
+    import google.api.httpbody_pb2 as hb
 
     payload = b'{"weird": [1, 2, 3], "ok": true}'  # arbitrary, unmodeled body
 
@@ -407,6 +438,7 @@ async def test_connect_http_httpbody_response_returns_raw_bytes():
             binding=HTTPClientBinding.new("GET", "/raw", ""),
             output_type="google.api.HttpBody",
             method_path="/x.Svc/Raw",
+            pool=_isolated_descriptor_pool(hb.DESCRIPTOR),
         )
         try:
             resp = await handler(greet_pb2.GreetRequest(name="x"), None)
@@ -450,6 +482,7 @@ async def test_connect_http_httpbody_request_sends_raw_body():
             output_type="greet.v1.GreetResponse",
             method_path="/x.Svc/Upload",
             input_type="google.api.HttpBody",
+            pool=_isolated_descriptor_pool(),
         )
         try:
             await handler(hb.HttpBody(content_type="text/csv", data=b"a,b\n1,2"), None)
@@ -492,6 +525,7 @@ async def test_connect_http_httpbody_request_without_content_type_sends_no_json_
             output_type="greet.v1.GreetResponse",
             method_path="/x.Svc/Upload",
             input_type="google.api.HttpBody",
+            pool=_isolated_descriptor_pool(),
         )
         try:
             await handler(hb.HttpBody(data=b"a,b\n1,2"), None)
@@ -509,7 +543,7 @@ async def test_connect_http_registers_tools():
         srv = Server.from_descriptor(DESCRIPTOR_PATH)
         srv.connect_http(f"http://localhost:{port}", service_config=_retry_service_config())
         try:
-            assert set(srv.tools.keys()) == {"GreetService.Greet", "GreetService.GreetGroup"}
+            assert set(srv.tools.keys()) == {"greet.v1.GreetService.Greet", "greet.v1.GreetService.GreetGroup"}
         finally:
             await srv.stop()
     finally:
@@ -522,7 +556,7 @@ async def test_connect_http_cli_greet():
         srv = Server.from_descriptor(DESCRIPTOR_PATH)
         srv.connect_http(f"http://localhost:{port}", service_config=_retry_service_config())
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
         finally:
             await srv.stop()
@@ -538,7 +572,7 @@ async def test_connect_http_cli_greet_group():
         try:
             result = await srv._cli(
                 [
-                    "GreetService",
+                    "greet.v1.GreetService",
                     "GreetGroup",
                     "-r",
                     '{"people":[{"name":"Alice"},{"name":"Bob"}]}',
@@ -559,17 +593,17 @@ async def test_connect_http_maps_remote_error():
         srv.connect_http(f"http://localhost:{port}", service_config=_retry_service_config())
         try:
             with pytest.raises(InvariantError, match="bad name") as exc:
-                await srv._cli(["GreetService", "Greet", "-r", '{"name":"bad"}'])
+                await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"bad"}'])
             assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
             assert exc.value.to_payload()["code"] == "invalid_argument"
 
             with pytest.raises(InvariantError, match="request canceled") as canceled:
-                await srv._cli(["GreetService", "Greet", "-r", '{"name":"cancel"}'])
+                await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"cancel"}'])
             assert canceled.value.code == grpc.StatusCode.CANCELLED
             assert canceled.value.to_payload()["code"] == "canceled"
 
             with pytest.raises(InvariantError, match="HTTP 400") as wrapped:
-                await srv._cli(["GreetService", "Greet", "-r", '{"name":"wrapped"}'])
+                await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"wrapped"}'])
             assert wrapped.value.code == grpc.StatusCode.INTERNAL
         finally:
             await srv.stop()
@@ -616,7 +650,7 @@ async def test_connect_http_uses_connect_http_status_fallbacks_for_malformed_err
         try:
             for status, code in expected.items():
                 with pytest.raises(InvariantError) as exc:
-                    await srv._cli(["GreetService", "Greet", "-r", f'{{"name":"{status}"}}'])
+                    await srv._cli(["greet.v1.GreetService", "Greet", "-r", f'{{"name":"{status}"}}'])
                 assert exc.value.code == code
         finally:
             await srv.stop()
@@ -666,7 +700,7 @@ async def test_connect_http_injects_headers_from_env(monkeypatch):
         srv = Server.from_descriptor(DESCRIPTOR_PATH)
         srv.connect_http(f"http://localhost:{port}", service_config=_retry_service_config())
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
         finally:
             await srv.stop()
@@ -705,7 +739,7 @@ async def test_connect_http_sets_default_user_agent(monkeypatch):
     try:
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert seen["user_agent"] is not None
             assert seen["user_agent"].startswith("invariant-protocol/")
@@ -746,7 +780,7 @@ async def test_connect_http_user_agent_override_from_env(monkeypatch):
     try:
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert seen["user_agent"] == "custom-agent/9.9"
         finally:
@@ -801,7 +835,7 @@ async def test_connect_http_retries_using_canonical_error_code_before_http_fallb
         srv = Server.from_descriptor(DESCRIPTOR_PATH)
         srv.connect_http(f"http://localhost:{port}", service_config=_retry_service_config())
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert Handler.attempts == 3
         finally:
@@ -848,7 +882,7 @@ async def test_connect_http_does_not_retry_post():
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
             with pytest.raises(InvariantError) as exc:
-                await srv._cli(["GreetService", "GreetGroup", "-r", '{"people":[{"name":"Alice"}]}'])
+                await srv._cli(["greet.v1.GreetService", "GreetGroup", "-r", '{"people":[{"name":"Alice"}]}'])
             assert exc.value.code == grpc.StatusCode.UNAVAILABLE
             assert Handler.attempts == 1
         finally:
@@ -898,7 +932,7 @@ async def test_connect_http_uses_dynamic_header_provider():
 
         srv.connect_http(f"http://localhost:{port}", auth=provider)
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert seen["method_path"] == "/greet.v1.GreetService/Greet"
             assert seen["method"] == "GET"
@@ -918,7 +952,7 @@ async def test_connect_http_dynamic_header_provider_error():
     srv.connect_http("http://localhost:1", auth=provider)
     try:
         with pytest.raises(InvariantError, match="missing signing key") as exc:
-            await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
         assert exc.value.code == grpc.StatusCode.UNAUTHENTICATED
     finally:
         await srv.stop()
@@ -993,7 +1027,7 @@ async def test_connect_http_retry_policy_uses_grpc_codes_full_jitter_and_fresh_a
             },
         )
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert Handler.attempts == 3
             assert auth_calls == 3
@@ -1227,7 +1261,7 @@ async def test_connect_http_retry_policy_caps_max_attempts_at_five():
         )
         try:
             with pytest.raises(InvariantError) as exc:
-                await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+                await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert exc.value.code == grpc.StatusCode.UNAVAILABLE
             assert Handler.attempts == 5
         finally:
@@ -1269,7 +1303,7 @@ async def test_connect_http_retry_policy_accepts_enum_numbers_and_unknown(codes,
             service_config=_retry_service_config(max_attempts=2, codes=codes),
         )
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert Handler.attempts == 2
         finally:
@@ -1348,7 +1382,7 @@ async def test_connect_http_retry_after_honors_pushback_and_resets_backoff(monke
             },
         )
         try:
-            result = await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            result = await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert result["message"] == "Hello, World"
             assert sleeps == [0.1, 1.0, 0.1]
             assert highs == [0.2, 0.2]
@@ -1413,7 +1447,7 @@ async def test_connect_http_retry_after_above_max_backoff_aborts_with_retry_info
         )
         try:
             with pytest.raises(InvariantError) as exc:
-                await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+                await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert exc.value.code == grpc.StatusCode.UNAVAILABLE
             assert Handler.attempts == 1
             assert sleeps == []
@@ -1461,7 +1495,7 @@ async def test_connect_http_retry_unsafe_methods_opt_in():
             service_config=_retry_service_config(method="GreetGroup", retry_unsafe_methods=True),
         )
         try:
-            result = await srv._cli(["GreetService", "GreetGroup", "-r", '{"people":[{"name":"Alice"}]}'])
+            result = await srv._cli(["greet.v1.GreetService", "GreetGroup", "-r", '{"people":[{"name":"Alice"}]}'])
             assert result["count"] == 1
             assert Handler.attempts == 2
         finally:
@@ -1515,7 +1549,7 @@ async def test_connect_http_method_config_override_can_disable_service_retry():
         )
         try:
             with pytest.raises(InvariantError) as exc:
-                await srv._cli(["GreetService", "GreetGroup", "-r", '{"people":[{"name":"Alice"}]}'])
+                await srv._cli(["greet.v1.GreetService", "GreetGroup", "-r", '{"people":[{"name":"Alice"}]}'])
             assert exc.value.code == grpc.StatusCode.UNAVAILABLE
             assert Handler.attempts == 1
         finally:
@@ -1550,7 +1584,7 @@ async def test_connect_http_error_details_are_standard_google_rpc_types():
         srv = _connect_http_server(f"http://localhost:{port}")
         try:
             with pytest.raises(InvariantError) as exc:
-                await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+                await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             payload = exc.value.to_payload()
             detail_types = {d["@type"] for d in payload["details"]}
             assert "type.googleapis.com/google.rpc.RetryInfo" in detail_types
@@ -1607,7 +1641,7 @@ async def test_connect_http_remote_retry_info_wins_over_retry_after_header():
         srv.connect_http(f"http://localhost:{port}")
         try:
             with pytest.raises(InvariantError) as exc:
-                await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+                await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             retry_payloads = [
                 detail
                 for detail in exc.value.to_payload()["details"]
@@ -1659,7 +1693,7 @@ async def test_connect_http_observer_captures_error_responses():
         srv.connect_http(f"http://localhost:{port}", observer=observer)
         try:
             with pytest.raises(InvariantError):
-                await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+                await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert seen["status"] == 400
             assert seen["success"] is False
             assert json.loads(seen["body"]) == {"message": "bad upstream"}
@@ -1715,7 +1749,7 @@ async def test_connect_http_preserves_unparseable_details_in_payloads_but_not_gr
         srv.connect_http(f"http://localhost:{backend_port}")
 
         with pytest.raises(InvariantError) as exc:
-            await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+            await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
         assert exc.value.to_payload()["details"][:3] == details
 
         mcp = await mcp_dispatch(
@@ -1724,7 +1758,7 @@ async def test_connect_http_preserves_unparseable_details_in_payloads_but_not_gr
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": "GreetService.Greet", "arguments": {"name": "World"}},
+                "params": {"name": "greet.v1.GreetService.Greet", "arguments": {"name": "World"}},
             },
         )
         assert mcp["result"]["error"]["details"][:3] == details
@@ -1807,14 +1841,14 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
             observer=observer,
         )
         try:
-            resp = await srv.invoke("GreetService.RawBody", greet_pb2.GreetRequest(name="World"))
+            resp = await srv.invoke("greet.v1.GreetService.RawBody", greet_pb2.GreetRequest(name="World"))
             assert resp.data == payload
             assert resp.content_type == "text/csv"
             assert seen[-1].success is True
             assert seen[-1].headers["x-archive-id"] == "raw-1"
 
             with pytest.raises(InvariantError) as exc:
-                await srv.invoke("GreetService.RawBody", greet_pb2.GreetRequest(name="Huge"))
+                await srv.invoke("greet.v1.GreetService.RawBody", greet_pb2.GreetRequest(name="Huge"))
             assert exc.value.code == grpc.StatusCode.RESOURCE_EXHAUSTED
             assert seen[-1].success is False
             assert len(seen[-1].body) == 24
@@ -1824,14 +1858,53 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
         httpd.shutdown()
 
 
-async def test_connect_http_uses_one_shared_client_per_connection():
+async def test_connect_http_uses_one_shared_client_per_connection(monkeypatch):
+    import invariant.http_client as http_client
+
+    clients = []
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            self.is_closed = False
+            clients.append(self)
+
+        async def aclose(self):
+            self.is_closed = True
+
+    monkeypatch.setattr(http_client.httpx, "AsyncClient", FakeAsyncClient)
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
     srv.connect_http("http://localhost:1")
     try:
-        handlers = [tool.handler for tool in srv.tools.values() if isinstance(tool.handler, HTTPDynamicHandler)]
-        assert len({id(handler._connection.client) for handler in handlers}) == 1
+        assert len(clients) == 1
     finally:
         await srv.stop()
+
+
+def test_connect_http_staging_failure_does_not_construct_client(monkeypatch):
+    import invariant.http_client as http_client
+
+    clients_constructed: list[object] = []
+
+    def async_client(*args, **kwargs):
+        del args, kwargs
+        client = object()
+        clients_constructed.append(client)
+        return client
+
+    def reject_handler(**kwargs):
+        del kwargs
+        raise RuntimeError("cannot stage HTTP handler")
+
+    monkeypatch.setattr(http_client.httpx, "AsyncClient", async_client)
+    monkeypatch.setattr(http_client, "HTTPDynamicHandler", reject_handler)
+
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    with pytest.raises(RuntimeError, match="cannot stage HTTP handler"):
+        server.connect_http("http://localhost:1")
+
+    assert clients_constructed == []
+    assert server.tools == {}
+    assert server._http_connections == []
 
 
 async def test_connect_http_channel_options_read_timeout():
@@ -1861,7 +1934,7 @@ async def test_connect_http_channel_options_read_timeout():
         )
         try:
             with pytest.raises(InvariantError) as exc:
-                await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+                await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert exc.value.code == grpc.StatusCode.DEADLINE_EXCEEDED
         finally:
             await srv.stop()
@@ -1892,7 +1965,7 @@ async def test_connect_http_channel_options_proxy_is_used():
         )
         try:
             with pytest.raises(InvariantError) as exc:
-                await srv._cli(["GreetService", "Greet", "-r", '{"name":"World"}'])
+                await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert exc.value.code == grpc.StatusCode.UNAVAILABLE
             assert Handler.attempts == 0
         finally:

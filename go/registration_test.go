@@ -158,9 +158,44 @@ func TestDescriptorOnlyProxyUsesDynamicMessages(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	require.NoError(t, server.ConnectGRPC(connection))
-	request := server.tools["EchoService.Echo"].newRequest()
+	request := server.tools["dynamic.v1.EchoService.Echo"].newRequest()
 	_, ok := request.(*dynamicpb.Message)
 	require.True(t, ok, "descriptor-only request type = %T", request)
+}
+
+func TestFullyQualifiedToolNamesAvoidCrossPackageCollisions(t *testing.T) {
+	files := make([]*descriptorpb.FileDescriptorProto, 0, 2)
+	for _, packageName := range []string{"one.v1", "two.v1"} {
+		files = append(files, &descriptorpb.FileDescriptorProto{
+			Name:    new(packageName + ".proto"),
+			Package: new(packageName),
+			Syntax:  new("proto3"),
+			MessageType: []*descriptorpb.DescriptorProto{
+				{Name: new("EchoRequest")},
+				{Name: new("EchoResponse")},
+			},
+			Service: []*descriptorpb.ServiceDescriptorProto{{
+				Name: new("EchoService"),
+				Method: []*descriptorpb.MethodDescriptorProto{{
+					Name:       new("Echo"),
+					InputType:  new("." + packageName + ".EchoRequest"),
+					OutputType: new("." + packageName + ".EchoResponse"),
+				}},
+			}},
+		})
+	}
+	raw, err := proto.Marshal(&descriptorpb.FileDescriptorSet{File: files})
+	require.NoError(t, err)
+	server, err := ServerFromBytes(raw)
+	require.NoError(t, err)
+	connection, err := grpc.NewClient("passthrough:///unused", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	require.NoError(t, server.ConnectGRPC(connection))
+	require.Contains(t, server.tools, "one.v1.EchoService.Echo")
+	require.Contains(t, server.tools, "two.v1.EchoService.Echo")
+	require.Len(t, server.tools, 2)
 }
 
 func cloneServiceDesc(desc grpc.ServiceDesc) grpc.ServiceDesc {

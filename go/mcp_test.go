@@ -169,7 +169,7 @@ func TestMCPProtocolCancellationNotificationSuppressesResponse(t *testing.T) {
 			greetpb.RegisterGreetServiceServer(srv, service)
 
 			call := fmt.Sprintf(
-				`{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"GreetService.Greet","arguments":{"name":"waiting"}}}`,
+				`{"jsonrpc":"2.0","id":%s,"method":"tools/call","params":{"name":"greet.v1.GreetService.Greet","arguments":{"name":"waiting"}}}`,
 				test.callID,
 			)
 			cancel := fmt.Sprintf(
@@ -216,7 +216,7 @@ func TestMCPHandlerCanceledStatusStillReturnsResponse(t *testing.T) {
 		"id":      7,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.Greet",
+			"name":      "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{"name": "canceled"},
 		},
 	})
@@ -301,14 +301,14 @@ func TestMCPToolsList(t *testing.T) {
 		assert.NotEmpty(t, tool["description"])
 		assert.NotNil(t, tool["inputSchema"])
 	}
-	assert.Equal(t, []string{"GreetService.Greet", "GreetService.GreetGroup", "GreetService.StreamGreet"}, names)
+	assert.Equal(t, []string{"greet.v1.GreetService.Greet", "greet.v1.GreetService.GreetGroup", "greet.v1.GreetService.StreamGreet"}, names)
 }
 
 func TestMCPToolCall(t *testing.T) {
 	resp := sendMCP(t, mcpServer(t), map[string]any{
 		"jsonrpc": "2.0", "id": 3, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.Greet",
+			"name":      "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{"name": "Alice"},
 		},
 	})
@@ -326,7 +326,7 @@ func TestMCPToolCallRejectsUnknownField(t *testing.T) {
 	resp := sendMCP(t, mcpServer(t), map[string]any{
 		"jsonrpc": "2.0", "id": 3, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.Greet",
+			"name":      "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{"name": "Alice", "extra": "x"},
 		},
 	})
@@ -355,7 +355,7 @@ func TestMCPToolCallWithEnumAndTags(t *testing.T) {
 	resp := sendMCP(t, mcpServer(t), map[string]any{
 		"jsonrpc": "2.0", "id": 3, "method": "tools/call",
 		"params": map[string]any{
-			"name": "GreetService.Greet",
+			"name": "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{
 				"name": "Alice",
 				"mood": "MOOD_HAPPY",
@@ -379,7 +379,7 @@ func TestMCPToolCallGreetGroup(t *testing.T) {
 	resp := sendMCP(t, mcpServer(t), map[string]any{
 		"jsonrpc": "2.0", "id": 3, "method": "tools/call",
 		"params": map[string]any{
-			"name": "GreetService.GreetGroup",
+			"name": "greet.v1.GreetService.GreetGroup",
 			"arguments": map[string]any{
 				"people": []any{
 					map[string]any{"name": "Alice", "mood": "MOOD_HAPPY"},
@@ -560,7 +560,7 @@ func TestMCPInvalidParams(t *testing.T) {
 		},
 		"tool call arguments array": {
 			"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-			"params": map[string]any{"name": "GreetService.Greet", "arguments": []any{}},
+			"params": map[string]any{"name": "greet.v1.GreetService.Greet", "arguments": []any{}},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -588,7 +588,7 @@ func TestMCPToolCallArgumentsAreOptional(t *testing.T) {
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "tools/call",
-		"params":  map[string]any{"name": "GreetService.Greet"},
+		"params":  map[string]any{"name": "greet.v1.GreetService.Greet"},
 	})
 	result := response["result"].(map[string]any)
 	assert.Nil(t, result["isError"])
@@ -605,7 +605,7 @@ func TestMCPMultipleRequests(t *testing.T) {
 		map[string]any{
 			"jsonrpc": "2.0", "id": 3, "method": "tools/call",
 			"params": map[string]any{
-				"name":      "GreetService.Greet",
+				"name":      "greet.v1.GreetService.Greet",
 				"arguments": map[string]any{"name": "Bob"},
 			},
 		},

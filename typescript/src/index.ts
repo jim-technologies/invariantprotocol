@@ -27,14 +27,11 @@ export {
   defaultHttpMetadataMapper,
   type HandlerContext,
   type HttpMetadataMapper,
-  type ManagedHandlerContext,
   type MethodConfig,
   SERVER_NAME,
   SERVER_VERSION,
   Server,
-  type StreamHandler,
   type Tool,
   type ToolCatalogEntry,
-  type UnaryHandler,
 } from "./server.js";
 export { validation } from "./validation.js";

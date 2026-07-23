@@ -133,13 +133,13 @@ def test_mcp_tools_list():
     )
     tools = responses[1]["result"]["tools"]
     assert len(tools) == 2
-    assert [t["name"] for t in tools] == ["GreetService.Greet", "GreetService.GreetGroup"]
+    assert [t["name"] for t in tools] == ["greet.v1.GreetService.Greet", "greet.v1.GreetService.GreetGroup"]
     tools_by_name = {t["name"]: t for t in tools}
-    assert "GreetService.Greet" in tools_by_name
-    assert tools_by_name["GreetService.Greet"]["description"] == "Greet a person by name."
-    assert "name" in tools_by_name["GreetService.Greet"]["inputSchema"]["properties"]
-    assert "GreetService.GreetGroup" in tools_by_name
-    assert tools_by_name["GreetService.GreetGroup"]["description"] == "Greet multiple people at once."
+    assert "greet.v1.GreetService.Greet" in tools_by_name
+    assert tools_by_name["greet.v1.GreetService.Greet"]["description"] == "Greet a person by name."
+    assert "name" in tools_by_name["greet.v1.GreetService.Greet"]["inputSchema"]["properties"]
+    assert "greet.v1.GreetService.GreetGroup" in tools_by_name
+    assert tools_by_name["greet.v1.GreetService.GreetGroup"]["description"] == "Greet multiple people at once."
 
 
 def test_mcp_tool_call():
@@ -150,7 +150,7 @@ def test_mcp_tool_call():
                 1,
                 "tools/call",
                 {
-                    "name": "GreetService.Greet",
+                    "name": "greet.v1.GreetService.Greet",
                     "arguments": {"name": "World"},
                 },
             ),
@@ -162,6 +162,30 @@ def test_mcp_tool_call():
     assert result["message"] == "Hi World"
 
 
+async def test_mcp_tool_call_uses_canonical_proto_json_names(server):
+    from invariant.projections.mcp import mcp_dispatch
+
+    response = await mcp_dispatch(
+        server,
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "greet.v1.GreetService.Greet",
+                "arguments": {"name": "Canonical", "wireSequenceId": "9007199254740993"},
+            },
+        },
+    )
+
+    result = json.loads(response["result"]["content"][0]["text"])
+    assert result == {
+        "message": "Hi Canonical",
+        "wireDisplayLabel": "Canonical",
+        "wireResponseCount": "9007199254740993",
+    }
+
+
 def test_mcp_tool_call_rejects_unknown_field():
     responses = _run_mcp_session(
         [
@@ -170,7 +194,7 @@ def test_mcp_tool_call_rejects_unknown_field():
                 1,
                 "tools/call",
                 {
-                    "name": "GreetService.Greet",
+                    "name": "greet.v1.GreetService.Greet",
                     "arguments": {"name": "World", "extra": "x"},
                 },
             ),
@@ -191,7 +215,7 @@ def test_mcp_tool_call_with_enum_and_tags():
                 1,
                 "tools/call",
                 {
-                    "name": "GreetService.Greet",
+                    "name": "greet.v1.GreetService.Greet",
                     "arguments": {"name": "World", "mood": "MOOD_HAPPY", "tags": {"lang": "en"}},
                 },
             ),
@@ -211,7 +235,7 @@ def test_mcp_tool_call_greet_group():
                 1,
                 "tools/call",
                 {
-                    "name": "GreetService.GreetGroup",
+                    "name": "greet.v1.GreetService.GreetGroup",
                     "arguments": {
                         "people": [
                             {"name": "Alice", "mood": "MOOD_HAPPY"},
@@ -362,7 +386,7 @@ def test_mcp_stdio_rejects_invalid_method_params_and_ignores_malformed_cancellat
         [
             _mcp_request(1, "tools/call", []),
             _mcp_request(2, "tools/call", {"name": [], "arguments": {}}),
-            _mcp_request(3, "tools/call", {"name": "GreetService.Greet", "arguments": []}),
+            _mcp_request(3, "tools/call", {"name": "greet.v1.GreetService.Greet", "arguments": []}),
             malformed_cancellation,
             _mcp_request(4, "ping", []),
             _mcp_request(5, "ping", {}),
@@ -410,7 +434,7 @@ async def test_mcp_stdio_cancel_notification_cancels_inflight_tool(monkeypatch):
     try:
         reader.feed_data(
             b'{"jsonrpc":"2.0","id":-0,"method":"tools/call",'
-            b'"params":{"name":"GreetService.Greet","arguments":{"name":"blocked"}}}\n'
+            b'"params":{"name":"greet.v1.GreetService.Greet","arguments":{"name":"blocked"}}}\n'
         )
         await asyncio.wait_for(started.wait(), timeout=2)
 
@@ -426,6 +450,64 @@ async def test_mcp_stdio_cancel_notification_cancels_inflight_tool(monkeypatch):
         await asyncio.wait_for(cancelled.wait(), timeout=2)
         assert context_was_cancelled == [True]
         assert responses == []
+    finally:
+        if not runner.done():
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+        await server.stop(grace=0)
+
+
+async def test_mcp_stdio_releases_completed_tasks_before_eof(monkeypatch):
+    from invariant.projections import mcp
+
+    class ImmediateServicer:
+        async def Greet(self, request, context):
+            del context
+            return greet_pb2.GreetResponse(message=f"Hi {request.name}")
+
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    register_greet(server, ImmediateServicer())
+    reader = asyncio.StreamReader()
+    responses: list[dict] = []
+    written: asyncio.Queue[dict] = asyncio.Queue()
+
+    async def stdin_reader():
+        return reader
+
+    def write_response(response):
+        responses.append(response)
+        written.put_nowait(response)
+
+    monkeypatch.setattr(mcp, "_stdin_reader", stdin_reader)
+    monkeypatch.setattr(mcp, "_write_response", write_response)
+
+    session = mcp._StdioMCP(server)
+    runner = asyncio.create_task(session.run())
+    try:
+        call = {
+            "jsonrpc": "2.0",
+            "id": "completed-call",
+            "method": "tools/call",
+            "params": {"name": "greet.v1.GreetService.Greet", "arguments": {"name": "released"}},
+        }
+        reader.feed_data((json.dumps(call) + "\n").encode())
+
+        first = await asyncio.wait_for(written.get(), timeout=2)
+        await asyncio.sleep(0)
+
+        assert first["id"] == "completed-call"
+        assert session._inflight == {}
+        assert session._background == set()
+        assert not runner.done()
+
+        reader.feed_data((_mcp_request("next-request", "ping") + "\n").encode())
+        second = await asyncio.wait_for(written.get(), timeout=2)
+        assert second == {"jsonrpc": "2.0", "id": "next-request", "result": {}}
+        assert len(responses) == 2
+        assert not runner.done()
+
+        reader.feed_eof()
+        await asyncio.wait_for(runner, timeout=2)
     finally:
         if not runner.done():
             runner.cancel()
@@ -499,7 +581,7 @@ async def test_mcp_stdio_cancel_suppresses_response_when_handler_swallows_cancel
             "jsonrpc": "2.0",
             "id": "call-1",
             "method": "tools/call",
-            "params": {"name": "GreetService.Greet", "arguments": {"name": "blocked"}},
+            "params": {"name": "greet.v1.GreetService.Greet", "arguments": {"name": "blocked"}},
         }
         reader.feed_data((json.dumps(call) + "\n").encode())
         await asyncio.wait_for(started.wait(), timeout=2)

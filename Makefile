@@ -54,7 +54,7 @@ lint: node_modules/.package-lock.json ## Run Go, Python, Rust, and proto linters
 	npm run lint
 
 typecheck: node_modules/.package-lock.json ## Run Python and TypeScript static type checks.
-	cd python && uv run ty check
+	cd python && uv run mypy
 	npm run typecheck
 
 proto-comments: ## Verify projected proto comments are complete.
@@ -131,7 +131,7 @@ generate: node_modules/.package-lock.json ## Regenerate protobuf stubs.
 	# Remove only configured generator outputs. Keep Python package markers and
 	# hand-written files; this makes deleted/renamed protos delete stale bindings.
 	find go/gen go/tests/gen -type f -name '*.pb.go' -delete
-	find python/src/invariant/gen python/src/buf python/tests/proto/gen -type f \( -name '*_pb2.py' -o -name '*_pb2_grpc.py' \) -delete
+	find python/src/invariant/gen python/src/buf python/tests/proto/gen -type f \( -name '*_pb2.py' -o -name '*_pb2.pyi' -o -name '*_pb2_grpc.py' \) -delete
 	find typescript/src/gen typescript/tests/gen -type f -name '*_pb.ts' -delete
 	cd proto && buf build -o descriptor.binpb
 	cd proto && NODE_NO_WARNINGS=1 buf generate descriptor.binpb

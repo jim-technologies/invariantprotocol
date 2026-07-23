@@ -37,11 +37,56 @@ fn descriptor_parsing_preserves_services_messages_comments_and_cardinality() {
 }
 
 #[test]
+fn schema_uses_protojson_names_int64_strings_and_proto2_presence() {
+    let parsed = invariant::ParsedDescriptor::from_file(DESCRIPTOR_PATH).unwrap();
+    let schema =
+        invariant::schema::SchemaGen::new(&parsed).message_to_schema("greet.v1.GreetRequest");
+    let properties = schema["properties"].as_object().unwrap();
+    assert_eq!(properties["wireSequenceId"]["type"], "string");
+    assert_eq!(
+        properties["wireSequenceId"]["pattern"],
+        "^(0|-?[1-9][0-9]*)$"
+    );
+    assert!(!properties.contains_key("account_sequence"));
+    assert!(
+        !schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "wireSequenceId")
+    );
+
+    let proto2 =
+        invariant::schema::SchemaGen::new(&parsed).message_to_schema("data.v1.Proto2Record");
+    assert_eq!(proto2["properties"]["id"]["type"], "string");
+    assert_eq!(proto2["required"], serde_json::json!(["id"]));
+
+    let canonical =
+        invariant::schema::SchemaGen::new(&parsed).message_to_schema("data.v1.CanonicalRecord");
+    assert_eq!(
+        canonical["properties"]["doubleValue"]["oneOf"],
+        serde_json::json!([
+            {"type": "number"},
+            {"type": "string", "enum": ["NaN", "Infinity", "-Infinity"]}
+        ])
+    );
+    assert_eq!(
+        canonical["properties"]["elapsed"]["pattern"],
+        "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,9})?s$"
+    );
+    assert!(
+        canonical["properties"]["counters"]
+            .get("propertyNames")
+            .is_none()
+    );
+}
+
+#[test]
 fn generated_registration_populates_the_projection_catalog() {
     let server = registered_server(TestGreetService::default());
     let catalog = server.tool_catalog();
     assert_eq!(catalog.len(), 3);
-    assert_eq!(catalog[0]["name"], "GreetService.Greet");
+    assert_eq!(catalog[0]["name"], "greet.v1.GreetService.Greet");
     assert!(
         catalog[0]["description"]
             .as_str()
@@ -49,6 +94,31 @@ fn generated_registration_populates_the_projection_catalog() {
             .contains("Greet a person")
     );
     assert_eq!(catalog[2]["_meta"]["streaming"], true);
+}
+
+#[tokio::test]
+async fn mcp_serializes_canonical_protojson_names_and_int64_values() {
+    let server = registered_server(TestGreetService::default());
+    let response = invariant::projections::mcp::mcp_dispatch(
+        &server,
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "greet.v1.GreetService.Greet",
+                "arguments": {"name": "ProtoJSON"}
+            }
+        }),
+    )
+    .await
+    .unwrap();
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    let body: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(body["wireDisplayLabel"], "canonical");
+    assert_eq!(body["wireResponseCount"], "9007199254740993");
+    assert!(body.get("response_label").is_none());
+    assert!(body.get("response_count").is_none());
 }
 
 #[tokio::test]
@@ -107,7 +177,10 @@ async fn in_process_projection_uses_registered_typed_implementation_and_metadata
     request
         .metadata_mut()
         .insert("x-correlation-id", "abc".parse().unwrap());
-    let response = server.invoke("GreetService.Greet", request).await.unwrap();
+    let response = server
+        .invoke("greet.v1.GreetService.Greet", request)
+        .await
+        .unwrap();
     assert_eq!(response.metadata().get("x-result-id").unwrap(), "result-1");
     let typed =
         greet::GreetResponse::decode(response.into_inner().encode_to_vec().as_slice()).unwrap();
@@ -134,7 +207,7 @@ async fn invocation_rejects_unknown_tools_and_wrong_cardinality() {
         Code::NotFound
     );
     let status = match server
-        .invoke_stream("GreetService.Greet", Request::new(request))
+        .invoke_stream("greet.v1.GreetService.Greet", Request::new(request))
         .await
     {
         Ok(_) => panic!("unary method unexpectedly returned a stream"),
@@ -153,7 +226,7 @@ async fn invocation_freezes_configuration_deterministically() {
         .unwrap();
     server
         .invoke(
-            "GreetService.Greet",
+            "greet.v1.GreetService.Greet",
             Request::new(DynamicMessage::new(descriptor)),
         )
         .await

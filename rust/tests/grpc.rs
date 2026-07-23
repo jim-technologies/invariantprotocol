@@ -63,8 +63,8 @@ async fn include_exclude_filter_only_optional_projections() {
 
     let catalog = server.tool_catalog();
     assert_eq!(catalog.len(), 1);
-    assert_eq!(catalog[0]["name"], "GreetService.Greet");
-    assert!(server.tool("GreetService.GreetGroup").is_none());
+    assert_eq!(catalog[0]["name"], "greet.v1.GreetService.Greet");
+    assert!(server.tool("greet.v1.GreetService.GreetGroup").is_none());
 
     let (address, task) = serve_native(server).await;
     let mut client = generated_client(address).await;
@@ -201,7 +201,7 @@ async fn standard_tonic_interceptor_layer_is_native_only_and_runs_once() {
     )
     .unwrap();
     projected
-        .invoke("GreetService.Greet", Request::new(dynamic))
+        .invoke("greet.v1.GreetService.Greet", Request::new(dynamic))
         .await
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);

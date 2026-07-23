@@ -574,8 +574,7 @@ impl Server {
                 .pool
                 .get_message_by_name(&output)
                 .ok_or_else(|| Status::internal(format!("missing output descriptor {output}")))?;
-            let simple_service = service.name.clone();
-            let tool_name = format!("{simple_service}.{method_name}");
+            let tool_name = format!("{}.{method_name}", S::NAME);
             tools.push(Tool {
                 name: tool_name.clone(),
                 description: if method.comment.is_empty() {
@@ -687,7 +686,7 @@ impl Server {
                     ServerCallInfo::new(service_name, &method.name),
                     upstream,
                 );
-                let tool_name = format!("{}.{}", service_info.name, method.name);
+                let tool_name = format!("{service_name}.{}", method.name);
                 tools.push(Tool {
                     name: tool_name.clone(),
                     description: if method.comment.is_empty() {
@@ -777,7 +776,7 @@ impl Server {
                     ServerCallInfo::new(service_name, &method.name),
                     upstream,
                 );
-                let tool_name = format!("{}.{}", service_info.name, method.name);
+                let tool_name = format!("{service_name}.{}", method.name);
                 tools.push(Tool {
                     name: tool_name.clone(),
                     description: if method.comment.is_empty() {

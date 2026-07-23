@@ -5,10 +5,71 @@ TypeScript share the version in `VERSION` and are released together from one
 repository tag named `vX.Y.Z`.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-the project is pre-1.0 so 0.x minor releases may include breaking API changes,
-but never silent behaviour regressions.
+the project is pre-1.0 so 0.x minor releases may include deliberate API changes,
+but never silent wire-behavior regressions.
 
 ## Unreleased
+
+## v0.9.0 — 2026-07-22
+
+### Added
+
+- **One stable production contract for Go, Python, Rust, and TypeScript.** The
+  machine-readable parity gate now rejects a release unless every portable Core
+  capability is supported with behavioral evidence in all four runtimes and
+  the shared maturity is `stable`.
+- **Canonical ProtoJSON schemas across every runtime.** Tool schemas preserve
+  explicit `json_name` values, decimal-string 64-bit integers, non-finite float
+  spellings, proto2 optional presence, well-known type shapes, and legal map-key
+  strings. Generated Python type stubs and the `py.typed` marker ship with Git
+  installs and authored Python code is checked with stable mypy.
+
+### Changed
+
+- **Projection identities are globally unambiguous.** MCP, CLI, catalogs, and
+  in-process invocation use `package.Service.Method`; CLIs require
+  `package.Service Method`. Short service aliases were removed so equal service
+  names in different packages can coexist deterministically.
+- **All projection JSON is canonical ProtoJSON.** HTTP/Connect, MCP, CLI, and
+  explicit JSON conversion at projection boundaries use descriptor JSON names
+  and canonical scalar representations rather than forcing protobuf source
+  names. Programmatic invocation continues to return generated messages.
+- **The four runtimes advance as one pre-1.0 release.** All language packages
+  continue to ship together from the single root `vX.Y.Z` Git tag and follow
+  Semantic Versioning; 0.x minor releases may still deliberately refine APIs.
+- **Runtime registries have explicit ownership boundaries.** Python and
+  TypeScript expose immutable tool metadata and detached descriptor views while
+  retaining executable generated handlers and mutable registration state
+  internally. Projection adapters can no longer accept caller-fabricated tool
+  records or mutate a frozen server through a catalog value.
+- **Supported dependency graphs were refreshed together.** Go, Python, Rust,
+  TypeScript, Protobuf-ES generation, and the reproducible toolchain lock now
+  use their latest compatible stable releases; Node remains on its LTS line.
+
+### Fixed
+
+- **Buffered MCP HTTP streaming is bounded during collection.** Every runtime
+  stops reading a server stream before the aggregate JSON-RPC response exceeds
+  the server-wide unary response limit and returns `resource_exhausted`; stdio
+  and direct dispatch retain their documented behavior. TypeScript also no
+  longer mistakes a normally consumed request for a disconnect and leaves the
+  response open.
+- **Projection lifecycle leaks and CLI metadata were corrected.** Python
+  releases completed stdio tasks and does not construct an HTTP client before
+  registration succeeds. Go CLI help now renders required fields and enum
+  choices from the generated schema representation.
+- **Python projection metadata is standards-shaped without a hot-path tax.**
+  `grpc.aio.Metadata` remains the cached public context value but is allocated
+  lazily, avoiding three unused containers on ordinary in-process calls.
+- **Programmatic Go dispatch enforces protobuf request identity.** A request
+  with a different descriptor full name now fails with `invalid_argument`
+  instead of being silently reinterpreted through JSON; the same protobuf type
+  from an isolated descriptor pool still crosses through binary encoding.
+- **Adapter boundaries now use their canonical owners.** The schema CLI uses
+  the shared SchemaBundle parser and serializer, Python's HTTP client requires
+  its isolated descriptor pool and no longer imports runtime types back from
+  `server.py`, and TypeScript clones caller-owned descriptor bytes before
+  registration or reflection can retain them.
 
 ## v0.8.3 — 2026-07-17
 
@@ -352,9 +413,7 @@ Starting with this release, require the repository module instead:
 github.com/jim-technologies/invariantprotocol v0.6.0
 ```
 
-Go source imports do not change. Plain tags from `v0.2.0` through `v0.5.0`
-predate the root Go module and are retracted there; the old `go/v*` releases
-remain available under the historical nested module path.
+Go source imports do not change. Root-module tagging begins with `v0.6.0`.
 
 ## v0.5.0 — 2026-07-14
 

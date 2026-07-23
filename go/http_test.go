@@ -396,8 +396,8 @@ func TestHTTPToolCatalog(t *testing.T) {
 	for _, tool := range body.Tools {
 		names[tool.Name] = true
 	}
-	assert.True(t, names["GreetService.Greet"])
-	assert.True(t, names["GreetService.GreetGroup"])
+	assert.True(t, names["greet.v1.GreetService.Greet"])
+	assert.True(t, names["greet.v1.GreetService.GreetGroup"])
 }
 
 func TestHTTPDescriptorReturnsConstructionImage(t *testing.T) {

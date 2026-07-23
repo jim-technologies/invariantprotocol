@@ -218,7 +218,9 @@ fn id_type(id: &Value) -> &'static str {
 /// Dispatch a single MCP JSON-RPC message. Returns `None` for notifications
 /// (no `id` field); otherwise a fully-formed JSON-RPC response.
 pub async fn mcp_dispatch(server: &Arc<Server>, msg: &Value) -> Option<Value> {
-    mcp_dispatch_with_context(server, msg, MetadataMap::new(), None).await
+    mcp_dispatch_with_context(server, msg, MetadataMap::new(), None, None)
+        .await
+        .expect("unbounded MCP dispatch cannot exceed an HTTP response limit")
 }
 
 pub(crate) async fn mcp_dispatch_with_context(
@@ -226,30 +228,33 @@ pub(crate) async fn mcp_dispatch_with_context(
     msg: &Value,
     metadata: MetadataMap,
     projection: Option<ProjectionContext>,
-) -> Option<Value> {
+    max_response_bytes: Option<usize>,
+) -> Result<Option<Value>, Status> {
     server.freeze();
     if let Some(response) = invalid_request_response(msg) {
-        return Some(response);
+        return Ok(Some(response));
     }
     if is_client_response(msg) {
-        return None;
+        return Ok(None);
     }
     let method = msg
         .get("method")
         .and_then(Value::as_str)
         .expect("validated JSON-RPC method");
-    let id = canonical_jsonrpc_id(msg.get("id").cloned()?);
+    let Some(id) = msg.get("id").cloned().map(canonical_jsonrpc_id) else {
+        return Ok(None);
+    };
     let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
     if !params.is_object() {
-        return Some(invalid_params(id));
+        return Ok(Some(invalid_params(id)));
     }
 
-    match method {
+    let response = match method {
         "initialize" => {
             if !valid_initialize_params(&params) {
-                return Some(invalid_params(id));
+                return Ok(Some(invalid_params(id)));
             }
-            Some(json!({
+            json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
@@ -257,30 +262,39 @@ pub(crate) async fn mcp_dispatch_with_context(
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "invariant-protocol", "version": env!("CARGO_PKG_VERSION")},
                 }
-            }))
+            })
         }
-        "tools/list" => Some(json!({
+        "tools/list" => json!({
             "jsonrpc": "2.0",
             "id": id,
             "result": {"tools": server.tool_catalog()},
-        })),
+        }),
         "tools/call" => {
             if !params.get("name").is_some_and(Value::is_string)
                 || params
                     .get("arguments")
                     .is_some_and(|arguments| !arguments.is_object())
             {
-                return Some(invalid_params(id));
+                return Ok(Some(invalid_params(id)));
             }
-            Some(tools_call(server, id, &params, metadata, projection).await)
+            tools_call(
+                server,
+                id,
+                &params,
+                metadata,
+                projection,
+                max_response_bytes,
+            )
+            .await?
         }
-        "ping" => Some(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
-        _ => Some(json!({
+        "ping" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
+        _ => json!({
             "jsonrpc": "2.0",
             "id": id,
             "error": {"code": -32601, "message": format!("Method not found: {method}")},
-        })),
-    }
+        }),
+    };
+    Ok(Some(response))
 }
 
 fn valid_initialize_params(params: &Value) -> bool {
@@ -396,24 +410,34 @@ async fn tools_call(
     params: &Value,
     metadata: MetadataMap,
     projection: Option<ProjectionContext>,
-) -> Value {
+    max_response_bytes: Option<usize>,
+) -> Result<Value, Status> {
     let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
     let Some(tool) = server.tool(tool_name) else {
-        return json!({
+        return Ok(json!({
             "jsonrpc": "2.0",
             "id": id,
             "error": {"code": -32602, "message": format!("Unknown tool: {tool_name}")},
-        });
+        }));
     };
 
     let request = match build_dyn_request(&tool, &arguments) {
         Ok(r) => r,
-        Err(s) => return error_result(id, &s),
+        Err(s) => return Ok(error_result(id, &s)),
     };
 
     if tool.server_streaming {
-        return stream_tools_call(server, id, &tool.name, request, metadata, projection).await;
+        return stream_tools_call(
+            server,
+            id,
+            &tool.name,
+            request,
+            metadata,
+            projection,
+            max_response_bytes,
+        )
+        .await;
     }
 
     let mut request = Request::new(request);
@@ -424,7 +448,7 @@ async fn tools_call(
         }
         request.extensions_mut().insert(projection);
     }
-    match server.invoke(tool_name, request).await {
+    Ok(match server.invoke(tool_name, request).await {
         Ok(resp) => {
             let text = serialize_message(resp.get_ref());
             json!({
@@ -434,7 +458,7 @@ async fn tools_call(
             })
         }
         Err(s) => error_result(id, &s),
-    }
+    })
 }
 
 async fn stream_tools_call(
@@ -444,8 +468,27 @@ async fn stream_tools_call(
     request: DynamicMessage,
     metadata: MetadataMap,
     projection: Option<ProjectionContext>,
-) -> Value {
+    max_response_bytes: Option<usize>,
+) -> Result<Value, Status> {
     use futures::StreamExt;
+    // MCP over stateless HTTP returns one buffered JSON-RPC document, so its
+    // existing unary response limit must also bound collection of streaming
+    // tool chunks. Direct dispatch and stdio have no HTTP response budget.
+    let mut encoded_response_bytes = max_response_bytes.map(|_| {
+        serde_json::to_vec(&json!({
+            "jsonrpc": "2.0",
+            "id": id.clone(),
+            "result": {"content": []},
+        }))
+        .unwrap_or_default()
+        .len()
+    });
+    if max_response_bytes
+        .zip(encoded_response_bytes)
+        .is_some_and(|(limit, encoded)| encoded > limit)
+    {
+        return Err(mcp_response_limit_error());
+    }
     let mut request = Request::new(request);
     *request.metadata_mut() = metadata;
     if let Some(projection) = projection {
@@ -456,18 +499,31 @@ async fn stream_tools_call(
     }
     let mut stream = match server.invoke_stream(tool_name, request).await {
         Ok(response) => response.into_inner(),
-        Err(status) => return error_result(id, &status),
+        Err(status) => return Ok(error_result(id, &status)),
     };
     let mut content: Vec<Value> = Vec::new();
     while let Some(item) = stream.next().await {
         match item {
             Ok(msg) => {
                 let text = serialize_message(&msg);
-                content.push(json!({"type": "text", "text": text}));
+                let block = json!({"type": "text", "text": text});
+                if let (Some(limit), Some(encoded)) =
+                    (max_response_bytes, encoded_response_bytes.as_mut())
+                {
+                    let block_bytes = serde_json::to_vec(&block).unwrap_or_default().len();
+                    let next = encoded
+                        .saturating_add(usize::from(!content.is_empty()))
+                        .saturating_add(block_bytes);
+                    if next > limit {
+                        return Err(mcp_response_limit_error());
+                    }
+                    *encoded = next;
+                }
+                content.push(block);
             }
             Err(s) => {
                 content.push(json!({"type": "text", "text": s.message()}));
-                return json!({
+                let response = json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
@@ -476,14 +532,37 @@ async fn stream_tools_call(
                         "error": error_payload(&s),
                     },
                 });
+                return bounded_mcp_stream_response(response, max_response_bytes);
             }
         }
     }
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": {"content": content},
-    })
+    bounded_mcp_stream_response(
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {"content": content},
+        }),
+        max_response_bytes,
+    )
+}
+
+fn bounded_mcp_stream_response(
+    response: Value,
+    max_response_bytes: Option<usize>,
+) -> Result<Value, Status> {
+    if max_response_bytes.is_some_and(|limit| {
+        serde_json::to_vec(&response)
+            .expect("serialize MCP JSON value")
+            .len()
+            > limit
+    }) {
+        return Err(mcp_response_limit_error());
+    }
+    Ok(response)
+}
+
+fn mcp_response_limit_error() -> Status {
+    Status::resource_exhausted("encoded MCP response exceeds configured byte limit")
 }
 
 fn build_dyn_request(
@@ -501,7 +580,7 @@ fn build_dyn_request(
 }
 
 fn serialize_message(msg: &DynamicMessage) -> String {
-    let opts = SerializeOptions::new().use_proto_field_name(true);
+    let opts = SerializeOptions::new();
     let mut buf = Vec::with_capacity(128);
     let mut ser = serde_json::Serializer::pretty(&mut buf);
     let _ = msg.serialize_with_options(&mut ser, &opts);
@@ -700,7 +779,7 @@ mod tests {
                         "id": 1,
                         "method": "tools/call",
                         "params": {
-                            "name": "GreetService.Greet",
+                            "name": "greet.v1.GreetService.Greet",
                             "arguments": {"name": "slow"},
                         },
                     })
@@ -714,6 +793,107 @@ mod tests {
             .unwrap();
 
         shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(2), session)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), dropped_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mut bytes = Vec::new();
+        output.read_to_end(&mut bytes).await.unwrap();
+        assert!(bytes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stdio_cancellation_notification_aborts_the_matching_call_without_a_response() {
+        struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                if let Some(signal) = self.0.take() {
+                    let _ = signal.send(());
+                }
+            }
+        }
+
+        let server = test_server();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        let dropped_tx = Arc::new(Mutex::new(Some(dropped_tx)));
+        server
+            .use_shared_unary(Arc::new({
+                let entered = entered.clone();
+                move |_, _, _| {
+                    let entered = entered.clone();
+                    let dropped_tx = dropped_tx
+                        .lock()
+                        .take()
+                        .expect("only one tool call is expected");
+                    Box::pin(async move {
+                        let _signal = DropSignal(Some(dropped_tx));
+                        entered.notify_one();
+                        futures::future::pending::<Result<crate::server::ErasedResponse, Status>>()
+                            .await
+                    })
+                }
+            }))
+            .unwrap();
+        server
+            .connect_http(
+                &reqwest::Client::new(),
+                reqwest::Url::parse("https://example.test").unwrap(),
+            )
+            .unwrap();
+
+        let (mut input, session_input) = tokio::io::duplex(4096);
+        let (session_output, mut output) = tokio::io::duplex(4096);
+        let session = tokio::spawn(serve_mcp_session(
+            server,
+            session_input,
+            session_output,
+            CancellationToken::new(),
+        ));
+        input
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": "cancel-me",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "greet.v1.GreetService.Greet",
+                            "arguments": {"name": "slow"},
+                        },
+                    })
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+            .await
+            .unwrap();
+        input
+            .write_all(
+                format!(
+                    "{}\n",
+                    json!({
+                        "jsonrpc": "2.0",
+                        "method": "notifications/cancelled",
+                        "params": {"requestId": "cancel-me"},
+                    })
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        input.shutdown().await.unwrap();
+
         tokio::time::timeout(std::time::Duration::from_secs(2), session)
             .await
             .unwrap()

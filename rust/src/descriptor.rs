@@ -53,6 +53,9 @@ pub struct EnumInfo {
 #[derive(Debug, Clone)]
 pub struct FieldInfo {
     pub name: String,
+    /// Canonical ProtoJSON field name. This is either an explicit `json_name`
+    /// override or protobuf's lowerCamelCase mapping of the source name.
+    pub json_name: String,
     pub number: i32,
     /// `FieldDescriptorProto::Type` as i32 — Go/Python keep raw ints so the
     /// schema generator can use the same numeric switch.
@@ -62,8 +65,9 @@ pub struct FieldInfo {
     pub label: i32,
     pub comment: String,
     pub oneof_index: Option<i32>,
-    /// True iff the field uses `optional` (proto3 explicit presence).
-    pub proto3_optional: bool,
+    /// True iff this singular field is optional for projection-schema input:
+    /// proto3 `optional`, or a proto2 field declared with `optional`.
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +135,8 @@ impl ParsedDescriptor {
     fn parse_file(&mut self, file: &FileDescriptorProto) {
         let comments = extract_comments(file);
         let pkg = file.package.clone().unwrap_or_default();
+        // Per protobuf, an omitted or empty syntax denotes proto2.
+        let is_proto2 = is_proto2_syntax(file.syntax.as_deref());
 
         for (i, enum_proto) in file.enum_type.iter().enumerate() {
             let full = qualified_name(&pkg, enum_proto.name());
@@ -140,7 +146,7 @@ impl ParsedDescriptor {
 
         for (i, msg_proto) in file.message_type.iter().enumerate() {
             let full = qualified_name(&pkg, msg_proto.name());
-            self.parse_message(msg_proto, &full, &comments, &[4, i as i32]);
+            self.parse_message(msg_proto, &full, &comments, &[4, i as i32], is_proto2);
         }
 
         for (i, svc_proto) in file.service.iter().enumerate() {
@@ -156,6 +162,7 @@ impl ParsedDescriptor {
         full_name: &str,
         comments: &Comments,
         prefix: &[i32],
+        is_proto2: bool,
     ) {
         // Nested enums.
         for (i, e) in msg_proto.enum_type.iter().enumerate() {
@@ -170,7 +177,7 @@ impl ParsedDescriptor {
             let nested = format!("{full_name}.{}", m.name());
             let mut path = prefix.to_vec();
             path.extend_from_slice(&[3, i as i32]);
-            self.parse_message(m, &nested, comments, &path);
+            self.parse_message(m, &nested, comments, &path, is_proto2);
         }
 
         let mut oneofs: Vec<OneofInfo> = msg_proto
@@ -194,6 +201,7 @@ impl ParsedDescriptor {
             path.extend_from_slice(&[2, i as i32]);
             let comment = comments.get(&path).cloned().unwrap_or_default();
             let proto3_opt = f.proto3_optional.unwrap_or(false);
+            let label = f.label.unwrap_or(0);
             let oneof_index = if proto3_opt { None } else { f.oneof_index };
             let type_name = f
                 .type_name
@@ -204,13 +212,19 @@ impl ParsedDescriptor {
 
             let field = FieldInfo {
                 name: f.name().to_string(),
+                json_name: f
+                    .json_name
+                    .clone()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| default_json_name(f.name())),
                 number: f.number.unwrap_or(0),
                 r#type: f.r#type.unwrap_or(0),
                 type_name,
-                label: f.label.unwrap_or(0),
+                label,
                 comment,
                 oneof_index,
-                proto3_optional: proto3_opt,
+                optional: proto3_opt
+                    || (is_proto2 && label == field_descriptor_proto::Label::Optional as i32),
             };
 
             if let Some(idx) = oneof_index
@@ -239,6 +253,26 @@ impl ParsedDescriptor {
             },
         );
     }
+}
+
+fn default_json_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut uppercase_next = false;
+    for ch in name.chars() {
+        if ch == '_' {
+            uppercase_next = true;
+        } else if uppercase_next {
+            out.extend(ch.to_uppercase());
+            uppercase_next = false;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn is_proto2_syntax(syntax: Option<&str>) -> bool {
+    matches!(syntax, None | Some("") | Some("proto2"))
 }
 
 type MessageIndex<'a> = BTreeMap<String, (&'a FileDescriptorProto, &'a DescriptorProto)>;
@@ -469,5 +503,16 @@ fn qualified_name(pkg: &str, name: &str) -> String {
         name.to_string()
     } else {
         format!("{pkg}.{name}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn missing_and_empty_syntax_are_proto2() {
+        for syntax in [None, Some(""), Some("proto2")] {
+            assert!(super::is_proto2_syntax(syntax));
+        }
+        assert!(!super::is_proto2_syntax(Some("proto3")));
     }
 }

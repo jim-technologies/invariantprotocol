@@ -13,6 +13,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -435,37 +436,50 @@ func (m *mcpSession) dispatch(ctx context.Context, req *jsonRPCRequest) *jsonRPC
 // Used by both the stdio session loop and the HTTP /mcp transport.
 // Returns nil for notifications (req.ID == nil).
 func (s *Server) mcpDispatch(ctx context.Context, req *jsonRPCRequest) *jsonRPCResponse {
+	response, _ := s.mcpDispatchWithResponseLimit(ctx, req, 0)
+	return response
+}
+
+func (s *Server) mcpDispatchWithResponseLimit(
+	ctx context.Context,
+	req *jsonRPCRequest,
+	maxResponseBytes int64,
+) (*jsonRPCResponse, error) {
 	if req.ID == nil {
-		return nil
+		return nil, nil
 	}
 	switch req.Method {
 	case "initialize":
 		if !validMCPInitializeParams(req.Params) {
-			return mcpErr(req.ID, -32602, "Invalid params")
+			return mcpErr(req.ID, -32602, "Invalid params"), nil
 		}
 		return mcpOK(req.ID, map[string]any{
 			"protocolVersion": mcpProtocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": serverName, "version": serverVersion},
-		})
+		}), nil
 	case "tools/list":
-		return mcpOK(req.ID, map[string]any{"tools": s.ToolCatalog()})
+		return mcpOK(req.ID, map[string]any{"tools": s.ToolCatalog()}), nil
 	case "tools/call":
-		return s.toolsCall(ctx, req.ID, req.Params)
+		return s.toolsCall(ctx, req.ID, req.Params, maxResponseBytes)
 	case "ping":
-		return mcpOK(req.ID, map[string]any{})
+		return mcpOK(req.ID, map[string]any{}), nil
 	default:
-		return mcpErr(req.ID, -32601, "Method not found: "+req.Method)
+		return mcpErr(req.ID, -32601, "Method not found: "+req.Method), nil
 	}
 }
 
-func (s *Server) toolsCall(ctx context.Context, id, rawParams json.RawMessage) *jsonRPCResponse {
+func (s *Server) toolsCall(
+	ctx context.Context,
+	id, rawParams json.RawMessage,
+	maxResponseBytes int64,
+) (*jsonRPCResponse, error) {
 	var p struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(rawParams, &p); err != nil {
-		return mcpErr(id, -32602, "Invalid params: "+err.Error())
+		return mcpErr(id, -32602, "Invalid params: "+err.Error()), nil //nolint:nilerr // JSON-RPC errors are successful dispatch results.
 	}
 	if len(p.Arguments) == 0 {
 		p.Arguments = json.RawMessage("{}")
@@ -473,13 +487,13 @@ func (s *Server) toolsCall(ctx context.Context, id, rawParams json.RawMessage) *
 
 	tool, ok := s.tools[p.Name]
 	if !ok {
-		return mcpErr(id, -32602, "Unknown tool: "+p.Name)
+		return mcpErr(id, -32602, "Unknown tool: "+p.Name), nil
 	}
 
 	// Cancellation is wired up by run() before this goroutine started, so ctx
 	// already carries the per-request cancel.
 	if tool.ServerStreaming {
-		return s.toolsCallStream(ctx, id, tool, p.Arguments)
+		return s.toolsCallStream(ctx, id, tool, p.Arguments, maxResponseBytes)
 	}
 
 	text, err := s.invokeJSON(ctx, tool, p.Arguments)
@@ -489,38 +503,75 @@ func (s *Server) toolsCall(ctx context.Context, id, rawParams json.RawMessage) *
 			"content": []any{map[string]any{"type": "text", "text": errorMessage(err)}},
 			"isError": true,
 			"error":   payload,
-		})
+		}), nil
 	}
 
 	return mcpOK(id, map[string]any{
 		"content": []any{map[string]any{"type": "text", "text": text}},
-	})
+	}), nil
 }
 
 // toolsCallStream runs a server-streaming tool and collects each chunk into
 // the content array — one text block per emitted message. Errors short-circuit
 // and return an isError result with whatever chunks were already produced.
-func (s *Server) toolsCallStream(ctx context.Context, id json.RawMessage, tool *Tool, argsJSON json.RawMessage) *jsonRPCResponse {
+func (s *Server) toolsCallStream(
+	ctx context.Context,
+	id json.RawMessage,
+	tool *Tool,
+	argsJSON json.RawMessage,
+	maxResponseBytes int64,
+) (*jsonRPCResponse, error) {
 	req, err := s.newRequest(tool)
 	if err != nil {
-		return mcpOK(id, errorContent(err))
+		return mcpOK(id, errorContent(err)), nil
 	}
 	if len(argsJSON) > 0 && string(argsJSON) != "null" {
 		if err := protojson.Unmarshal(argsJSON, req); err != nil {
-			return mcpOK(id, errorContent(invalidArgumentFromJSONError(err)))
+			return mcpOK(id, errorContent(invalidArgumentFromJSONError(err))), nil
 		}
 	}
 
-	marshalOpts := protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}
+	marshalOpts := protojson.MarshalOptions{Indent: "  "}
 	var content []any
+	var encodedSize int64
+	if maxResponseBytes > 0 {
+		emptyResponse, marshalErr := json.Marshal(mcpOK(id, map[string]any{"content": []any{}}))
+		if marshalErr != nil {
+			return nil, status.Error(codes.Internal, "encode MCP response")
+		}
+		encodedSize = int64(len(emptyResponse))
+		if encodedSize > maxResponseBytes {
+			return nil, status.Error(codes.ResourceExhausted, "encoded MCP response exceeds configured byte limit")
+		}
+	}
+	limitExceeded := false
 	err = s.invokeStream(ctx, tool, req, func(msg proto.Message) error {
 		raw, err := marshalOpts.Marshal(msg)
 		if err != nil {
 			return fmt.Errorf("marshal stream chunk: %w", err)
 		}
-		content = append(content, map[string]any{"type": "text", "text": string(raw)})
+		block := map[string]any{"type": "text", "text": string(raw)}
+		if maxResponseBytes > 0 {
+			encodedBlock, marshalErr := json.Marshal(block)
+			if marshalErr != nil {
+				return fmt.Errorf("encode MCP stream chunk: %w", marshalErr)
+			}
+			nextSize := encodedSize + int64(len(encodedBlock))
+			if len(content) > 0 {
+				nextSize++ // comma between content array elements
+			}
+			if nextSize > maxResponseBytes {
+				limitExceeded = true
+				return status.Error(codes.ResourceExhausted, "encoded MCP response exceeds configured byte limit")
+			}
+			encodedSize = nextSize
+		}
+		content = append(content, block)
 		return nil
 	})
+	if limitExceeded {
+		return nil, status.Error(codes.ResourceExhausted, "encoded MCP response exceeds configured byte limit")
+	}
 	if err != nil {
 		// Include any chunks that were already emitted before the error.
 		payload := errorPayload(err)
@@ -529,13 +580,13 @@ func (s *Server) toolsCallStream(ctx context.Context, id json.RawMessage, tool *
 			"content": content,
 			"isError": true,
 			"error":   payload,
-		})
+		}), nil
 	}
 
 	if len(content) == 0 {
 		content = []any{}
 	}
-	return mcpOK(id, map[string]any{"content": content})
+	return mcpOK(id, map[string]any{"content": content}), nil
 }
 
 // errorContent builds the standard MCP error content envelope from an error.
@@ -599,7 +650,7 @@ func (s *Server) invokeJSON(ctx context.Context, tool *Tool, argsJSON json.RawMe
 		return "{}", nil
 	}
 
-	out, err := (protojson.MarshalOptions{UseProtoNames: true, Indent: "  "}).Marshal(resp)
+	out, err := (protojson.MarshalOptions{Indent: "  "}).Marshal(resp)
 	if err != nil {
 		return "", fmt.Errorf("marshal response: %w", err)
 	}

@@ -56,7 +56,7 @@ type Tool struct {
 
 const (
 	serverName    = "invariant-protocol"
-	serverVersion = "0.8.3"
+	serverVersion = "0.9.0"
 )
 
 // MethodConfig overrides per-server defaults for one RPC method. Zero-valued
@@ -433,9 +433,7 @@ func serverFromRawBytes(data []byte, grpcOptions ...grpc.ServerOption) (*Server,
 func (s *Server) addTool(t *Tool) error {
 	if existing, ok := s.tools[t.Name]; ok && existing.ServiceFullName != t.ServiceFullName {
 		return fmt.Errorf(
-			"tool name collision: %q is registered by both %q and %q. "+
-				"Two services in different packages share the same simple name; "+
-				"configure Server.Include() before registration to scope to one",
+			"tool name collision: %q is registered by both %q and %q",
 			t.Name, existing.ServiceFullName, t.ServiceFullName,
 		)
 	}
@@ -612,8 +610,8 @@ func MCP() Projection { return Projection{kind: "mcp"} }
 // CLI returns a projection that runs as a CLI from os.Args.
 func CLI() Projection { return Projection{kind: "cli"} }
 
-// ServeProjections starts the specified optional projections and blocks until ctx is canceled
-// or the first projection returns an error.
+// ServeProjections starts the specified optional projections and blocks until
+// ctx is canceled or the first projection completes.
 //
 //	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 //	defer cancel()

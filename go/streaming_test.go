@@ -74,7 +74,7 @@ func streamServer(t *testing.T, service greetpb.GreetServiceServer) *Server {
 
 func TestStreamRegistrationFlagsTool(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
-	tool, ok := srv.tools["GreetService.StreamGreet"]
+	tool, ok := srv.tools["greet.v1.GreetService.StreamGreet"]
 	require.True(t, ok, "StreamGreet should register as a tool")
 	assert.True(t, tool.ServerStreaming)
 	assert.NotNil(t, tool.streamDesc)
@@ -90,13 +90,13 @@ func TestToolCatalogMarksStreamingTools(t *testing.T) {
 		byName[entry["name"].(string)] = entry
 	}
 
-	stream := byName["GreetService.StreamGreet"]
+	stream := byName["greet.v1.GreetService.StreamGreet"]
 	require.NotNil(t, stream)
 	meta := stream["_meta"].(map[string]any)
 	assert.Equal(t, true, meta["streaming"])
 
 	// Unary tools intentionally have no _meta so the wire shape stays compact.
-	unary := byName["GreetService.Greet"]
+	unary := byName["greet.v1.GreetService.Greet"]
 	require.NotNil(t, unary)
 	_, hasMeta := unary["_meta"]
 	assert.False(t, hasMeta, "unary tools should not carry _meta")
@@ -106,13 +106,32 @@ func TestStreamInvocationCollectsAllChunks(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
 
 	var got []string
-	err := srv.InvokeStream(t.Context(), "GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "Alice", Count: 3}, func(msg proto.Message) error {
+	err := srv.InvokeStream(t.Context(), "greet.v1.GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "Alice", Count: 3}, func(msg proto.Message) error {
 		resp := msg.(*greetpb.GreetResponse)
 		got = append(got, resp.Message)
 		return nil
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Hi Alice #0", "Hi Alice #1", "Hi Alice #2"}, got)
+}
+
+func TestStreamInvocationRequiresTheRegisteredRequestType(t *testing.T) {
+	srv := streamServer(t, &streamServicer{})
+	sent := false
+	err := srv.InvokeStream(
+		t.Context(),
+		"greet.v1.GreetService.StreamGreet",
+		&greetpb.GreetRequest{Name: "wrong protobuf type"},
+		func(proto.Message) error {
+			sent = true
+			return nil
+		},
+	)
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Contains(t, err.Error(), "greet.v1.GreetRequest")
+	assert.Contains(t, err.Error(), "greet.v1.StreamGreetRequest")
+	assert.False(t, sent)
 }
 
 func TestStreamInterceptorWraps(t *testing.T) {
@@ -125,7 +144,7 @@ func TestStreamInterceptorWraps(t *testing.T) {
 	})
 
 	var got []string
-	err := srv.InvokeStream(t.Context(), "GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "B", Count: 2}, func(msg proto.Message) error {
+	err := srv.InvokeStream(t.Context(), "greet.v1.GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "B", Count: 2}, func(msg proto.Message) error {
 		got = append(got, msg.(*greetpb.GreetResponse).Message)
 		return nil
 	})
@@ -139,7 +158,7 @@ func TestStreamHandlerErrorPropagates(t *testing.T) {
 	srv := streamServer(t, &streamServicer{preSendErr: boom})
 
 	var got []string
-	err := srv.InvokeStream(t.Context(), "GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "x", Count: 4}, func(msg proto.Message) error {
+	err := srv.InvokeStream(t.Context(), "greet.v1.GreetService.StreamGreet", &greetpb.StreamGreetRequest{Name: "x", Count: 4}, func(msg proto.Message) error {
 		got = append(got, msg.(*greetpb.GreetResponse).Message)
 		return nil
 	})
@@ -156,7 +175,7 @@ func TestStreamingMCPCollectsToContent(t *testing.T) {
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.StreamGreet",
+			"name":      "greet.v1.GreetService.StreamGreet",
 			"arguments": map[string]any{"name": "Alice", "count": 3},
 		},
 	})
@@ -180,7 +199,7 @@ func TestStreamingMCPSurfacesMidStreamError(t *testing.T) {
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.StreamGreet",
+			"name":      "greet.v1.GreetService.StreamGreet",
 			"arguments": map[string]any{"name": "x", "count": 4},
 		},
 	})
@@ -205,7 +224,7 @@ func TestStreamingCLIWritesNDJSON(t *testing.T) {
 		return handler(service, stream)
 	})
 
-	out, err := srv.cli(t.Context(), []string{"GreetService", "StreamGreet", "-r", `{"name":"Z","count":2}`})
+	out, err := srv.cli(t.Context(), []string{"greet.v1.GreetService", "StreamGreet", "-r", `{"name":"Z","count":2}`})
 	require.NoError(t, err)
 
 	lines := strings.Split(strings.TrimSpace(out), "\n")
@@ -234,7 +253,7 @@ func TestStreamingCLIFlushesPerChunk(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- srv.cliWrite(t.Context(), []string{"GreetService", "StreamGreet", "-r", `{"name":"X","count":2}`}, pw)
+		done <- srv.cliWrite(t.Context(), []string{"greet.v1.GreetService", "StreamGreet", "-r", `{"name":"X","count":2}`}, pw)
 		_ = pw.Close()
 	}()
 

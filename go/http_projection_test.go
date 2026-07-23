@@ -140,7 +140,7 @@ func TestHTTPProjectionPerMethodUnaryResponseOverride(t *testing.T) {
 func TestHTTPProjectionStreamResponseLimitIsPerMessage(t *testing.T) {
 	first := &greetpb.GreetResponse{Message: strings.Repeat("a", 128)}
 	second := &greetpb.GreetResponse{Message: strings.Repeat("b", 128)}
-	marshal := protojson.MarshalOptions{UseProtoNames: true}
+	marshal := protojson.MarshalOptions{}
 	firstBytes, err := marshal.Marshal(first)
 	require.NoError(t, err)
 	secondBytes, err := marshal.Marshal(second)

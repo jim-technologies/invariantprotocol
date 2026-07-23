@@ -201,14 +201,14 @@ func TestRenderRejectsUnknownBundleVersions(t *testing.T) {
 			mutate: func(bundle *datav1.SchemaBundle) {
 				bundle.IrVersion = 0
 			},
-			wantError: "sql: bundle ir_version is 0, want 2",
+			wantError: "unsupported SchemaBundle ir_version 0; expected 2",
 		},
 		{
 			name: "mapping",
 			mutate: func(bundle *datav1.SchemaBundle) {
 				bundle.MappingVersion = 1
 			},
-			wantError: "sql: bundle mapping_version is 1, want 2",
+			wantError: "unsupported SchemaBundle mapping_version 1; expected 2",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestRenderRejectsUnknownBundleVersions(t *testing.T) {
 			bundlePath := writeBundle(t, bundle)
 			var stdout, stderr bytes.Buffer
 			err := run([]string{"sql", "--bundle", bundlePath}, &stdout, &stderr)
-			require.EqualError(t, err, test.wantError)
+			require.ErrorContains(t, err, test.wantError)
 			assert.Empty(t, stdout.String())
 			assert.Empty(t, stderr.String())
 		})
@@ -311,7 +311,7 @@ func writeBundle(t *testing.T, bundle *datav1.SchemaBundle) string {
 
 func decodeBundle(t *testing.T, encoded []byte) *datav1.SchemaBundle {
 	t.Helper()
-	bundle := new(datav1.SchemaBundle)
-	require.NoError(t, proto.Unmarshal(encoded, bundle))
+	bundle, err := data.ParseSchemaBundle(encoded)
+	require.NoError(t, err)
 	return bundle
 }

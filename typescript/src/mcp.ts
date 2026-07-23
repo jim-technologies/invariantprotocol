@@ -1,6 +1,6 @@
 import { fromJson, type JsonValue, toJsonString } from "@bufbuild/protobuf";
 
-import { asInvariantError } from "./errors.js";
+import { asInvariantError, InvariantError } from "./errors.js";
 import { type ProjectionContextOptions, type Server, serverInternal } from "./server.js";
 
 export const MCP_PROTOCOL_VERSION = "2025-11-25";
@@ -16,6 +16,16 @@ export type McpContextOptions = Partial<ProjectionContextOptions> & {
   mapHTTPMetadata?: boolean;
 };
 
+type McpDispatchContextOptions = McpContextOptions & {
+  maxResponseBytes?: number;
+};
+
+class McpHTTPResponseLimitError extends InvariantError {
+  constructor() {
+    super("resource_exhausted", "encoded MCP response exceeds configured byte limit");
+  }
+}
+
 export type McpStdioInput = AsyncIterable<string | Uint8Array>;
 export type McpStdioOutput = {
   write(chunk: string): unknown;
@@ -25,6 +35,23 @@ export async function mcpDispatch(
   server: Server,
   msg: unknown,
   contextOptions: McpContextOptions = {},
+): Promise<Record<string, unknown> | undefined> {
+  return mcpDispatchInternal(server, msg, contextOptions);
+}
+
+/** @internal HTTP projection entry point with a bounded JSON-RPC response. */
+export async function mcpDispatchWithContext(
+  server: Server,
+  msg: unknown,
+  contextOptions: McpContextOptions & { maxResponseBytes: number },
+): Promise<Record<string, unknown> | undefined> {
+  return mcpDispatchInternal(server, msg, contextOptions);
+}
+
+async function mcpDispatchInternal(
+  server: Server,
+  msg: unknown,
+  contextOptions: McpDispatchContextOptions,
 ): Promise<Record<string, unknown> | undefined> {
   server[serverInternal].freeze();
   const invalid = invalidRequestResponse(msg);
@@ -81,15 +108,15 @@ export async function mcpDispatch(
   return err(id, -32601, `Method not found: ${method}`);
 }
 
-export async function mcpCallTool(
+async function mcpCallTool(
   server: Server,
   id: string | number,
   params: Record<string, unknown>,
-  contextOptions: McpContextOptions = {},
+  contextOptions: McpDispatchContextOptions = {},
 ): Promise<Record<string, unknown>> {
   const toolName = String(params.name ?? "");
   const args = (params.arguments ?? {}) as Record<string, unknown>;
-  const tool = server.tools.get(toolName);
+  const tool = server[serverInternal].tool(toolName);
   if (!tool) {
     return err(id, -32602, `Unknown tool: ${toolName}`);
   }
@@ -107,42 +134,73 @@ export async function mcpCallTool(
   }
 
   try {
-    const request = fromJson(tool.inputDesc, args as JsonValue, { registry: server.parsed.registry });
+    const registry = server[serverInternal].parsed().registry;
+    const request = fromJson(tool.inputDesc, args as JsonValue, { registry });
     if (tool.serverStreaming) {
       const content: Record<string, string>[] = [];
-      for await (const chunk of server.invokeStreamTool(tool, request, context)) {
-        content.push({
+      // Stateless MCP HTTP returns one buffered JSON-RPC document. Apply the
+      // existing HTTP unary response limit while collecting stream chunks so
+      // an infinite stream cannot grow memory without bound. Direct dispatch
+      // and stdio retain their existing unbounded buffering contract.
+      const maxResponseBytes = contextOptions.maxResponseBytes;
+      let encodedResponseBytes = Buffer.byteLength(JSON.stringify(ok(id, { content: [] })));
+      if (maxResponseBytes !== undefined && encodedResponseBytes > maxResponseBytes) {
+        throw new McpHTTPResponseLimitError();
+      }
+      for await (const chunk of server[serverInternal].invokeStreamTool(tool, request, context)) {
+        const block = {
           type: "text",
           text: toJsonString(tool.outputDesc, chunk, {
             prettySpaces: 2,
-            useProtoFieldName: true,
-            registry: server.parsed.registry,
+            registry,
           }),
-        });
+        };
+        if (maxResponseBytes !== undefined) {
+          const nextResponseBytes =
+            encodedResponseBytes + (content.length === 0 ? 0 : 1) + Buffer.byteLength(JSON.stringify(block));
+          if (nextResponseBytes > maxResponseBytes) {
+            throw new McpHTTPResponseLimitError();
+          }
+          encodedResponseBytes = nextResponseBytes;
+        }
+        content.push(block);
       }
-      return ok(id, { content });
+      const response = ok(id, { content });
+      if (maxResponseBytes !== undefined && Buffer.byteLength(JSON.stringify(response)) > maxResponseBytes) {
+        throw new McpHTTPResponseLimitError();
+      }
+      return response;
     }
 
-    const response = await server.invokeTool(tool, request, context);
+    const response = await server[serverInternal].invokeTool(tool, request, context);
     return ok(id, {
       content: [
         {
           type: "text",
           text: toJsonString(tool.outputDesc, response, {
             prettySpaces: 2,
-            useProtoFieldName: true,
-            registry: server.parsed.registry,
+            registry,
           }),
         },
       ],
     });
   } catch (e) {
+    if (e instanceof McpHTTPResponseLimitError) {
+      throw e;
+    }
     const inv = asInvariantError(e);
-    return ok(id, {
+    const response = ok(id, {
       content: [{ type: "text", text: inv.message }],
       isError: true,
       error: inv.toPayload(),
     });
+    if (
+      contextOptions.maxResponseBytes !== undefined &&
+      Buffer.byteLength(JSON.stringify(response)) > contextOptions.maxResponseBytes
+    ) {
+      throw new McpHTTPResponseLimitError();
+    }
+    return response;
   } finally {
     context.abort();
   }

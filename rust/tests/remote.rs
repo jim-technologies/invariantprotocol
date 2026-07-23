@@ -9,8 +9,8 @@ use common::{
 use invariant::{Code, ProjectionContext, Response, Server, Status};
 use prost::Message;
 use prost_types::{
-    DescriptorProto, FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto,
-    ServiceDescriptorProto,
+    DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet,
+    MethodDescriptorProto, ServiceDescriptorProto, field_descriptor_proto,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,6 +44,13 @@ fn colliding_remote_descriptor() -> Vec<u8> {
             },
             DescriptorProto {
                 name: Some("Output".into()),
+                field: vec![FieldDescriptorProto {
+                    name: Some("origin".into()),
+                    number: Some(1),
+                    label: Some(field_descriptor_proto::Label::Optional as i32),
+                    r#type: Some(field_descriptor_proto::Type::String as i32),
+                    ..Default::default()
+                }],
                 ..Default::default()
             },
         ],
@@ -66,34 +73,72 @@ fn colliding_remote_descriptor() -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn batch_remote_registration_rejects_tool_collisions_atomically() {
+async fn fully_qualified_tool_ids_allow_equal_short_service_names() {
     let descriptor = colliding_remote_descriptor();
     let http = Server::from_bytes(&descriptor).unwrap();
     let client = reqwest::Client::new();
-    let base_url = reqwest::Url::parse("https://example.test").unwrap();
-    let status = http.connect_http(&client, base_url.clone()).unwrap_err();
-    assert_eq!(status.code(), Code::AlreadyExists);
-    assert!(status.message().contains("EchoService.Call"));
-    assert!(http.tool_catalog().is_empty());
-
-    http.exclude("beta.v1.*").unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = tokio::spawn(async move {
+        let app = axum::Router::new().fallback(|uri: axum::http::Uri| async move {
+            let origin = if uri.path().starts_with("/alpha.v1.") {
+                "alpha"
+            } else {
+                "beta"
+            };
+            (
+                [(axum::http::header::CONTENT_TYPE, "application/proto")],
+                EchoOutput {
+                    origin: origin.into(),
+                }
+                .encode_to_vec(),
+            )
+        });
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base_url = reqwest::Url::parse(&format!("http://{address}")).unwrap();
     http.connect_http(&client, base_url).unwrap();
-    assert_eq!(http.tool_catalog().len(), 1);
-    assert_eq!(http.tool_catalog()[0]["name"], "EchoService.Call");
+    assert_eq!(
+        http.tool_catalog()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["alpha.v1.EchoService.Call", "beta.v1.EchoService.Call"]
+    );
+    for (tool, input_type, expected) in [
+        ("alpha.v1.EchoService.Call", "alpha.v1.Input", "alpha"),
+        ("beta.v1.EchoService.Call", "beta.v1.Input", "beta"),
+    ] {
+        let input = http.parsed().pool.get_message_by_name(input_type).unwrap();
+        let response = http
+            .invoke(
+                tool,
+                Request::new(prost_reflect::DynamicMessage::new(input)),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+        let output = EchoOutput::decode(response.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(output.origin, expected);
+    }
 
     let grpc = Server::from_bytes(&descriptor).unwrap();
     let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy();
-    let status = grpc
-        .connect_grpc(channel.clone(), |client| client)
-        .unwrap_err();
-    assert_eq!(status.code(), Code::AlreadyExists);
-    assert!(status.message().contains("EchoService.Call"));
-    assert!(grpc.tool_catalog().is_empty());
-
-    grpc.exclude("beta.v1.*").unwrap();
     grpc.connect_grpc(channel, |client| client).unwrap();
-    assert_eq!(grpc.tool_catalog().len(), 1);
-    assert_eq!(grpc.tool_catalog()[0]["name"], "EchoService.Call");
+    assert_eq!(
+        grpc.tool_catalog()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["alpha.v1.EchoService.Call", "beta.v1.EchoService.Call"]
+    );
+    upstream.abort();
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct EchoOutput {
+    #[prost(string, tag = "1")]
+    origin: String,
 }
 
 #[test]

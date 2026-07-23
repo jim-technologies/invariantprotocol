@@ -5,7 +5,7 @@
 //	go run . mcp                              # local MCP over stdio
 //	go run . mcp --remote localhost:50051     # proxy to gRPC server
 //	go run . grpc [--port 50051]              # start gRPC server
-//	go run . cli GreetService Greet -r '{"name":"World"}'   # config is app's concern, not the library's
+//	go run . cli greet.v1.GreetService Greet -r '{"name":"World"}'   # config is app's concern, not the library's
 package main
 
 import (
@@ -158,7 +158,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Usage:")
 		fmt.Fprintln(os.Stderr, "  go run . mcp [--remote host:port]    # MCP over stdio")
 		fmt.Fprintln(os.Stderr, "  go run . grpc [--port 50051]         # gRPC server")
-		fmt.Fprintln(os.Stderr, "  go run . cli ServiceName Method [-r request]   # CLI")
+		fmt.Fprintln(os.Stderr, "  go run . cli package.ServiceName Method [-r request]   # CLI")
 		os.Exit(1)
 	}
 

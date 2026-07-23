@@ -278,7 +278,7 @@ func TestConnectHTTPContextErrorsAreNotRetried(t *testing.T) {
 			defer cancel()
 			errCh := make(chan error, 1)
 			go func() {
-				_, callErr := srv.Invoke(ctx, "GreetService.Greet", &greetpb.GreetRequest{Name: "context"})
+				_, callErr := srv.Invoke(ctx, "greet.v1.GreetService.Greet", &greetpb.GreetRequest{Name: "context"})
 				errCh <- callErr
 			}()
 			<-started

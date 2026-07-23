@@ -19,8 +19,8 @@ import {
   scheduleAbsoluteDeadline,
 } from "./deadline.js";
 import { asInvariantError, httpStatusFor, InvariantError, notFound, toConnectError } from "./errors.js";
-import { invalidRequestResponse, isClientResponse, MCP_PROTOCOL_VERSION, mcpDispatch } from "./mcp.js";
-import { type Server, serverInternal, type Tool } from "./server.js";
+import { invalidRequestResponse, isClientResponse, MCP_PROTOCOL_VERSION, mcpDispatchWithContext } from "./mcp.js";
+import { type RegisteredTool, type Server, serverInternal } from "./server.js";
 
 export const PROTO_CONTENT_TYPE = "application/proto";
 export const CONNECT_STREAM_JSON = "application/connect+json";
@@ -47,8 +47,8 @@ export function httpHandler(server: Server): (req: IncomingMessage, res: ServerR
     writeMaxBytes: 0xffffffff,
     maxTimeoutMs: Number.MAX_SAFE_INTEGER,
   });
-  const rpcTools = new Map<string, Tool>();
-  for (const tool of server.tools.values()) {
+  const rpcTools = new Map<string, RegisteredTool>();
+  for (const tool of server[serverInternal].tools()) {
     const method = methodDesc(tool);
     if (!method) {
       continue;
@@ -62,7 +62,10 @@ export function httpHandler(server: Server): (req: IncomingMessage, res: ServerR
             restoreLongConnectDeadline(context);
             assertPositiveConnectTimeout(context.requestHeader);
             const mappedContext = server[serverInternal].mapHTTPContext(context);
-            yield* invokeStreamBeforeDeadline(mappedContext, server.invokeStreamTool(tool, request, mappedContext));
+            yield* invokeStreamBeforeDeadline(
+              mappedContext,
+              server[serverInternal].invokeStreamTool(tool, request, mappedContext),
+            );
           } catch (e) {
             throw toConnectError(e);
           }
@@ -84,7 +87,7 @@ export function httpHandler(server: Server): (req: IncomingMessage, res: ServerR
             assertPositiveConnectTimeout(context.requestHeader);
             const mappedContext = server[serverInternal].mapHTTPContext(context);
             return await invokeUnaryBeforeDeadline(mappedContext, () =>
-              server.invokeTool(tool, request, mappedContext),
+              server[serverInternal].invokeTool(tool, request, mappedContext),
             );
           } catch (e) {
             throw toConnectError(e);
@@ -141,7 +144,7 @@ export function httpHandler(server: Server): (req: IncomingMessage, res: ServerR
         return;
       }
       if (method === "GET" && path === "/__invariant/descriptor.binpb") {
-        sendBytes(res, 200, PROTO_CONTENT_TYPE, server.parsed.bytes);
+        sendBytes(res, 200, PROTO_CONTENT_TYPE, server[serverInternal].parsed().bytes);
         return;
       }
       if (path === "/mcp") {
@@ -279,7 +282,7 @@ async function serveMcpHttp(server: Server, req: IncomingMessage, res: ServerRes
     const remainingTimeoutMs = deadlineAt === undefined ? undefined : Math.max(0, remainingDeadlineMs(deadlineAt));
     const response = await withAbsoluteDeadline(
       () =>
-        mcpDispatch(server, message, {
+        mcpDispatchWithContext(server, message, {
           protocolName: "mcp",
           requestMethod: req.method ?? "POST",
           url: new URL(req.url ?? "/mcp", "http://localhost").toString(),
@@ -287,6 +290,7 @@ async function serveMcpHttp(server: Server, req: IncomingMessage, res: ServerRes
           requestSignal: cancellation.signal,
           requestHeader: requestHeaders(req),
           mapHTTPMetadata: true,
+          maxResponseBytes,
         }),
       cancellation.signal,
       deadlineAt,
@@ -307,7 +311,7 @@ async function serveMcpHttp(server: Server, req: IncomingMessage, res: ServerRes
       );
       return;
     }
-    if (!req.destroyed) {
+    if (!cancellation.signal.aborted) {
       throw error;
     }
   } finally {
@@ -317,7 +321,7 @@ async function serveMcpHttp(server: Server, req: IncomingMessage, res: ServerRes
   }
 }
 
-function methodDesc(tool: Tool) {
+function methodDesc(tool: RegisteredTool) {
   return tool.methodDesc;
 }
 

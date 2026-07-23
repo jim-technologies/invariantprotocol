@@ -1,6 +1,6 @@
 {
   "name": "@jim-technologies/invariant-protocol",
-  "version": "0.8.3",
+  "version": "0.9.0",
   "private": true,
   "description": "Project gRPC services into MCP, CLI, HTTP/Connect, and gRPC interfaces from proto descriptors",
   "type": "module",
@@ -43,7 +43,7 @@
     "url": "git+ssh://git@github.com/jim-technologies/invariantprotocol.git"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.12.1",
+    "@bufbuild/protobuf": "^2.13.0",
     "@bufbuild/protovalidate": "1.2.0",
     "@connectrpc/connect": "^2.1.2",
     "@connectrpc/connect-node": "^2.1.2",
@@ -51,8 +51,8 @@
     "@grpc/reflection": "^1.0.4"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.4",
-    "@bufbuild/protoc-gen-es": "^2.12.1",
+    "@biomejs/biome": "^2.5.5",
+    "@bufbuild/protoc-gen-es": "^2.13.0",
     "@grpc/proto-loader": "^0.8.1",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "4.1.10",

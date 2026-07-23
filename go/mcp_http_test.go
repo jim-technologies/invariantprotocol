@@ -6,13 +6,35 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	greetpb "github.com/jim-technologies/invariantprotocol/go/tests/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
+
+type boundedMCPStreamServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+	sends atomic.Int32
+}
+
+func (s *boundedMCPStreamServicer) StreamGreet(
+	_ *greetpb.StreamGreetRequest,
+	stream grpc.ServerStreamingServer[greetpb.GreetResponse],
+) error {
+	for range 1000 {
+		s.sends.Add(1)
+		if err := stream.Send(&greetpb.GreetResponse{
+			Message: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // postMCP issues one MCP JSON-RPC request via the HTTP transport and returns
 // the response status and parsed body (nil body on 202).
@@ -89,7 +111,7 @@ func TestMCPHTTPToolsList(t *testing.T) {
 		names = append(names, raw.(map[string]any)["name"].(string))
 	}
 	assert.ElementsMatch(t,
-		[]string{"GreetService.Greet", "GreetService.GreetGroup", "GreetService.StreamGreet"},
+		[]string{"greet.v1.GreetService.Greet", "greet.v1.GreetService.GreetGroup", "greet.v1.GreetService.StreamGreet"},
 		names,
 	)
 }
@@ -101,7 +123,7 @@ func TestMCPHTTPToolCallUnary(t *testing.T) {
 	status, body := postMCP(t, ts, map[string]any{
 		"jsonrpc": "2.0", "id": 3, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.Greet",
+			"name":      "greet.v1.GreetService.Greet",
 			"arguments": map[string]any{"name": "Alice"},
 		},
 	})
@@ -141,7 +163,7 @@ func TestMCPHTTPConnectTimeoutReturnsConnectDeadlineError(t *testing.T) {
 		{name: "cpu", timeoutMS: "1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"GreetService.Greet","arguments":{"name":"` + test.name + `"}}}`)
+			body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"greet.v1.GreetService.Greet","arguments":{"name":"` + test.name + `"}}}`)
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+"/mcp", bytes.NewReader(body))
 			require.NoError(t, err)
 			req.Header.Set("Content-Type", "application/json")
@@ -167,7 +189,7 @@ func TestMCPHTTPToolCallStream(t *testing.T) {
 	status, body := postMCP(t, ts, map[string]any{
 		"jsonrpc": "2.0", "id": 4, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.StreamGreet",
+			"name":      "greet.v1.GreetService.StreamGreet",
 			"arguments": map[string]any{"name": "Stream", "count": 3},
 		},
 	})
@@ -284,7 +306,7 @@ func TestMCPHTTPInvalidParams(t *testing.T) {
 		},
 		"tool call arguments array": {
 			"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-			"params": map[string]any{"name": "GreetService.Greet", "arguments": []any{}},
+			"params": map[string]any{"name": "greet.v1.GreetService.Greet", "arguments": []any{}},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -411,6 +433,26 @@ func TestMCPHTTPResponseLimit(t *testing.T) {
 	})
 	assert.Equal(t, http.StatusTooManyRequests, statusCode)
 	assert.Equal(t, "resource_exhausted", body["code"])
+}
+
+func TestMCPHTTPStreamingResponseLimitStopsCollectionEarly(t *testing.T) {
+	service := &boundedMCPStreamServicer{}
+	srv := streamServer(t, service)
+	srv.SetMaxUnaryResponseBytes(256)
+	ts := httptest.NewServer(srv.HTTPHandler())
+	defer ts.Close()
+
+	statusCode, body := postMCP(t, ts, map[string]any{
+		"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+		"params": map[string]any{
+			"name":      "greet.v1.GreetService.StreamGreet",
+			"arguments": map[string]any{"name": "bounded", "count": 1000},
+		},
+	})
+	require.Equal(t, http.StatusTooManyRequests, statusCode)
+	assert.Equal(t, "resource_exhausted", body["code"])
+	assert.Positive(t, service.sends.Load())
+	assert.Less(t, service.sends.Load(), int32(1000), "HTTP response limit must stop the source stream early")
 }
 
 func TestMCPHTTPDoesNotShadowToolEndpoints(t *testing.T) {

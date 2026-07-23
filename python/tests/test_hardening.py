@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import struct
+from dataclasses import FrozenInstanceError
 
 import greet_pb2
 import grpc
@@ -89,9 +90,10 @@ async def test_per_method_http_limits_cover_unary_and_each_stream_message():
             yield greet_pb2.GreetResponse(message="r" * 1024)
 
     srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    unary_config = MethodConfig(max_unary_request_bytes=64, max_unary_response_bytes=256)
     srv.configure_method(
         "/greet.v1.GreetService/Greet",
-        MethodConfig(max_unary_request_bytes=64, max_unary_response_bytes=256),
+        unary_config,
     )
     srv.configure_method(
         "/greet.v1.GreetService/StreamGreet",
@@ -101,6 +103,10 @@ async def test_per_method_http_limits_cover_unary_and_each_stream_message():
 
     port = await srv._start_http(port=0)
     try:
+        with pytest.raises(FrozenInstanceError):
+            unary_config.max_unary_request_bytes = 1024 * 1024 * 1024
+        object.__setattr__(unary_config, "max_unary_request_bytes", 1024 * 1024 * 1024)
+
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
             oversized_request = await client.post(
                 "/greet.v1.GreetService/Greet",
@@ -272,7 +278,7 @@ async def test_empty_stream_over_mcp_http(empty_stream_server):
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": "tools/call",
-                    "params": {"name": "GreetService.StreamGreet", "arguments": {"name": "x"}},
+                    "params": {"name": "greet.v1.GreetService.StreamGreet", "arguments": {"name": "x"}},
                 },
                 headers=_MCP_HEADERS,
             )
@@ -421,7 +427,7 @@ async def test_mcp_http_connect_timeout(slow_unary_server):
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": "tools/call",
-                    "params": {"name": "GreetService.Greet", "arguments": {"name": "x"}},
+                    "params": {"name": "greet.v1.GreetService.Greet", "arguments": {"name": "x"}},
                 },
                 headers={**_MCP_HEADERS, "Connect-Timeout-Ms": "100"},
                 timeout=5.0,
@@ -445,7 +451,7 @@ async def test_invoke_stream_delivers_chunks(stream_server):
     got = [
         msg.message
         async for msg in stream_server.invoke_stream(
-            "GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="API", count=3)
+            "greet.v1.GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="API", count=3)
         )
     ]
     assert got == ["Hi API #0", "Hi API #1", "Hi API #2"]
@@ -453,14 +459,14 @@ async def test_invoke_stream_delivers_chunks(stream_server):
 
 async def test_invoke_rejects_streaming_tool(stream_server):
     with pytest.raises(InvariantError) as exc:
-        await stream_server.invoke("GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="x"))
+        await stream_server.invoke("greet.v1.GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="x"))
     assert exc.value.code == grpc.StatusCode.FAILED_PRECONDITION
     assert "invoke_stream" in exc.value.message
 
 
 async def test_invoke_stream_rejects_unary_tool(basic_server):
     async def consume():
-        async for _ in basic_server.invoke_stream("GreetService.Greet", greet_pb2.GreetRequest(name="x")):
+        async for _ in basic_server.invoke_stream("greet.v1.GreetService.Greet", greet_pb2.GreetRequest(name="x")):
             pass
 
     with pytest.raises(InvariantError) as exc:
@@ -533,7 +539,7 @@ async def test_connect_http_rejects_oversized_upstream_response():
         srv.connect_http(f"http://127.0.0.1:{port}", options=ChannelOptions(max_receive_message_size=max_receive))
         try:
             with pytest.raises(InvariantError) as exc:
-                await srv.invoke("GreetService.Greet", greet_pb2.GreetRequest(name="x"))
+                await srv.invoke("greet.v1.GreetService.Greet", greet_pb2.GreetRequest(name="x"))
             assert exc.value.code == grpc.StatusCode.RESOURCE_EXHAUSTED
             assert "exceeds" in exc.value.message
         finally:
@@ -596,7 +602,7 @@ async def test_mcp_http_rejects_oversized_body(stream_server):
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": "tools/call",
-                    "params": {"name": "GreetService.Greet", "arguments": huge_args},
+                    "params": {"name": "greet.v1.GreetService.Greet", "arguments": huge_args},
                 },
                 headers=_MCP_HEADERS,
             )

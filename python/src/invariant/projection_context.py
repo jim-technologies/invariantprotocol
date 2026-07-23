@@ -14,8 +14,9 @@ from google.rpc import status_pb2
 from invariant.errors import InvariantError
 
 MetadataValue = str | bytes
-Metadata = tuple[tuple[str, MetadataValue], ...]
+Metadata = grpc.aio.Metadata
 MetadataInput = grpc.aio.Metadata | Sequence[tuple[str, MetadataValue]]
+MetadataItems = tuple[tuple[str, MetadataValue], ...]
 
 
 class ProjectionContext(grpc.aio.ServicerContext[Any, Any]):
@@ -43,14 +44,14 @@ class ProjectionContext(grpc.aio.ServicerContext[Any, Any]):
         self,
         *,
         peer: str,
-        invocation_metadata: Sequence[tuple[str, MetadataValue]] = (),
+        invocation_metadata: MetadataInput = (),
         deadline: float | None = None,
     ) -> None:
         self._peer = peer
-        self._invocation_metadata = _normalize_metadata(invocation_metadata)
+        self._invocation_metadata: Metadata | MetadataItems = _metadata_items(invocation_metadata)
         self._deadline = deadline
-        self._initial_metadata: Metadata = ()
-        self._trailing_metadata: Metadata = ()
+        self._initial_metadata: Metadata | None = None
+        self._trailing_metadata: Metadata | None = None
         self._initial_sent = False
         self._initial_sender: Callable[[], Awaitable[None]] | None = None
         self._code: grpc.StatusCode | None = None
@@ -97,7 +98,11 @@ class ProjectionContext(grpc.aio.ServicerContext[Any, Any]):
         self._trailing_metadata = _normalize_metadata(trailing_metadata)
 
     def invocation_metadata(self) -> Metadata:
-        return self._invocation_metadata
+        metadata = self._invocation_metadata
+        if isinstance(metadata, tuple):
+            metadata = grpc.aio.Metadata(*metadata)
+            self._invocation_metadata = metadata
+        return metadata
 
     def set_code(self, code: grpc.StatusCode) -> None:
         self._code = code
@@ -123,18 +128,22 @@ class ProjectionContext(grpc.aio.ServicerContext[Any, Any]):
     def auth_context(self) -> Mapping[str, Iterable[bytes]]:
         return {}
 
-    def time_remaining(self) -> float | None:  # ty: ignore[invalid-method-override] — grpc docs permit None
+    def time_remaining(self) -> float | None:  # type: ignore[override]  # grpcio returns None without a deadline
         if self._deadline is None:
             return None
         return max(0.0, self._deadline - time.monotonic())
 
     def trailing_metadata(self) -> Metadata:
+        if self._trailing_metadata is None:
+            self._trailing_metadata = grpc.aio.Metadata()
         return self._trailing_metadata
 
     def initial_metadata(self) -> Metadata:
+        if self._initial_metadata is None:
+            self._initial_metadata = grpc.aio.Metadata()
         return self._initial_metadata
 
-    def code(self) -> grpc.StatusCode | None:
+    def code(self) -> grpc.StatusCode | None:  # type: ignore[override]  # unset projection status is observable
         return self._code
 
     def details(self) -> str:
@@ -169,15 +178,16 @@ class ProjectionContext(grpc.aio.ServicerContext[Any, Any]):
         code = self._code or grpc.StatusCode.UNKNOWN
         message = self._details
         rich_details: list[Any] = []
-        for key, value in self._trailing_metadata:
-            if key != "grpc-status-details-bin" or not isinstance(value, bytes):
-                continue
-            status = status_pb2.Status()
-            with contextlib.suppress(Exception):
-                status.ParseFromString(value)
-                if status.message:
-                    message = status.message
-                rich_details.extend(status.details)
+        if self._trailing_metadata is not None:
+            for key, value in self._trailing_metadata:
+                if key != "grpc-status-details-bin" or not isinstance(value, bytes):
+                    continue
+                status = status_pb2.Status()
+                with contextlib.suppress(Exception):
+                    status.ParseFromString(value)
+                    if status.message:
+                        message = status.message
+                    rich_details.extend(status.details)
         return InvariantError(code, message, rich_details)
 
     def finish(self, *, cancelled: bool = False) -> None:
@@ -192,6 +202,10 @@ class ProjectionContext(grpc.aio.ServicerContext[Any, Any]):
 
 
 def _normalize_metadata(metadata: MetadataInput) -> Metadata:
+    return grpc.aio.Metadata(*_metadata_items(metadata))
+
+
+def _metadata_items(metadata: MetadataInput) -> MetadataItems:
     if not metadata:
         return ()
     return tuple((str(key).lower(), value) for key, value in metadata)

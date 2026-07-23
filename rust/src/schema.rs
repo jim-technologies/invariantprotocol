@@ -78,12 +78,12 @@ impl<'d> SchemaGen<'d> {
                 );
             }
 
-            properties.insert(field.name.clone(), prop);
+            properties.insert(field.json_name.clone(), prop);
 
             let is_in_oneof =
                 oneof_fields.contains(field.name.as_str()) || field.oneof_index.is_some();
-            if field.label != LABEL_REPEATED && !is_in_oneof && !field.proto3_optional {
-                required.push(field.name.clone());
+            if field.label != LABEL_REPEATED && !is_in_oneof && !field.optional {
+                required.push(field.json_name.clone());
             }
         }
 
@@ -102,12 +102,18 @@ impl<'d> SchemaGen<'d> {
 
     fn field_type_schema(&self, field: &FieldInfo, visiting: &mut HashSet<String>) -> Value {
         match field.r#type {
-            TYPE_DOUBLE | TYPE_FLOAT => json!({"type": "number"}),
-            TYPE_INT32 | TYPE_INT64 | TYPE_SINT32 | TYPE_SINT64 | TYPE_SFIXED32 | TYPE_SFIXED64 => {
+            TYPE_DOUBLE | TYPE_FLOAT => number_or_non_finite_schema(),
+            TYPE_INT32 | TYPE_SINT32 | TYPE_SFIXED32 => {
                 json!({"type": "integer"})
             }
-            TYPE_UINT32 | TYPE_UINT64 | TYPE_FIXED32 | TYPE_FIXED64 => {
+            TYPE_UINT32 | TYPE_FIXED32 => {
                 json!({"type": "integer", "minimum": 0})
+            }
+            TYPE_INT64 | TYPE_SINT64 | TYPE_SFIXED64 => {
+                json!({"type": "string", "pattern": "^(0|-?[1-9][0-9]*)$"})
+            }
+            TYPE_UINT64 | TYPE_FIXED64 => {
+                json!({"type": "string", "pattern": "^(0|[1-9][0-9]*)$"})
             }
             TYPE_BOOL => json!({"type": "boolean"}),
             TYPE_STRING => json!({"type": "string"}),
@@ -135,6 +141,9 @@ impl<'d> SchemaGen<'d> {
     }
 
     fn enum_schema(&self, type_name: &str) -> Value {
+        if type_name == "google.protobuf.NullValue" {
+            return json!({"type": "null"});
+        }
         let Some(info) = self.parsed.enums.get(type_name) else {
             return json!({"type": "string"});
         };
@@ -164,36 +173,126 @@ impl<'d> SchemaGen<'d> {
         let Some(vf) = value_field else {
             return json!({"type": "object"});
         };
-        json!({
+        let mut schema = json!({
             "type": "object",
             "additionalProperties": self.field_type_schema(vf, visiting),
-        })
+        });
+        if let Some(key_field) = entry.fields.iter().find(|f| f.name == "key")
+            && let Some(property_names) = map_key_schema(key_field.r#type)
+        {
+            schema
+                .as_object_mut()
+                .expect("map schema is an object")
+                .insert("propertyNames".to_string(), property_names);
+        }
+        schema
+    }
+}
+
+fn map_key_schema(field_type: i32) -> Option<Value> {
+    match field_type {
+        TYPE_BOOL => Some(json!({"enum": ["false", "true"]})),
+        TYPE_INT32 | TYPE_INT64 | TYPE_SINT32 | TYPE_SINT64 | TYPE_SFIXED32 | TYPE_SFIXED64 => {
+            Some(json!({"pattern": "^(0|-?[1-9][0-9]*)$"}))
+        }
+        TYPE_UINT32 | TYPE_UINT64 | TYPE_FIXED32 | TYPE_FIXED64 => {
+            Some(json!({"pattern": "^(0|[1-9][0-9]*)$"}))
+        }
+        _ => None,
     }
 }
 
 fn wkt_schema(type_name: &str) -> Option<Value> {
     match type_name {
         "google.protobuf.Timestamp" => Some(json!({"type": "string", "format": "date-time"})),
-        "google.protobuf.Duration" => {
-            Some(json!({"type": "string", "description": "Duration e.g. '300s', '1.5h'"}))
-        }
+        "google.protobuf.Duration" => Some(json!({
+            "type": "string",
+            "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,9})?s$"
+        })),
         "google.protobuf.Any" => Some(json!({"type": "object"})),
         "google.protobuf.Struct" => Some(json!({"type": "object"})),
         "google.protobuf.Value" => Some(Value::Object(Map::new())),
-        "google.protobuf.DoubleValue" | "google.protobuf.FloatValue" => {
-            Some(json!({"type": "number"}))
+        "google.protobuf.DoubleValue" | "google.protobuf.FloatValue" => Some(json!({
+            "oneOf": [
+                {"type": "number"},
+                {"type": "string", "enum": ["NaN", "Infinity", "-Infinity"]}
+            ]
+        })),
+        "google.protobuf.Int64Value" => {
+            Some(json!({"type": "string", "pattern": "^(0|-?[1-9][0-9]*)$"}))
         }
-        "google.protobuf.Int64Value" | "google.protobuf.Int32Value" => {
-            Some(json!({"type": "integer"}))
+        "google.protobuf.Int32Value" => Some(json!({"type": "integer"})),
+        "google.protobuf.UInt64Value" => {
+            Some(json!({"type": "string", "pattern": "^(0|[1-9][0-9]*)$"}))
         }
-        "google.protobuf.UInt64Value" | "google.protobuf.UInt32Value" => {
-            Some(json!({"type": "integer", "minimum": 0}))
-        }
+        "google.protobuf.UInt32Value" => Some(json!({"type": "integer", "minimum": 0})),
         "google.protobuf.BoolValue" => Some(json!({"type": "boolean"})),
         "google.protobuf.StringValue" => Some(json!({"type": "string"})),
         "google.protobuf.BytesValue" => {
             Some(json!({"type": "string", "contentEncoding": "base64"}))
         }
+        "google.protobuf.FieldMask" => Some(json!({"type": "string"})),
+        "google.protobuf.ListValue" => Some(json!({"type": "array", "items": {}})),
+        "google.protobuf.Empty" => Some(json!({"type": "object", "additionalProperties": false})),
         _ => None,
+    }
+}
+
+fn number_or_non_finite_schema() -> Value {
+    json!({
+        "oneOf": [
+            {"type": "number"},
+            {"type": "string", "enum": ["NaN", "Infinity", "-Infinity"]}
+        ]
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn protojson_special_types_and_map_keys_have_wire_accurate_schemas() {
+        assert_eq!(
+            number_or_non_finite_schema(),
+            json!({
+                "oneOf": [
+                    {"type": "number"},
+                    {"type": "string", "enum": ["NaN", "Infinity", "-Infinity"]}
+                ]
+            })
+        );
+        assert_eq!(
+            wkt_schema("google.protobuf.Duration"),
+            Some(json!({
+                "type": "string",
+                "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,9})?s$"
+            }))
+        );
+        assert_eq!(
+            wkt_schema("google.protobuf.FieldMask"),
+            Some(json!({"type": "string"}))
+        );
+        assert_eq!(
+            wkt_schema("google.protobuf.ListValue"),
+            Some(json!({"type": "array", "items": {}}))
+        );
+        assert_eq!(
+            wkt_schema("google.protobuf.Empty"),
+            Some(json!({"type": "object", "additionalProperties": false}))
+        );
+        assert_eq!(
+            map_key_schema(TYPE_BOOL),
+            Some(json!({"enum": ["false", "true"]}))
+        );
+        assert_eq!(
+            map_key_schema(TYPE_INT64),
+            Some(json!({"pattern": "^(0|-?[1-9][0-9]*)$"}))
+        );
+        assert_eq!(
+            map_key_schema(TYPE_UINT64),
+            Some(json!({"pattern": "^(0|[1-9][0-9]*)$"}))
+        );
+        assert_eq!(map_key_schema(TYPE_STRING), None);
     }
 }

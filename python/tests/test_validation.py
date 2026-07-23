@@ -15,7 +15,7 @@ from invariant import InvariantError, Server, validation
 
 async def test_validation_passes_when_constraints_satisfied(server):
     server.use(validation())
-    result = await server._cli(["GreetService", "Greet", "-r", '{"name": "World"}'])
+    result = await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "World"}'])
     assert result["message"] == "Hi World"
 
 
@@ -23,7 +23,7 @@ async def test_validation_rejects_constraint_violation(server):
     """Empty name violates `string.min_len = 1` and should produce INVALID_ARGUMENT."""
     server.use(validation())
     with pytest.raises(InvariantError) as exc:
-        await server._cli(["GreetService", "Greet", "-r", '{"name": ""}'])
+        await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": ""}'])
     assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
     payload = exc.value.to_payload()
     assert payload["code"] == "invalid_argument"
@@ -47,7 +47,7 @@ async def test_validation_interceptor_invokes_validator(monkeypatch, server):
     monkeypatch.setattr(protovalidate.Validator, "validate", spy)
 
     server.use(validation())
-    await server._cli(["GreetService", "Greet", "-r", '{"name": "Spy"}'])
+    await server._cli(["greet.v1.GreetService", "Greet", "-r", '{"name": "Spy"}'])
 
     assert len(seen) == 1
     assert isinstance(seen[0], greet_pb2.GreetRequest)
@@ -78,7 +78,7 @@ async def test_validation_stream_rejects_constraint_violation(stream_validation_
 
     async def drain():
         async for _ in stream_validation_server.invoke_stream(
-            "GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="", count=3)
+            "greet.v1.GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="", count=3)
         ):
             pass
 
@@ -94,7 +94,7 @@ async def test_validation_stream_passes_when_satisfied(stream_validation_server)
     msgs = [
         m.message
         async for m in stream_validation_server.invoke_stream(
-            "GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="ok", count=2)
+            "greet.v1.GreetService.StreamGreet", greet_pb2.StreamGreetRequest(name="ok", count=2)
         )
     ]
     assert msgs == ["Hi ok #0", "Hi ok #1"]

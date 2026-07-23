@@ -37,16 +37,16 @@ export type ServiceInfo = {
 
 export class ParsedDescriptor {
   readonly fds: FileDescriptorSet;
-  readonly bytes: Uint8Array;
   readonly registry: FileRegistry;
   readonly services = new Map<string, ServiceInfo>();
   readonly messages = new Map<string, DescMessage>();
   readonly enums = new Map<string, DescEnum>();
   readonly comments = new Map<string, string>();
+  readonly #bytes: Uint8Array;
 
   private constructor(fds: FileDescriptorSet, bytes: Uint8Array) {
     this.fds = fds;
-    this.bytes = bytes;
+    this.#bytes = bytes;
     this.registry = createFileRegistry(fds);
     this.comments = collectComments(fds);
 
@@ -84,8 +84,14 @@ export class ParsedDescriptor {
   }
 
   static fromBytes(bytes: Uint8Array): ParsedDescriptor {
-    const fds = fromBinary(FileDescriptorSetSchema, bytes);
-    return new ParsedDescriptor(fds, bytes);
+    const ownedBytes = Uint8Array.from(bytes);
+    const fds = fromBinary(FileDescriptorSetSchema, ownedBytes);
+    return new ParsedDescriptor(fds, ownedBytes);
+  }
+
+  /** Return an isolated copy of the exact descriptor image parsed by this instance. */
+  get bytes(): Uint8Array {
+    return this.#bytes.slice();
   }
 
   getMessage(typeName: string): DescMessage | undefined {

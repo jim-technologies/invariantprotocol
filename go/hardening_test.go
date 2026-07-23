@@ -249,7 +249,7 @@ func TestEmptyStreamOverMCP(t *testing.T) {
 	resp := sendMCP(t, srv, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "GreetService.StreamGreet",
+			"name":      "greet.v1.GreetService.StreamGreet",
 			"arguments": map[string]any{"name": "x"},
 		},
 	})
@@ -303,7 +303,7 @@ func TestInvokeStreamDeliversChunks(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
 
 	var got []string
-	err := srv.InvokeStream(t.Context(), "GreetService.StreamGreet",
+	err := srv.InvokeStream(t.Context(), "greet.v1.GreetService.StreamGreet",
 		&greetpb.StreamGreetRequest{Name: "API", Count: 3},
 		func(msg proto.Message) error {
 			got = append(got, msg.(*greetpb.GreetResponse).Message)
@@ -316,7 +316,7 @@ func TestInvokeStreamDeliversChunks(t *testing.T) {
 
 func TestInvokeRejectsStreamingTool(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
-	_, err := srv.Invoke(t.Context(), "GreetService.StreamGreet",
+	_, err := srv.Invoke(t.Context(), "greet.v1.GreetService.StreamGreet",
 		&greetpb.StreamGreetRequest{Name: "x"})
 	require.Error(t, err)
 	st, ok := status.FromError(err)
@@ -327,7 +327,7 @@ func TestInvokeRejectsStreamingTool(t *testing.T) {
 
 func TestInvokeStreamRejectsUnaryTool(t *testing.T) {
 	srv := streamServer(t, &streamServicer{})
-	err := srv.InvokeStream(t.Context(), "GreetService.Greet",
+	err := srv.InvokeStream(t.Context(), "greet.v1.GreetService.Greet",
 		&greetpb.GreetRequest{Name: "x"},
 		func(proto.Message) error { return nil })
 	require.Error(t, err)
@@ -416,7 +416,7 @@ func TestConnectHTTPRejectsOversizedUpstreamResponse(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, srv.ConnectHTTP("http://"+lis.Addr().String()))
 
-	_, err = srv.Invoke(t.Context(), "GreetService.Greet", &greetpb.GreetRequest{Name: "x"})
+	_, err = srv.Invoke(t.Context(), "greet.v1.GreetService.Greet", &greetpb.GreetRequest{Name: "x"})
 	require.Error(t, err)
 	st, ok := status.FromError(err)
 	require.True(t, ok)

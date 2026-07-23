@@ -65,7 +65,35 @@ export type RemoteServiceSpec = {
   handlers: ReadonlyMap<string, UnaryHandler>;
 };
 
-export type Tool = {
+/** Immutable discovery metadata for one registered projection method. */
+export type Tool = Readonly<{
+  name: string;
+  description: string;
+  inputSchema: Readonly<JsonSchema>;
+  inputType: string;
+  outputType: string;
+  serviceFullName: string;
+  methodName: string;
+  serverStreaming: boolean;
+}>;
+
+/** @internal Executable registration retained only by Invariant's adapters. */
+export type RegisteredTool = {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: JsonSchema;
+  readonly handler: UnaryHandler | StreamHandler;
+  readonly inputType: string;
+  readonly outputType: string;
+  readonly serviceFullName: string;
+  readonly methodName: string;
+  readonly serverStreaming: boolean;
+  readonly inputDesc: DescMessage;
+  readonly outputDesc: DescMessage;
+  readonly methodDesc: DescMethod;
+};
+
+type MutableRegisteredTool = {
   name: string;
   description: string;
   inputSchema: JsonSchema;
@@ -87,15 +115,15 @@ export type MethodConfig = {
   maxStreamResponseBytes?: number;
 };
 
-export type ToolCatalogEntry = {
+export type ToolCatalogEntry = Readonly<{
   name: string;
   description: string;
-  inputSchema: JsonSchema;
-  _meta?: Record<string, unknown>;
-};
+  inputSchema: Readonly<JsonSchema>;
+  _meta?: Readonly<Record<string, unknown>>;
+}>;
 
 export const SERVER_NAME = "invariant-protocol";
-export const SERVER_VERSION = "0.8.3";
+export const SERVER_VERSION = "0.9.0";
 const DEFAULT_HTTP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_HTTP_METADATA_KEYS = ["traceparent", "tracestate", "baggage", "x-request-id"] as const;
 
@@ -115,10 +143,9 @@ export const serverInternal = Symbol("invariant.server.internal");
 export class Server {
   readonly name = SERVER_NAME;
   readonly version = SERVER_VERSION;
-  readonly parsed: ParsedDescriptor;
-  readonly schemaGen: SchemaGenerator;
-  private readonly toolStore = new Map<string, Tool>();
-  readonly tools: ReadonlyMap<string, Tool> = readOnlyMap(this.toolStore);
+  readonly #parsed: ParsedDescriptor;
+  readonly #schemaGen: SchemaGenerator;
+  readonly #toolStore = new Map<string, RegisteredTool>();
 
   private readonly interceptors: Interceptor[] = [];
   private readonly services = new Map<string, ServiceImplSpec>();
@@ -135,39 +162,47 @@ export class Server {
   private frozen = false;
   readonly [serverInternal] = {
     freeze: () => this.freezeConfiguration(),
+    parsed: () => this.#parsed,
+    tool: (name: string): RegisteredTool | undefined => this.#toolStore.get(name),
+    tools: (): readonly RegisteredTool[] => [...this.#toolStore.values()],
     registeredServiceSpecs: (): readonly ServiceImplSpec[] => [...this.services.values()],
     registeredRemoteServiceSpecs: (): readonly RemoteServiceSpec[] => [...this.remoteServices.values()],
+    coerceMessage: (desc: DescMessage, value: unknown) => this.#coerceMessage(desc, value),
+    invokeTool: (tool: RegisteredTool, request: MessageShape<DescMessage>, context?: HandlerContext) =>
+      this.#invokeTool(tool, request, context),
+    invokeStreamTool: (tool: RegisteredTool, request: MessageShape<DescMessage>, context?: HandlerContext) =>
+      this.#invokeStreamTool(tool, request, context),
     invokeUnaryMethod: (
       method: DescMethod,
       handler: UnaryHandler,
       request: MessageShape<DescMessage>,
       context: HandlerContext,
-    ) => this.invokeUnaryMethod(method, handler, request, context),
+    ) => this.#invokeUnaryMethod(method, handler, request, context),
     invokeServerStreamMethod: (
       method: DescMethod,
       handler: StreamHandler,
       request: MessageShape<DescMessage>,
       context: HandlerContext,
-    ) => this.invokeServerStreamMethod(method, handler, request, context),
+    ) => this.#invokeServerStreamMethod(method, handler, request, context),
     invokeClientStreamMethod: (
       method: DescMethod,
       handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => Promise<unknown>,
       requests: AsyncIterable<MessageShape<DescMessage>>,
       context: HandlerContext,
-    ) => this.invokeClientStreamMethod(method, handler, requests, context),
+    ) => this.#invokeClientStreamMethod(method, handler, requests, context),
     invokeBidiStreamMethod: (
       method: DescMethod,
       handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => AsyncIterable<unknown>,
       requests: AsyncIterable<MessageShape<DescMessage>>,
       context: HandlerContext,
-    ) => this.invokeBidiStreamMethod(method, handler, requests, context),
+    ) => this.#invokeBidiStreamMethod(method, handler, requests, context),
     createContext: (method: DescMethod, options: ProjectionContextOptions) => this.createContext(method, options),
     mapHTTPContext: (context: HandlerContext) => this.mapHTTPContext(context),
   };
 
   private constructor(parsed: ParsedDescriptor) {
-    this.parsed = parsed;
-    this.schemaGen = new SchemaGenerator(parsed);
+    this.#parsed = parsed;
+    this.#schemaGen = new SchemaGenerator(parsed);
   }
 
   static fromDescriptor(path: string): Server {
@@ -176,6 +211,21 @@ export class Server {
 
   static fromBytes(bytes: Uint8Array): Server {
     return new Server(ParsedDescriptor.fromBytes(bytes));
+  }
+
+  /** Return a detached descriptor view that cannot mutate this server's registry. */
+  get parsed(): ParsedDescriptor {
+    return ParsedDescriptor.fromBytes(this.#parsed.bytes);
+  }
+
+  /** Return a schema generator backed by a detached descriptor view. */
+  get schemaGen(): SchemaGenerator {
+    return new SchemaGenerator(this.parsed);
+  }
+
+  /** Return a read-only metadata snapshot without executable handlers. */
+  get tools(): ReadonlyMap<string, Tool> {
+    return readOnlyMap(new Map([...this.#toolStore].map(([name, tool]) => [name, publicTool(tool)])));
   }
 
   include(...patterns: string[]): void {
@@ -255,7 +305,7 @@ export class Server {
     }
 
     const spec = createServiceImplSpec(service, implementation);
-    const stagedTools: Tool[] = [];
+    const stagedTools: MutableRegisteredTool[] = [];
 
     for (const method of service.methods) {
       const methodInfo = descriptorService.methods.get(method.name);
@@ -268,9 +318,9 @@ export class Server {
 
       const methodSpec = spec.methods[method.localName];
       stagedTools.push({
-        name: `${descriptorService.name}.${method.name}`,
-        description: methodInfo.comment || `${descriptorService.name}.${method.name}`,
-        inputSchema: this.schemaGen.messageToSchema(method.input.typeName),
+        name: `${service.typeName}.${method.name}`,
+        description: methodInfo.comment || `${service.typeName}.${method.name}`,
+        inputSchema: this.#schemaGen.messageToSchema(method.input.typeName),
         handler: methodSpec.impl as UnaryHandler | StreamHandler,
         inputType: method.input.typeName,
         outputType: method.output.typeName,
@@ -295,7 +345,7 @@ export class Server {
     if (this.services.has(service.typeName) || this.remoteServices.has(service.typeName)) {
       throw new Error(`Service ${service.typeName} is already registered.`);
     }
-    const proxyTools: Tool[] = [];
+    const proxyTools: MutableRegisteredTool[] = [];
     const handlers = new Map<string, UnaryHandler>();
     for (const method of service.methods) {
       const methodInfo = descriptorService.methods.get(method.name);
@@ -308,10 +358,10 @@ export class Server {
       if (typeof (client as unknown as Record<string, unknown>)[method.localName] !== "function") {
         throw new Error(`gRPC client does not implement ${service.typeName}.${method.localName}.`);
       }
-      const tool: Tool = {
-        name: `${descriptorService.name}.${method.name}`,
-        description: methodInfo.comment || `${descriptorService.name}.${method.name}`,
-        inputSchema: this.schemaGen.messageToSchema(method.input.typeName),
+      const tool: MutableRegisteredTool = {
+        name: `${service.typeName}.${method.name}`,
+        description: methodInfo.comment || `${service.typeName}.${method.name}`,
+        inputSchema: this.#schemaGen.messageToSchema(method.input.typeName),
         handler: async () => {
           throw new InvariantError("internal", "gRPC proxy handler not initialized");
         },
@@ -341,10 +391,10 @@ export class Server {
 
   connectHttp(baseUrl: string, options: ConnectHttpOptions = {}): void {
     this.assertMutable("HTTP proxy registration");
-    const services = options.serviceName ? this.serviceByName(options.serviceName) : this.parsed.services;
+    const services = options.serviceName ? this.serviceByName(options.serviceName) : this.#parsed.services;
     const rules = httpRulesByMethodPath(this);
     const connection = new HTTPConnection(baseUrl, options);
-    const stagedTools: Tool[] = [];
+    const stagedTools: MutableRegisteredTool[] = [];
     const stagedServices: RemoteServiceSpec[] = [];
 
     for (const [svcFullName, svc] of services) {
@@ -353,18 +403,18 @@ export class Server {
         if (method.clientStreaming || method.serverStreaming) {
           continue;
         }
-        const inputDesc = this.parsed.getMessage(method.inputType);
-        const outputDesc = this.parsed.getMessage(method.outputType);
+        const inputDesc = this.#parsed.getMessage(method.inputType);
+        const outputDesc = this.#parsed.getMessage(method.outputType);
         if (!inputDesc || !outputDesc) {
           throw new InvariantError("internal", `missing message descriptor for ${svc.name}.${methodName}`);
         }
 
         const methodPath = `/${svcFullName}/${methodName}`;
         const binding = clientBindingForMethod(rules.get(methodPath), svcFullName, methodName);
-        const tool: Tool = {
-          name: `${svc.name}.${methodName}`,
-          description: method.comment || `${svc.name}.${methodName}`,
-          inputSchema: this.schemaGen.messageToSchema(method.inputType),
+        const tool: MutableRegisteredTool = {
+          name: `${svcFullName}.${methodName}`,
+          description: method.comment || `${svcFullName}.${methodName}`,
+          inputSchema: this.#schemaGen.messageToSchema(method.inputType),
           handler: async () => {
             throw new InvariantError("internal", "HTTP proxy handler not initialized");
           },
@@ -403,14 +453,14 @@ export class Server {
 
   async invoke(toolName: string, request: unknown, context?: HandlerContext): Promise<MessageShape<DescMessage>> {
     this.freezeConfiguration();
-    const tool = this.tools.get(toolName);
+    const tool = this.#toolStore.get(toolName);
     if (!tool) {
-      throw notFound(`Unknown tool '${toolName}'. Available: ${JSON.stringify([...this.tools.keys()].sort())}`);
+      throw notFound(`Unknown tool '${toolName}'. Available: ${JSON.stringify([...this.#toolStore.keys()].sort())}`);
     }
     if (tool.serverStreaming) {
       throw failedPrecondition(`Tool '${toolName}' is server-streaming; use invokeStream`);
     }
-    return this.invokeTool(tool, this.coerceMessage(tool.inputDesc, request), context);
+    return this.#invokeTool(tool, this.#coerceMessage(tool.inputDesc, request), context);
   }
 
   async *invokeStream(
@@ -419,30 +469,30 @@ export class Server {
     context?: HandlerContext,
   ): AsyncIterable<MessageShape<DescMessage>> {
     this.freezeConfiguration();
-    const tool = this.tools.get(toolName);
+    const tool = this.#toolStore.get(toolName);
     if (!tool) {
-      throw notFound(`Unknown tool '${toolName}'. Available: ${JSON.stringify([...this.tools.keys()].sort())}`);
+      throw notFound(`Unknown tool '${toolName}'. Available: ${JSON.stringify([...this.#toolStore.keys()].sort())}`);
     }
     if (!tool.serverStreaming) {
       throw failedPrecondition(`Tool '${toolName}' is unary; use invoke`);
     }
-    yield* this.invokeStreamTool(tool, this.coerceMessage(tool.inputDesc, request), context);
+    yield* this.#invokeStreamTool(tool, this.#coerceMessage(tool.inputDesc, request), context);
   }
 
-  toolCatalog(): ToolCatalogEntry[] {
-    return [...this.tools.values()]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((tool) => {
-        const entry: ToolCatalogEntry = {
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        };
-        if (tool.serverStreaming) {
-          entry._meta = { streaming: true };
-        }
-        return entry;
-      });
+  toolCatalog(): readonly ToolCatalogEntry[] {
+    return Object.freeze(
+      [...this.#toolStore.values()]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map(
+          (tool) =>
+            deepFreeze({
+              name: tool.name,
+              description: tool.description,
+              inputSchema: structuredClone(tool.inputSchema),
+              ...(tool.serverStreaming ? { _meta: { streaming: true } } : {}),
+            }) as ToolCatalogEntry,
+        ),
+    );
   }
 
   httpHandler(): ReturnType<typeof buildHttpHandler> {
@@ -485,38 +535,42 @@ export class Server {
     this.grpcServerInstance?.forceShutdown();
   }
 
-  toJson(tool: Tool, message: MessageShape<DescMessage>): JsonValue {
-    return toJson(tool.outputDesc, message, { useProtoFieldName: true, registry: this.parsed.registry });
+  toJson(toolName: string, message: MessageShape<DescMessage>): JsonValue {
+    const tool = this.#toolStore.get(toolName);
+    if (!tool) {
+      throw notFound(`Unknown tool '${toolName}'.`);
+    }
+    return toJson(tool.outputDesc, message, { registry: this.#parsed.registry });
   }
 
-  coerceMessage(desc: DescMessage, value: unknown): MessageShape<DescMessage> {
+  #coerceMessage(desc: DescMessage, value: unknown): MessageShape<DescMessage> {
     if (isMessageFor(desc, value)) {
       return value as MessageShape<DescMessage>;
     }
     try {
-      return fromJson(desc, (value ?? {}) as JsonValue, { registry: this.parsed.registry });
+      return fromJson(desc, (value ?? {}) as JsonValue, { registry: this.#parsed.registry });
     } catch {
       return create(desc, (value ?? {}) as never);
     }
   }
 
-  async invokeTool(
-    tool: Tool,
+  async #invokeTool(
+    tool: RegisteredTool,
     request: MessageShape<DescMessage>,
     context?: HandlerContext,
   ): Promise<MessageShape<DescMessage>> {
-    return this.invokeUnaryMethod(tool.methodDesc, tool.handler as UnaryHandler, request, context);
+    return this.#invokeUnaryMethod(tool.methodDesc, tool.handler as UnaryHandler, request, context);
   }
 
-  async *invokeStreamTool(
-    tool: Tool,
+  async *#invokeStreamTool(
+    tool: RegisteredTool,
     request: MessageShape<DescMessage>,
     context?: HandlerContext,
   ): AsyncIterable<MessageShape<DescMessage>> {
-    yield* this.invokeServerStreamMethod(tool.methodDesc, tool.handler as StreamHandler, request, context);
+    yield* this.#invokeServerStreamMethod(tool.methodDesc, tool.handler as StreamHandler, request, context);
   }
 
-  private async invokeUnaryMethod(
+  async #invokeUnaryMethod(
     method: DescMethod,
     handler: UnaryHandler,
     request: MessageShape<DescMessage>,
@@ -531,9 +585,9 @@ export class Server {
     }
     try {
       const response = await runWithContext(callContext, () =>
-        this.interceptUnary(method, request, callContext, handler),
+        this.#interceptUnary(method, request, callContext, handler),
       );
-      return this.coerceMessage(method.output, response.message);
+      return this.#coerceMessage(method.output, response.message);
     } catch (error) {
       throw normalizeHandlerError(error, fullMethod);
     } finally {
@@ -541,7 +595,7 @@ export class Server {
     }
   }
 
-  private async *invokeServerStreamMethod(
+  async *#invokeServerStreamMethod(
     method: DescMethod,
     handler: StreamHandler,
     request: MessageShape<DescMessage>,
@@ -555,10 +609,10 @@ export class Server {
         const input = await exactlyOneMessage(requests, "server-streaming call");
         yield* handler(input, callContext);
       })();
-    yield* this.invokeStreamingMethod(method, streamingHandler, oneMessage(request), context);
+    yield* this.#invokeStreamingMethod(method, streamingHandler, oneMessage(request), context);
   }
 
-  private async invokeClientStreamMethod(
+  async #invokeClientStreamMethod(
     method: DescMethod,
     handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => Promise<unknown>,
     requests: AsyncIterable<MessageShape<DescMessage>>,
@@ -572,21 +626,21 @@ export class Server {
         yield await handler(input, callContext);
       })();
     return exactlyOneMessage(
-      this.invokeStreamingMethod(method, streamingHandler, requests, context),
+      this.#invokeStreamingMethod(method, streamingHandler, requests, context),
       "client-streaming call",
     );
   }
 
-  private async *invokeBidiStreamMethod(
+  async *#invokeBidiStreamMethod(
     method: DescMethod,
     handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => AsyncIterable<unknown>,
     requests: AsyncIterable<MessageShape<DescMessage>>,
     context?: HandlerContext,
   ): AsyncIterable<MessageShape<DescMessage>> {
-    yield* this.invokeStreamingMethod(method, handler, requests, context);
+    yield* this.#invokeStreamingMethod(method, handler, requests, context);
   }
 
-  private async *invokeStreamingMethod(
+  async *#invokeStreamingMethod(
     method: DescMethod,
     handler: (requests: AsyncIterable<MessageShape<DescMessage>>, context: HandlerContext) => AsyncIterable<unknown>,
     requests: AsyncIterable<MessageShape<DescMessage>>,
@@ -601,7 +655,7 @@ export class Server {
     }
     try {
       const response = await runWithContext(callContext, () =>
-        this.interceptStream(method, requests, callContext, handler),
+        this.#interceptStream(method, requests, callContext, handler),
       );
       copyHeaders(response.header, callContext.responseHeader);
       const iterator = response.message[Symbol.asyncIterator]();
@@ -613,7 +667,7 @@ export class Server {
             complete = true;
             break;
           }
-          yield this.coerceMessage(method.output, item.value);
+          yield this.#coerceMessage(method.output, item.value);
         }
       } finally {
         if (!complete) {
@@ -639,20 +693,20 @@ export class Server {
     }
   }
 
-  private addTool(tool: Tool): void {
-    const existing = this.tools.get(tool.name);
+  private addTool(tool: MutableRegisteredTool): void {
+    const existing = this.#toolStore.get(tool.name);
     if (existing) {
       throw new Error(
         `Tool ${tool.name} is already registered by ${existing.serviceFullName}; cannot register ${tool.serviceFullName}.`,
       );
     }
-    this.toolStore.set(tool.name, tool);
+    this.#toolStore.set(tool.name, Object.freeze(tool));
   }
 
-  private assertToolsAvailable(tools: readonly Tool[]): void {
+  private assertToolsAvailable(tools: readonly Pick<RegisteredTool, "name" | "serviceFullName">[]): void {
     const staged = new Map<string, string>();
     for (const tool of tools) {
-      const owner = this.tools.get(tool.name)?.serviceFullName ?? staged.get(tool.name);
+      const owner = this.#toolStore.get(tool.name)?.serviceFullName ?? staged.get(tool.name);
       if (owner !== undefined) {
         throw new Error(
           `Tool ${tool.name} is already registered by ${owner}; cannot register ${tool.serviceFullName}.`,
@@ -670,7 +724,7 @@ export class Server {
 
   private assertProjectionFiltersMutable(): void {
     this.assertMutable("projection filters");
-    if (this.services.size > 0 || this.remoteServices.size > 0 || this.toolStore.size > 0) {
+    if (this.services.size > 0 || this.remoteServices.size > 0 || this.#toolStore.size > 0) {
       throw new Error("Invariant projection filters must be configured before service registration.");
     }
   }
@@ -717,7 +771,7 @@ export class Server {
     return context;
   }
 
-  private async interceptUnary(
+  async #interceptUnary(
     method: DescMethod,
     message: MessageShape<DescMessage>,
     context: HandlerContext,
@@ -729,7 +783,7 @@ export class Server {
       method: method as UnaryRequest["method"],
       header: context.responseHeader,
       trailer: context.responseTrailer,
-      message: this.coerceMessage(
+      message: this.#coerceMessage(
         method.output,
         await handler(request.message, handlerContextForRequest(context, request)),
       ),
@@ -753,7 +807,7 @@ export class Server {
     return response;
   }
 
-  private async interceptStream(
+  async #interceptStream(
     method: DescMethod,
     messages: AsyncIterable<MessageShape<DescMessage>>,
     context: HandlerContext,
@@ -763,7 +817,7 @@ export class Server {
       const output = handler(request.message, handlerContextForRequest(context, request));
       const normalized = (async function* (server: Server) {
         for await (const message of output) {
-          yield server.coerceMessage(method.output, message);
+          yield server.#coerceMessage(method.output, message);
         }
       })(this);
       return {
@@ -792,17 +846,17 @@ export class Server {
   }
 
   private serviceByName(serviceName: string): Map<string, ServiceInfo> {
-    const service = this.parsed.services.get(serviceName);
+    const service = this.#parsed.services.get(serviceName);
     if (!service) {
       throw new Error(
-        `Service '${serviceName}' not found in descriptor. Available: ${JSON.stringify([...this.parsed.services.keys()])}`,
+        `Service '${serviceName}' not found in descriptor. Available: ${JSON.stringify([...this.#parsed.services.keys()])}`,
       );
     }
     return new Map([[serviceName, service]]);
   }
 
   private validateGeneratedService(service: DescService): ServiceInfo {
-    const descriptorService = this.parsed.services.get(service.typeName);
+    const descriptorService = this.#parsed.services.get(service.typeName);
     if (!descriptorService) {
       throw new Error(`Generated service '${service.typeName}' is not present in descriptor.binpb.`);
     }
@@ -834,7 +888,7 @@ export class Server {
     }
     seenMessages.add(message.typeName);
 
-    const descriptorMessage = this.parsed.getMessage(message.typeName);
+    const descriptorMessage = this.#parsed.getMessage(message.typeName);
     if (
       !descriptorMessage ||
       !equals(DescriptorProtoSchema, message.proto, descriptorMessage.proto) ||
@@ -869,7 +923,7 @@ export class Server {
       return;
     }
     seenEnums.add(en.typeName);
-    const descriptorEnum = this.parsed.getEnum(en.typeName);
+    const descriptorEnum = this.#parsed.getEnum(en.typeName);
     if (
       !descriptorEnum ||
       !equals(EnumDescriptorProtoSchema, en.proto, descriptorEnum.proto) ||
@@ -1135,6 +1189,29 @@ function messageSemanticsMatch(generated: DescMessage, runtime: DescMessage): bo
     }
   }
   return true;
+}
+
+function publicTool(tool: RegisteredTool): Tool {
+  return deepFreeze({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: structuredClone(tool.inputSchema),
+    inputType: tool.inputType,
+    outputType: tool.outputType,
+    serviceFullName: tool.serviceFullName,
+    methodName: tool.methodName,
+    serverStreaming: tool.serverStreaming,
+  }) as Tool;
+}
+
+function deepFreeze<T>(value: T): Readonly<T> {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const nested of Object.values(value as Record<string, unknown>)) {
+    deepFreeze(nested);
+  }
+  return Object.freeze(value);
 }
 
 function readOnlyMap<K, V>(source: Map<K, V>): ReadonlyMap<K, V> {

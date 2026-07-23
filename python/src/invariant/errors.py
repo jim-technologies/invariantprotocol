@@ -199,7 +199,7 @@ def _details_to_anys(
         if isinstance(detail, message.Message):
             any_msg = any_pb2.Any()
             if detail.DESCRIPTOR.full_name == "google.protobuf.Any":
-                any_msg.CopyFrom(detail)
+                any_msg.ParseFromString(detail.SerializeToString())
             else:
                 any_msg.Pack(detail)
             out.append(any_msg)
@@ -235,7 +235,7 @@ def _details_to_payload(
         if isinstance(detail, message.Message):
             any_msg = any_pb2.Any()
             if detail.DESCRIPTOR.full_name == "google.protobuf.Any":
-                any_msg.CopyFrom(detail)
+                any_msg.ParseFromString(detail.SerializeToString())
             else:
                 any_msg.Pack(detail)
             out.append(_any_to_payload(any_msg))
