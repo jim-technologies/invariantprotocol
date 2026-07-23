@@ -279,14 +279,13 @@ async function serveMcpHttp(server: Server, req: IncomingMessage, res: ServerRes
       return;
     }
 
-    const remainingTimeoutMs = deadlineAt === undefined ? undefined : Math.max(0, remainingDeadlineMs(deadlineAt));
     const response = await withAbsoluteDeadline(
       () =>
         mcpDispatchWithContext(server, message, {
           protocolName: "mcp",
           requestMethod: req.method ?? "POST",
           url: new URL(req.url ?? "/mcp", "http://localhost").toString(),
-          timeoutMs: remainingTimeoutMs,
+          deadlineAt,
           requestSignal: cancellation.signal,
           requestHeader: requestHeaders(req),
           mapHTTPMetadata: true,

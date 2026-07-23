@@ -70,6 +70,10 @@ but never silent wire-behavior regressions.
   its isolated descriptor pool and no longer imports runtime types back from
   `server.py`, and TypeScript clones caller-owned descriptor bytes before
   registration or reflection can retain them.
+- **TypeScript MCP-over-HTTP has one absolute deadline owner.** The monotonic
+  transport deadline now drives both handler context reporting and transport
+  cancellation, eliminating a sub-millisecond race that could return an MCP
+  HTTP 200 response after the configured deadline.
 
 ## v0.8.3 — 2026-07-17
 

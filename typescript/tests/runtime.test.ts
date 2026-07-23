@@ -18,11 +18,12 @@ import { Code, ConnectError, type ServiceImpl } from "@connectrpc/connect";
 import * as grpc from "@grpc/grpc-js";
 import { ServerDuplexStreamImpl, ServerWritableStreamImpl } from "@grpc/grpc-js/build/src/server-call.js";
 import * as protoLoader from "@grpc/proto-loader";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { monotonicDeadlineAfter } from "../src/deadline.js";
 import { codeFromGrpcStatus, codeFromHttpStatus, grpcStatusFor, InvariantError } from "../src/errors.js";
 import { grpcServiceDefinitionForService } from "../src/grpc.js";
 import { CONNECT_STREAM_JSON, httpHandler, ParsedDescriptor, runCli, SchemaGenerator, Server } from "../src/index.js";
-import { mcpDispatch } from "../src/mcp.js";
+import { mcpDispatch, mcpDispatchWithContext } from "../src/mcp.js";
 import { http as googleApiHttp } from "./gen/google/api/annotations_pb.js";
 import {
   type GreetGroupRequest,
@@ -1232,7 +1233,18 @@ describe("projections", () => {
     };
     const server = Server.fromDescriptor(descriptorPath);
     server.register(GreetService, {
-      greet: () => {
+      greet: async (request, context) => {
+        if (request.name === "signal deadline") {
+          if (!context.signal.aborted) {
+            await new Promise<void>((resolveAbort) => {
+              context.signal.addEventListener("abort", () => resolveAbort(), { once: true });
+            });
+          }
+          throw context.signal.reason ?? new ConnectError("deadline exceeded", Code.DeadlineExceeded);
+        }
+        if (request.name === "application deadline") {
+          throw new ConnectError("application deadline", Code.DeadlineExceeded);
+        }
         busyWait(20);
         return { message: "too late" };
       },
@@ -1288,6 +1300,46 @@ describe("projections", () => {
     expect(mcp.status).toBe(504);
     expect(await mcp.json()).toMatchObject({ code: "deadline_exceeded" });
 
+    const signalDeadline = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "connect-timeout-ms": "10",
+        "mcp-protocol-version": "2025-11-25",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "greet.v1.GreetService.Greet", arguments: { name: "signal deadline" } },
+      }),
+    });
+    expect(signalDeadline.status).toBe(504);
+    expect(await signalDeadline.json()).toMatchObject({ code: "deadline_exceeded" });
+
+    const applicationDeadline = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "greet.v1.GreetService.Greet", arguments: { name: "application deadline" } },
+      }),
+    });
+    expect(applicationDeadline.status).toBe(200);
+    expect(await applicationDeadline.json()).toMatchObject({
+      result: {
+        isError: true,
+        error: { code: "deadline_exceeded", message: "application deadline" },
+      },
+    });
+
     const unaryBody = Buffer.from(JSON.stringify({ name: "delayed" }));
     const delayedUnary = await delayedPost(
       `${base}/greet.v1.GreetService/Greet`,
@@ -1319,6 +1371,39 @@ describe("projections", () => {
     expect(JSON.parse(Buffer.from(delayedFrames[0]!.payload).toString("utf8"))).toMatchObject({
       error: { code: "deadline_exceeded" },
     });
+  });
+
+  test("keeps the MCP handler deadline aligned with its monotonic HTTP deadline", async () => {
+    const server = registeredServer();
+    const wallStart = Date.now();
+    let wallReads = 0;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => wallStart + wallReads++ * 100);
+    try {
+      const response = await mcpDispatchWithContext(
+        server,
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "greet.v1.GreetService.Greet", arguments: { name: "Ada" } },
+        },
+        {
+          // A derived one-millisecond Connect timeout would expire immediately
+          // against the deliberately coarse wall clock below. The HTTP
+          // transport's monotonic absolute deadline remains authoritative.
+          timeoutMs: 1,
+          deadlineAt: monotonicDeadlineAfter(1_000),
+          maxResponseBytes: 16 * 1024 * 1024,
+        },
+      );
+      expect(response).toMatchObject({
+        result: {
+          content: [{ type: "text", text: expect.stringContaining("Hi Ada") }],
+        },
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   test("preserves long Connect deadlines without overflowing Node timers", async () => {

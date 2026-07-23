@@ -1,5 +1,6 @@
 import { fromJson, type JsonValue, toJsonString } from "@bufbuild/protobuf";
 
+import { remainingDeadlineMs } from "./deadline.js";
 import { asInvariantError, InvariantError } from "./errors.js";
 import { type ProjectionContextOptions, type Server, serverInternal } from "./server.js";
 
@@ -18,6 +19,7 @@ export type McpContextOptions = Partial<ProjectionContextOptions> & {
 
 type McpDispatchContextOptions = McpContextOptions & {
   maxResponseBytes?: number;
+  deadlineAt?: number;
 };
 
 class McpHTTPResponseLimitError extends InvariantError {
@@ -43,7 +45,7 @@ export async function mcpDispatch(
 export async function mcpDispatchWithContext(
   server: Server,
   msg: unknown,
-  contextOptions: McpContextOptions & { maxResponseBytes: number },
+  contextOptions: McpContextOptions & { maxResponseBytes: number; deadlineAt?: number },
 ): Promise<Record<string, unknown> | undefined> {
   return mcpDispatchInternal(server, msg, contextOptions);
 }
@@ -121,14 +123,24 @@ async function mcpCallTool(
     return err(id, -32602, `Unknown tool: ${toolName}`);
   }
 
+  const deadlineAt = contextOptions.deadlineAt;
   let context = server[serverInternal].createContext(tool.methodDesc, {
     protocolName: contextOptions.protocolName ?? "mcp",
     requestMethod: contextOptions.requestMethod,
     url: contextOptions.url ?? `mcp:///${tool.serviceFullName}/${tool.methodName}`,
-    timeoutMs: contextOptions.timeoutMs,
+    // MCP HTTP already owns one monotonic absolute deadline that covers body
+    // reading, decoding, and dispatch. Do not derive a second wall-clock timer
+    // from its fractional remaining duration: Connect's Date-based context can
+    // otherwise expire up to one millisecond before the transport deadline.
+    timeoutMs: deadlineAt === undefined ? contextOptions.timeoutMs : undefined,
     requestSignal: contextOptions.requestSignal,
     requestHeader: contextOptions.requestHeader,
   });
+  if (deadlineAt !== undefined) {
+    Object.assign(context, {
+      timeoutMs: () => remainingDeadlineMs(deadlineAt),
+    });
+  }
   if (contextOptions.mapHTTPMetadata) {
     context = server[serverInternal].mapHTTPContext(context) as typeof context;
   }
