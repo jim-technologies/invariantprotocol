@@ -10,6 +10,18 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.11.0 — 2026-07-24
+
+### Added
+
+- **Existing OpenAPI contracts can bootstrap canonical protobuf source.** The
+  `invariant-openapi import` build tool performs a deterministic, one-way
+  conversion from bundled OpenAPI 3.0/3.1 documents, carries supported HTTP
+  bindings and representable validation annotations, rejects unsupported or
+  ambiguous contract mappings, and warns about deliberately unencoded policy,
+  deployment, status, or HTTP-error metadata. The generated `google.api.http`
+  annotations are outbound/tooling metadata; HTTP serving remains Connect-only.
+
 ## v0.10.0 — 2026-07-22
 
 ### Added

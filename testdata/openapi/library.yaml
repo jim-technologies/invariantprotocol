@@ -1,0 +1,145 @@
+openapi: 3.1.0
+info:
+  title: Library
+  version: 1.0.0
+  description: Manages a small library catalog.
+paths:
+  /v1/books:
+    get:
+      operationId: listBooks
+      summary: List books
+      description: Returns the catalog in stable order.
+      parameters:
+        - name: page-size
+          in: query
+          description: Maximum number of books to return.
+          required: true
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+        - name: state
+          in: query
+          description: States to include.
+          schema:
+            type: array
+            uniqueItems: true
+            items:
+              type: string
+              enum:
+                - available
+                - checked-out
+      responses:
+        "200":
+          description: Books in the catalog.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Book"
+    post:
+      operationId: createBook
+      summary: Create a book
+      requestBody:
+        description: Book data supplied by the caller.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBookInput"
+      responses:
+        "201":
+          description: The created book.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+  /v1/books/{book-id}:
+    parameters:
+      - name: book-id
+        in: path
+        description: Stable book identifier.
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getBook
+      summary: Get a book
+      parameters:
+        - name: include-history
+          in: query
+          description: Include historical lending state.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: The requested book.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+components:
+  schemas:
+    Book:
+      type: object
+      description: A cataloged book.
+      additionalProperties: false
+      required:
+        - createdAt
+        - id
+        - state
+        - title
+      properties:
+        title:
+          type: string
+          description: Human-readable title.
+          minLength: 1
+          maxLength: 200
+        id:
+          type: string
+          format: uuid
+          description: Stable book identifier.
+        createdAt:
+          type: string
+          format: date-time
+          description: Time the book was added.
+        state:
+          type: string
+          description: Current lending state.
+          enum:
+            - available
+            - checked-out
+        tags:
+          type: array
+          description: Searchable catalog tags.
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1
+        attributes:
+          type: object
+          description: Free-form string attributes.
+          additionalProperties:
+            type: string
+    CreateBookInput:
+      type: object
+      description: Data needed to create a book.
+      additionalProperties: false
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          description: Human-readable title.
+          minLength: 1
+          maxLength: 200
+        tags:
+          type: array
+          description: Initial catalog tags.
+          uniqueItems: true
+          items:
+            type: string
+            minLength: 1

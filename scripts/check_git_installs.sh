@@ -43,7 +43,9 @@ mkdir -p "$go_consumer" "$tmp/gopath"
     GOPATH="$tmp/gopath" \
     GOPRIVATE=github.com/jim-technologies/invariantprotocol \
     GOPROXY=https://proxy.golang.org,direct \
-    go get "github.com/jim-technologies/invariantprotocol/go@${sha}"
+    go get \
+      "github.com/jim-technologies/invariantprotocol/go@${sha}" \
+      "github.com/jim-technologies/invariantprotocol/go/cmd/invariant-openapi@${sha}"
   env \
     GIT_ALLOW_PROTOCOL=file:https \
     GIT_CONFIG_GLOBAL="$git_config" \
@@ -51,7 +53,9 @@ mkdir -p "$go_consumer" "$tmp/gopath"
     GOPATH="$tmp/gopath" \
     GOPRIVATE=github.com/jim-technologies/invariantprotocol \
     GOPROXY=https://proxy.golang.org,direct \
-    go build github.com/jim-technologies/invariantprotocol/go
+    go build \
+      github.com/jim-technologies/invariantprotocol/go \
+      github.com/jim-technologies/invariantprotocol/go/cmd/invariant-openapi
 )
 
 echo "==> Python"

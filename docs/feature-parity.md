@@ -47,9 +47,12 @@ streaming; Go's standard API intentionally has separate unary and stream types.
 - **Core** means portable runtime behavior and must be supported in all four
   languages before release. `supported` is a stable, production-ready status;
   preview or experimental work cannot satisfy the release gate.
-- **Build tool** means one language-neutral program consumes protobuf artifacts.
-  The SchemaBundle compiler belongs here because four inference engines would
-  create four competing canonical mappings.
+- **Build tool** means one language-neutral program produces or consumes shared
+  contract artifacts for every runtime. The SchemaBundle compiler belongs here
+  because four inference engines would create four competing canonical mappings.
+  The one-way OpenAPI importer also belongs here: every language consumes its
+  generated protobuf contract through normal Buf generation rather than
+  carrying a runtime-specific importer.
 - **Ecosystem** means an adapter to a language-native library. PyArrow record
   conversion and maintained Protovalidate implementations are examples; their
   narrower availability must be explicit but does not imply a server-runtime
@@ -75,3 +78,12 @@ language-neutral protobuf options, one Go build tool compiles the descriptor
 image, and all four languages decode the same versioned SchemaBundle. Decimal,
 UUID, and fixed-byte refinements are generated IR variants in every reader;
 PyArrow record conversion remains a Python ecosystem adapter.
+
+The OpenAPI importer is a build-time bootstrap, not a portable runtime surface
+or synchronization engine. It accepts bundled OpenAPI 3.0/3.1 input, produces
+deterministic reviewable proto3 source, and fails when an external reference or
+unsupported request/success-response construct would make the canonical mapping
+ambiguous or lossy. Once reviewed, that protobuf source is the sole authored
+contract for Go, Python, Rust, and TypeScript. Imported `google.api.http`
+annotations retain outbound HTTP intent for supported clients and tooling;
+Invariant's HTTP server continues to expose only canonical Connect routes.

@@ -1,0 +1,155 @@
+// Imported from OpenAPI by invariant-openapi.
+// Review this one-way conversion, then maintain protobuf as the canonical contract.
+
+syntax = "proto3";
+
+package library.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "example.com/project/gen/library/v1";
+
+// Library
+//
+// Manages a small library catalog.
+service LibraryService {
+  // List books
+  //
+  // Returns the catalog in stable order.
+  rpc ListBooks(ListBooksRequest) returns (ListBooksResponse) {
+    option (google.api.http) = {
+      get: "/v1/books"
+      response_body: "items"
+    };
+  }
+
+  // Create a book
+  rpc CreateBook(CreateBookRequest) returns (CreateBookResponse) {
+    option (google.api.http) = {
+      post: "/v1/books"
+      body: "body"
+      response_body: "book"
+    };
+  }
+
+  // Get a book
+  rpc GetBook(GetBookRequest) returns (GetBookResponse) {
+    option (google.api.http) = {
+      get: "/v1/books/{book_id}"
+      response_body: "book"
+    };
+  }
+}
+
+// A cataloged book.
+message Book {
+  // Free-form string attributes.
+  map<string, string> attributes = 1;
+  // Time the book was added.
+  google.protobuf.Timestamp created_at = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true
+  ];
+  // Stable book identifier.
+  optional string id = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.uuid = true
+  ];
+  // Current lending state.
+  optional string state = 4 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.in = "available",
+    (buf.validate.field).string.in = "checked-out"
+  ];
+  // Searchable catalog tags.
+  repeated string tags = 5 [
+    (buf.validate.field).repeated.items.string.min_len = 1,
+    (buf.validate.field).repeated.unique = true
+  ];
+  // Human-readable title.
+  optional string title = 6 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.max_len = 200,
+    (buf.validate.field).string.min_len = 1
+  ];
+}
+
+// Data needed to create a book.
+message CreateBookInput {
+  // Initial catalog tags.
+  repeated string tags = 1 [
+    (buf.validate.field).repeated.items.string.min_len = 1,
+    (buf.validate.field).repeated.unique = true
+  ];
+  // Human-readable title.
+  optional string title = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.max_len = 200,
+    (buf.validate.field).string.min_len = 1
+  ];
+}
+
+// Request for CreateBook.
+message CreateBookRequest {
+  // Book data supplied by the caller.
+  CreateBookInput body = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true
+  ];
+}
+
+// The created book.
+message CreateBookResponse {
+  // The created book.
+  Book book = 1;
+}
+
+// Request for GetBook.
+message GetBookRequest {
+  // Stable book identifier.
+  optional string book_id = 1 [
+    json_name = "book-id",
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).string.uuid = true
+  ];
+  // Include historical lending state.
+  optional bool include_history = 2 [json_name = "include-history"];
+}
+
+// The requested book.
+message GetBookResponse {
+  // The requested book.
+  Book book = 1;
+}
+
+// Request for ListBooks.
+message ListBooksRequest {
+  // Maximum number of books to return.
+  optional int32 page_size = 1 [
+    json_name = "page-size",
+    (google.api.field_behavior) = REQUIRED,
+    (buf.validate.field).required = true,
+    (buf.validate.field).int32.gte = 1,
+    (buf.validate.field).int32.lte = 100
+  ];
+  // States to include.
+  repeated string state = 2 [
+    (buf.validate.field).repeated.items.string.in = "available",
+    (buf.validate.field).repeated.items.string.in = "checked-out",
+    (buf.validate.field).repeated.unique = true
+  ];
+}
+
+// Books in the catalog.
+message ListBooksResponse {
+  // Books in the catalog.
+  repeated Book items = 1;
+}

@@ -292,6 +292,21 @@
       }
     },
     {
+      "id": "openapi_proto_importer",
+      "kind": "build_tool",
+      "description": "Deterministically bootstrap reviewable proto3 source from a bundled OpenAPI 3.0/3.1 document, carrying supported HTTP bindings and representable validation annotations while rejecting unsupported or ambiguous canonical mappings.",
+      "availability": "One repository CLI emits the protobuf contract consumed by normal code generation in every language; it is a one-way build tool, not a runtime adapter or synchronization engine.",
+      "consumers": ["go", "python", "rust", "typescript"],
+      "implementation": [
+        "go/cmd/invariant-openapi",
+        "go/internal/openapiimport"
+      ],
+      "tests": [
+        "go/internal/openapiimport/importer_test.go",
+        "go/cmd/invariant-openapi/main_test.go"
+      ]
+    },
+    {
       "id": "schema_compiler_and_renderers",
       "kind": "build_tool",
       "description": "Discover annotated dataset roots, compile portable decimal/UUID/fixed-byte refinements into SchemaBundle, and render Arrow, Parquet, Iceberg, and PostgreSQL schemas.",

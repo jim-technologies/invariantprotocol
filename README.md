@@ -59,6 +59,53 @@ Generated local registration is checked against the descriptor image, so stale
 bindings fail during setup instead of creating different contracts on different
 transports.
 
+### Importing an existing OpenAPI contract
+
+`invariant-openapi` provides a strict, one-way bootstrap for teams starting
+from an OpenAPI 3.0 or 3.1 document:
+
+```bash
+go run ./go/cmd/invariant-openapi import \
+  --input openapi.yaml \
+  --package library.v1 \
+  --go-package example.com/acme/project/gen/library/v1 \
+  --output proto/library/v1/library.proto
+```
+
+The protobuf package and generated Go import path are required because OpenAPI
+contains neither stable identity. The service name defaults from `info.title`;
+use `--service` only when that name is not suitable. The importer accepts a
+self-contained document with internal schema, parameter, request-body, and
+response component references. It translates GET, POST, PUT, PATCH, and DELETE
+operations with JSON bodies, path and query parameters, common schema shapes,
+and supported validation constraints. It requires exactly one explicit
+successful response and, where content exists, exactly `application/json`.
+External references, header and cookie parameters, alternate media contracts,
+callbacks, webhooks, schema composition, and ambiguous request or success
+response mappings fail with a source-oriented diagnostic instead of silently
+inventing a protobuf contract.
+
+The output is deterministic, reviewable proto3 source, including comments,
+field presence and validation annotations where representable, a conventional
+`go_package`, and `google.api.http` bindings. Review the result once, run the
+normal Buf build and generation flow for Go, Python, Rust, and TypeScript, then
+maintain protobuf as the only canonical contract. This is not an OpenAPI
+synchronizer or a runtime conversion path.
+
+Generated contracts import Google API annotations and, when constraints are
+present, Protovalidate annotations. Add `buf.build/googleapis/googleapis` and
+`buf.build/bufbuild/protovalidate` to the consuming Buf module; the complete
+fixture is in [`testdata/openapi`](testdata/openapi). The exact supported
+intersection and fail-closed rules are documented in
+[`docs/openapi-import.md`](docs/openapi-import.md).
+
+Imported `google.api.http` bindings preserve the original route for
+annotation-aware remote-HTTP adapters and ecosystem tooling. They do not add
+REST routes to Invariant's server: HTTP serving remains Connect-only on
+`/{package.Service}/{Method}`. OpenAPI security requirements do not become
+trusted protobuf fields or gRPC metadata; authentication remains host-owned
+policy.
+
 ## Native gRPC
 
 Native gRPC is the canonical service-to-service surface. Unary,
@@ -505,14 +552,14 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.10.0`; new releases do not create language-prefixed tags. The project
+tag `v0.11.0`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.10.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.11.0
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -522,26 +569,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.10.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.11.0#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.10.0#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.11.0#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.10.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.11.0" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.10.0" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.11.0" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.10.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.11.0"
 ```
 
 For reproducible production builds, replace the tag with a full commit
@@ -582,7 +629,9 @@ does not require a scheduled dependency job.
 - Native gRPC supports every declared cardinality. HTTP, MCP, and CLI project
   unary and server-streaming; remote proxies project unary only.
 - HTTP serving is Connect-only. Invariant does not generate a first-class REST
-  server from `google.api.http` annotations.
+  server from `google.api.http` annotations. The OpenAPI importer emits those
+  annotations as outbound/tooling metadata; it does not change serving
+  behavior.
 - The MCP surface is the non-SSE tool-server subset of `2025-11-25`.
 - The data layer compiles and renders schemas. Deployment policy and physical
   writes remain consumer-owned, except for the explicit Python-to-PyArrow value

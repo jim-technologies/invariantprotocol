@@ -39,6 +39,7 @@ fmt-check: node_modules/.package-lock.json ## Verify formatting without modifyin
 	cd rust && cargo fmt --all --check
 	cd proto && buf format --diff --exit-code
 	buf format --config buf.data.yaml --diff --exit-code testdata/schema/test/v1/annotated.proto
+	cd testdata/openapi && buf format --diff --exit-code gen/library/v1/library.proto
 	cd conformance/proto && buf format --diff --exit-code
 	npm run format:check
 
@@ -50,6 +51,7 @@ lint: node_modules/.package-lock.json ## Run Go, Python, Rust, and proto linters
 	cd rust && cargo clippy --workspace --all-targets --locked -- -D warnings
 	cd proto && buf lint
 	buf lint --config buf.data.yaml --path testdata/schema/test/v1/annotated.proto
+	cd testdata/openapi && buf lint
 	cd conformance/proto && buf lint
 	npm run lint
 
@@ -81,6 +83,7 @@ fmt: node_modules/.package-lock.json ## Format code and apply safe linter fixes.
 	cd rust && cargo fmt --all
 	cd proto && buf format -w
 	buf format --config buf.data.yaml -w testdata/schema/test/v1/annotated.proto
+	cd testdata/openapi && buf format -w gen/library/v1/library.proto
 	cd conformance/proto && buf format -w
 	npm run format
 
@@ -127,7 +130,7 @@ bench: ## Run Go, Python, and Rust benchmarks.
 	cd python && uv run python bench/bench.py
 	cd rust && cargo bench --locked --bench bench -- --warm-up-time 1 --measurement-time 2
 
-generate: node_modules/.package-lock.json ## Regenerate protobuf stubs.
+generate: node_modules/.package-lock.json ## Regenerate committed build artifacts.
 	# Remove only configured generator outputs. Keep Python package markers and
 	# hand-written files; this makes deleted/renamed protos delete stale bindings.
 	find go/gen go/tests/gen -type f -name '*.pb.go' -delete
@@ -146,6 +149,9 @@ generate: node_modules/.package-lock.json ## Regenerate protobuf stubs.
 	buf build --config buf.data.yaml --path testdata/schema/test/v1/annotated.proto -o testdata/schema/descriptor.binpb
 	GOFLAGS=-mod=readonly go run ./go/cmd/invariant-schema compile --descriptor testdata/schema/descriptor.binpb --output testdata/schema/schema.binpb
 	GOFLAGS=-mod=readonly go run ./go/cmd/invariant-schema compile --descriptor python/tests/proto/descriptor.binpb --message data.v1.CanonicalRecord --message data.v1.Proto2Record --output testdata/data.schema.binpb
+	mkdir -p testdata/openapi/gen/library/v1
+	GOFLAGS=-mod=readonly go run ./go/cmd/invariant-openapi import --input testdata/openapi/library.yaml --package library.v1 --go-package example.com/project/gen/library/v1 --output testdata/openapi/gen/library/v1/library.proto
+	cd testdata/openapi && buf format -w gen/library/v1/library.proto
 
 deps: ## Tidy/update language dependency lockfiles.
 	flox upgrade
@@ -154,14 +160,15 @@ deps: ## Tidy/update language dependency lockfiles.
 	cd rust && cargo update
 	npm update
 	cd python/tests/proto && buf dep update
+	cd testdata/openapi && buf dep update
 
 breaking: ## Check proto breaking changes against BASE_REF.
 	cd proto && buf breaking --against "../.git#ref=$(BASE_REF),subdir=proto"
 
-verify-generate: ## Verify generated protobuf stubs are committed.
+verify-generate: ## Verify generated build artifacts are committed.
 	$(MAKE) generate
-	@if [ -n "$$(git status --porcelain --untracked-files=all -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen)" ]; then \
+	@if [ -n "$$(git status --porcelain --untracked-files=all -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen)" ]; then \
 		echo "Generated files are out of date. Run 'make generate' and commit the results."; \
-		git status --short -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen; \
+		git status --short -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen; \
 		exit 1; \
 	fi
