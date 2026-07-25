@@ -10,6 +10,40 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.12.0 — 2026-07-24
+
+### Added
+
+- **SchemaBundle now projects deterministically into ClickHouse.** The
+  `go/data/clickhouse` package and `invariant-schema clickhouse` command emit
+  safely quoted table-body declarations without choosing an engine or physical
+  layout. Native numeric, temporal, decimal, UUID, fixed-byte, Array, Map, and
+  named-Tuple mappings retain source storage names and return explicit
+  compatibility diagnostics.
+- **Presence and unions remain lossless in the hot schema.** Optional
+  scalar-like values use `Nullable(T)`, optional/required composites use an
+  explicit `(present, value)` Tuple, and oneofs use both a reserved
+  discriminator containing the selected protobuf field number and per-member
+  presence tuples. Generated checks require both oneof representations to
+  agree and cover required presence, UTF-8 strings, closed enums, and unique
+  map keys.
+- **Hot-to-cold publication has a versioned structural plan.**
+  `ProjectToIceberg`, `ProjectionJSON`, and the
+  `invariant-schema clickhouse-iceberg` command describe value and presence
+  expressions without adding ingestion or catalog behavior. UInt64/fixed64
+  use checked `accurateCast` to Iceberg `decimal(20,0)` with no signed or
+  floating intermediate. A pinned real-ClickHouse test verifies DDL, values,
+  constraints, and the UInt64 maximum.
+
+### Changed
+
+- **Database CLI names are dialect-specific.** `invariant-schema postgres`
+  replaces the ambiguous `sql` command now that ClickHouse is also supported.
+- **The repository has one conventional build and expanded data integration
+  gate.** `make build` builds all four language packages; `make integration`
+  now includes the guarded ClickHouse round trip alongside Git installs and
+  PostgreSQL/Atlas.
+
 ## v0.11.0 — 2026-07-24
 
 ### Added

@@ -16,10 +16,10 @@ cleanup() {
 trap cleanup EXIT
 
 {
-  GOFLAGS=-mod=readonly go run ./go/cmd/invariant-schema sql \
+  GOFLAGS=-mod=readonly go run ./go/cmd/invariant-schema postgres \
     --bundle testdata/data.schema.binpb
   printf '\n'
-  GOFLAGS=-mod=readonly go run ./go/cmd/invariant-schema sql \
+  GOFLAGS=-mod=readonly go run ./go/cmd/invariant-schema postgres \
     --bundle testdata/schema/schema.binpb
 } >"$tmp_dir/schema.sql"
 

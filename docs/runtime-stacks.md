@@ -18,8 +18,9 @@ ceremonial enterprise DDD layer stack:
 - remote gRPC and HTTP clients are outbound adapters; gRPC connections remain
   caller-owned, while HTTP transport ownership follows each language's
   idiomatic client API; and
-- the schema compiler and its Arrow, Parquet, Iceberg, and PostgreSQL renderers
-  form a separate data-schema boundary around the shared `SchemaBundle` model.
+- the schema compiler and its Arrow, Parquet, Iceberg, PostgreSQL, and
+  ClickHouse renderers form a separate data-schema boundary around the shared
+  `SchemaBundle` model.
 
 `Server` is the composition root and convenience facade, so it may construct
 adapters. An adapter must still re-enter the registered typed dispatch path; it

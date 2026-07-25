@@ -14,6 +14,7 @@ import (
 	iceberglib "github.com/apache/iceberg-go"
 	"github.com/jim-technologies/invariantprotocol/go/data"
 	invariantarrow "github.com/jim-technologies/invariantprotocol/go/data/arrow"
+	"github.com/jim-technologies/invariantprotocol/go/data/clickhouse"
 	invarianticeberg "github.com/jim-technologies/invariantprotocol/go/data/iceberg"
 	invariantparquet "github.com/jim-technologies/invariantprotocol/go/data/parquet"
 	"github.com/jim-technologies/invariantprotocol/go/data/postgres"
@@ -96,4 +97,14 @@ func TestAnnotatedFixtureCompilesAndRendersEveryTarget(t *testing.T) {
 	require.Contains(t, ddl, `"record_id" UUID`)
 	require.Contains(t, ddl, `CHECK (octet_length("digest") = 24)`)
 	require.Contains(t, ddl, `CHECK (num_nonnulls("external_id", "sequence") <= 1)`)
+
+	clickhouseSchema, _, err := clickhouse.Schema(dataset)
+	require.NoError(t, err)
+	clickhouseColumns := clickhouseSchema.ColumnDeclarations()
+	require.Contains(t, clickhouseColumns, "`amount` Nullable(Decimal(18, 4))")
+	require.Contains(t, clickhouseColumns, "`record_id` Nullable(UUID)")
+	require.Contains(t, clickhouseColumns, "`digest` Nullable(FixedString(24))")
+	require.Contains(t, clickhouseColumns, "`__invariant_oneof_reference_case` Int32 DEFAULT 0")
+	require.Contains(t, clickhouseColumns, "`external_id` Tuple(`present` Bool, `value` String)")
+	require.Contains(t, clickhouseColumns, "CHECK `__invariant_oneof_reference_case` IN (0, 4, 5)")
 }

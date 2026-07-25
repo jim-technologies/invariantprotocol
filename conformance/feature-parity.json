@@ -309,7 +309,7 @@
     {
       "id": "schema_compiler_and_renderers",
       "kind": "build_tool",
-      "description": "Discover annotated dataset roots, compile portable decimal/UUID/fixed-byte refinements into SchemaBundle, and render Arrow, Parquet, Iceberg, and PostgreSQL schemas.",
+      "description": "Discover annotated dataset roots, compile portable decimal/UUID/fixed-byte refinements into SchemaBundle, and render Arrow, Parquet, Iceberg, PostgreSQL, and ClickHouse schemas plus a ClickHouse-to-Iceberg publishing plan.",
       "availability": "One repository CLI consumes language-neutral protobuf artifacts; duplicating the compiler per runtime is forbidden.",
       "consumers": ["go", "python", "rust", "typescript"],
       "implementation": [
@@ -325,8 +325,11 @@
         "go/data/parquet/schema_test.go",
         "go/data/iceberg/schema_test.go",
         "go/data/postgres/schema_test.go",
+        "go/data/clickhouse/schema_test.go",
+        "go/data/clickhouse/integration_test.go",
         "go/cmd/invariant-schema/main_test.go",
-        "scripts/check_postgres_atlas.sh"
+        "scripts/check_postgres_atlas.sh",
+        "scripts/check_clickhouse.sh"
       ]
     },
     {

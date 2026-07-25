@@ -15,6 +15,7 @@ import (
 
 	"github.com/jim-technologies/invariantprotocol/go/data"
 	invariantarrow "github.com/jim-technologies/invariantprotocol/go/data/arrow"
+	"github.com/jim-technologies/invariantprotocol/go/data/clickhouse"
 	"github.com/jim-technologies/invariantprotocol/go/data/iceberg"
 	"github.com/jim-technologies/invariantprotocol/go/data/parquet"
 	"github.com/jim-technologies/invariantprotocol/go/data/postgres"
@@ -33,19 +34,22 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("command required: compile, arrow, parquet, iceberg, or sql")
+		return errors.New("command required: compile, arrow, parquet, iceberg, clickhouse, clickhouse-iceberg, or postgres")
 	}
 
 	switch args[0] {
 	case "compile":
 		return runCompile(args[1:], stderr)
-	case "arrow", "parquet", "iceberg", "sql":
+	case "arrow", "parquet", "iceberg", "clickhouse", "clickhouse-iceberg", "postgres":
 		return runRender(args[0], args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		writeUsage(stdout)
 		return nil
 	default:
-		return fmt.Errorf("unknown command %q; expected compile, arrow, parquet, iceberg, or sql", args[0])
+		return fmt.Errorf(
+			"unknown command %q; expected compile, arrow, parquet, iceberg, clickhouse, clickhouse-iceberg, or postgres",
+			args[0],
+		)
 	}
 }
 
@@ -53,8 +57,8 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  invariant-schema compile --descriptor FILE [--message FULL_NAME ...] --output FILE")
 	fmt.Fprintln(w, "    Without --message, messages marked (invariant.data.v1.dataset) are compiled.")
-	fmt.Fprintln(w, "  invariant-schema arrow|parquet|iceberg|sql --bundle FILE [--message FULL_NAME] [--output FILE|-]")
-	fmt.Fprintln(w, "    SQL renders every dataset when --message is omitted; other targets require one dataset.")
+	fmt.Fprintln(w, "  invariant-schema arrow|parquet|iceberg|clickhouse|clickhouse-iceberg|postgres --bundle FILE [--message FULL_NAME] [--output FILE|-]")
+	fmt.Fprintln(w, "    PostgreSQL renders every dataset when --message is omitted; other targets require one dataset.")
 }
 
 type messageFlags []string
@@ -164,8 +168,8 @@ func runRender(target string, args []string, stdout, stderr io.Writer) error {
 	}
 
 	var artifact []byte
-	if target == "sql" && messageName == "" {
-		artifact, err = renderSQLBundle(bundle, stderr)
+	if target == "postgres" && messageName == "" {
+		artifact, err = renderPostgresBundle(bundle, stderr)
 		if err != nil {
 			return err
 		}
@@ -193,10 +197,10 @@ func runRender(target string, args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func renderSQLBundle(bundle *datav1.SchemaBundle, stderr io.Writer) ([]byte, error) {
+func renderPostgresBundle(bundle *datav1.SchemaBundle, stderr io.Writer) ([]byte, error) {
 	datasets := slices.Clone(bundle.GetDatasets())
 	if len(datasets) == 0 {
-		return nil, errors.New("sql: bundle contains no datasets")
+		return nil, errors.New("postgres: bundle contains no datasets")
 	}
 	slices.SortFunc(datasets, func(left, right *datav1.DatasetSchema) int {
 		if bySource := strings.Compare(left.GetSourceMessage(), right.GetSourceMessage()); bySource != 0 {
@@ -207,8 +211,8 @@ func renderSQLBundle(bundle *datav1.SchemaBundle, stderr io.Writer) ([]byte, err
 
 	var output bytes.Buffer
 	for index, dataset := range datasets {
-		artifact, diagnostics, err := render("sql", dataset)
-		writeDiagnostics(stderr, "sql", diagnostics)
+		artifact, diagnostics, err := render("postgres", dataset)
+		writeDiagnostics(stderr, "postgres", diagnostics)
 		if err != nil {
 			return nil, err
 		}
@@ -287,10 +291,27 @@ func render(target string, dataset *datav1.DatasetSchema) ([]byte, []*datav1.Map
 			return nil, diagnostics, fmt.Errorf("iceberg: encode message %q: %w", dataset.GetSourceMessage(), err)
 		}
 		return withFinalNewline(encoded), diagnostics, nil
-	case "sql":
+	case "clickhouse":
+		schema, diagnostics, err := clickhouse.Schema(dataset)
+		if err != nil {
+			return nil, diagnostics, fmt.Errorf("clickhouse: render message %q: %w", dataset.GetSourceMessage(), err)
+		}
+		fragment := "(\n" + schema.ColumnDeclarations() + "\n)"
+		return withFinalNewline([]byte(fragment)), diagnostics, nil
+	case "clickhouse-iceberg":
+		projection, diagnostics, err := clickhouse.ProjectToIceberg(dataset)
+		if err != nil {
+			return nil, diagnostics, fmt.Errorf("clickhouse-iceberg: project message %q: %w", dataset.GetSourceMessage(), err)
+		}
+		encoded, err := clickhouse.ProjectionJSON(projection)
+		if err != nil {
+			return nil, diagnostics, fmt.Errorf("clickhouse-iceberg: encode message %q: %w", dataset.GetSourceMessage(), err)
+		}
+		return withFinalNewline(encoded), diagnostics, nil
+	case "postgres":
 		ddl, diagnostics, err := postgres.DDL(dataset)
 		if err != nil {
-			return nil, diagnostics, fmt.Errorf("sql: render message %q: %w", dataset.GetSourceMessage(), err)
+			return nil, diagnostics, fmt.Errorf("postgres: render message %q: %w", dataset.GetSourceMessage(), err)
 		}
 		return withFinalNewline([]byte(ddl)), diagnostics, nil
 	default:

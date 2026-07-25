@@ -2,8 +2,8 @@
 
 Invariant treats protobuf as the only authored **logical** type contract. A
 `FileDescriptorSet` is compiled into a versioned `invariant.data.v1.SchemaBundle`,
-and target renderers derive Arrow, Parquet, Iceberg, or PostgreSQL schemas from
-that bundle.
+and target renderers derive Arrow, Parquet, Iceberg, PostgreSQL, or ClickHouse
+schemas from that bundle.
 
 ```text
 .proto + portable data annotations + source comments
@@ -13,9 +13,9 @@ descriptor.binpb
           |
           v
 versioned SchemaBundle (generated, never hand-edited)
-     /          |          |          \
-  Arrow      Parquet    Iceberg    PostgreSQL DDL
-                                      |
+     /          |          |          |             \
+  Arrow      Parquet    Iceberg    PostgreSQL    ClickHouse
+                                      |          declarations
                                       v
                                 Atlas diff/migrate
 ```
@@ -66,11 +66,11 @@ metadata. The Parquet renderer's direct bundle mapping followed by the
 official in-process Arrow-to-Parquet schema bridge is deliberate; it does not
 use the emitted Arrow IPC artifact as evolution state.
 
-Arrow, Parquet, and Iceberg artifacts each describe one dataset, so their
-commands require `--message` when a bundle contains multiple roots. PostgreSQL
-is a database desired state: `sql` without `--message` emits every dataset table
-in deterministic source-message order. Its optional `--message` is the
-controlled single-table override.
+Arrow, Parquet, Iceberg, and ClickHouse artifacts each describe one dataset, so
+their commands require `--message` when a bundle contains multiple roots.
+PostgreSQL is a database desired state: `postgres` without `--message` emits
+every dataset table in deterministic source-message order. Its optional
+`--message` is the controlled single-table override.
 
 ## Dataset roots
 
@@ -171,27 +171,29 @@ adding the new one, or by starting a distinct bundle.
 
 The bundle retains exact protobuf scalar spellings (`int64` versus `sint64`,
 for example) even when a target uses the same logical value type for both.
-Enums remain numeric with their full number/name/alias metadata, preserving
-unknown future values and avoiding data changes when a symbol is renamed.
+Enums remain numeric with their full number/name/alias metadata, avoiding data
+changes when a symbol is renamed. Open enums preserve unknown future numeric
+values; closed enums retain their declared numeric domain and receive target
+checks where the target can enforce it.
 
-| Protobuf logical value | Arrow / Parquet | Iceberg | PostgreSQL |
-| --- | --- | --- | --- |
-| signed 32-bit | `int32` / `INT32` | `int` | `integer` |
-| signed 64-bit | `int64` / `INT64` | `long` | `bigint` |
-| `uint32`, `fixed32` | `uint32` / `UINT_32` | `long` | `bigint` |
-| `uint64`, `fixed64` | `uint64` / `UINT_64` | `decimal(20,0)` | `numeric(20,0)` |
-| `float`, `double` | native 32/64-bit float | `float`, `double` | `real`, `double precision` |
-| `bool`, `string`, `bytes` | native equivalents | native equivalents | `boolean`, `text`, `bytea` |
-| enum | `int32` plus enum metadata | `int` | `integer` |
-| nested message | struct/group | struct | `jsonb` |
-| repeated field | list | list | `jsonb` |
-| map | typed map | typed map | `jsonb` |
-| `Timestamp` | UTC nanoseconds | `timestamptz_ns` | `timestamptz` (microseconds) |
-| `Duration` | duration/int64 nanoseconds | long nanoseconds | bigint nanoseconds |
-| `Any`, `Struct`, `Value`, `ListValue` | JSON representation | string JSON | `jsonb` |
-| annotated decimal text | `decimal128` / `DECIMAL` | `decimal` | `numeric` |
-| annotated canonical UUID text | `arrow.uuid` / `UUID` | `uuid` | `uuid` |
-| annotated exact-width bytes | fixed-size binary / `FIXED_LEN_BYTE_ARRAY` | `fixed` | `bytea` plus length check |
+| Protobuf logical value | Arrow / Parquet | Iceberg | PostgreSQL | ClickHouse |
+| --- | --- | --- | --- | --- |
+| signed 32-bit | `int32` / `INT32` | `int` | `integer` | `Int32` |
+| signed 64-bit | `int64` / `INT64` | `long` | `bigint` | `Int64` |
+| `uint32`, `fixed32` | `uint32` / `UINT_32` | `long` | `bigint` | `UInt32` |
+| `uint64`, `fixed64` | `uint64` / `UINT_64` | `decimal(20,0)` | `numeric(20,0)` | `UInt64` |
+| `float`, `double` | native 32/64-bit float | `float`, `double` | `real`, `double precision` | `Float32`, `Float64` |
+| `bool`, `string`, `bytes` | native equivalents | native equivalents | `boolean`, `text`, `bytea` | `Bool`, `String`, `String` |
+| enum | `int32` plus enum metadata | `int` | `integer` | `Int32` |
+| nested message | struct/group | struct | `jsonb` | named `Tuple` |
+| repeated field | list | list | `jsonb` | `Array(T)` |
+| map | typed map | typed map | `jsonb` | `Map(K,V)` plus unique-key check |
+| `Timestamp` | UTC nanoseconds | `timestamptz_ns` | `timestamptz` (microseconds) | `DateTime64(9,'UTC')` |
+| `Duration` | duration/int64 nanoseconds | long nanoseconds | bigint nanoseconds | `Int64` nanoseconds |
+| `Any`, `Struct`, `Value`, `ListValue` | JSON representation | string JSON | `jsonb` | ProtoJSON `String` |
+| annotated decimal text | `decimal128` / `DECIMAL` | `decimal` | `numeric` | `Decimal(P,S)` |
+| annotated canonical UUID text | `arrow.uuid` / `UUID` | `uuid` | `uuid` | `UUID` |
+| annotated exact-width bytes | fixed-size binary / `FIXED_LEN_BYTE_ARRAY` | `fixed` | `bytea` plus length check | `FixedString(N)` |
 
 Renderers return a mapping diagnostic for every logical node. Widening, range
 reduction, precision reduction, representation changes, and unsupported
@@ -200,6 +202,8 @@ Iceberg nanosecond timestamps use an `int64` count, so they preserve precision
 but cover less than protobuf Timestamp's year 0001–9999 range. The same range
 limit applies when protobuf Duration becomes an `int64` nanosecond count.
 PostgreSQL timestamps cover the protobuf range but cannot retain nanoseconds.
+ClickHouse `DateTime64(9,'UTC')` retains nanoseconds but covers approximately
+1677-09-21 through 2262-04-11, so its Timestamp diagnostic is range-reduced.
 Iceberg schemas require format version 3 when they use nanosecond timestamps or
 Invariant's non-null protobuf defaults.
 
@@ -216,7 +220,9 @@ closed enum projected onto an unconstrained integer, or a oneof projected to
 independent Arrow/Parquet/Iceberg fields, widens the target's valid state set.
 PostgreSQL enforces top-level oneofs with a check constraint, but its `text`
 and `jsonb` types cannot represent U+0000 even though that code point is valid
-inside a protobuf string.
+inside a protobuf string. ClickHouse emits recursive checks for valid UTF-8
+protobuf strings, closed enum numbers, unique protobuf map keys, required
+presence, and oneof discriminators.
 
 Presence is compiled from native descriptors rather than guessed from syntax:
 
@@ -226,6 +232,28 @@ Presence is compiled from native descriptors rather than guessed from syntax:
 - oneof members are nullable and retain their oneof group;
 - repeated/map containers are non-null with empty defaults; and
 - list elements and map keys/values are non-null.
+
+ClickHouse uses the following deterministic physical presence convention:
+
+- explicit scalar-like fields, including Timestamp, Duration, decimal, UUID,
+  fixed bytes, and ProtoJSON, use `Nullable(T)`;
+- explicit composite fields use
+  `Tuple(present Bool, value T)` because `Nullable(Array)` and `Nullable(Map)`
+  are unsupported and `Nullable(Tuple)` is still disabled beta behavior;
+- required fields use the same tuple wrapper plus a `CHECK present`, preventing
+  ClickHouse from replacing an omitted required column with its type default;
+- each real oneof adds `__invariant_oneof_<oneof>_case Int32`, where `0`
+  means unset and a nonzero value is the selected protobuf field number; every
+  member uses `Tuple(present Bool, value T)`, and checks require its presence
+  bit to agree with the discriminator; and
+- repeated and map containers remain non-null with empty defaults.
+
+This convention distinguishes absence from empty/default values and avoids
+session settings. The member presence bit is authoritative alongside the
+discriminator, so a synthetic discriminator is never the only persisted
+presence state. The `__invariant_` storage-name prefix is reserved for
+renderer-generated columns and rejected on authored fields. All identifiers
+are backtick quoted without normalizing the committed storage name.
 
 Decimal values use one canonical fixed-scale spelling: optional `-`, an integer
 of `0` or a non-zero digit followed by digits, and—when scale is non-zero—a
@@ -311,6 +339,103 @@ nested containers remain part of their `jsonb` representation. It does not
 invent primary keys, foreign keys, uniqueness, indexes, normalization, or
 partitioning.
 
+## ClickHouse hot schema
+
+`invariant-schema clickhouse` emits a parenthesized table-body fragment for one
+dataset:
+
+```bash
+go run ./go/cmd/invariant-schema clickhouse \
+  --bundle data.schema.binpb \
+  --message example.v1.Event \
+  --output event.clickhouse.sql
+```
+
+The same bundle can emit the versioned, language-neutral hot-to-cold
+conversion plan:
+
+```bash
+go run ./go/cmd/invariant-schema clickhouse-iceberg \
+  --bundle data.schema.binpb \
+  --message example.v1.Event \
+  --output event.clickhouse-iceberg.json
+```
+
+The fragment contains column declarations, source comments on top-level
+columns, protobuf-compatible defaults, and the required logical constraints.
+It intentionally contains no `CREATE TABLE`, database name, engine,
+`ORDER BY`, `PARTITION BY`, TTL, storage policy, index, projection, or codec.
+The application combines the fragment with its reviewed physical policy.
+`TableSchema.Description` retains the dataset comment; a table-level
+ClickHouse `COMMENT` follows the engine clause and therefore remains part of
+that application-owned wrapper.
+
+Generated `CHECK` constraints validate inserted data. ClickHouse mutations can
+bypass or invalidate checks depending on the mutation path, so applications
+that allow `ALTER ... UPDATE` must validate those writes at their boundary as
+well; the declarations are schema guards, not an authorization boundary.
+The artifact is desired column state, not an `ALTER TABLE` plan. Applications
+must review and execute in-place evolution and historical-row backfills,
+including changes to a oneof's allowed case set. Per-member presence prevents
+an old discriminator value from being reinterpreted as a new member.
+
+Named tuples retain finite nested messages. Empty messages use one constrained
+synthetic unit element because ClickHouse has no empty Tuple. `Map(K,V)` keeps
+the protobuf key/value types and adds a recursive uniqueness check because
+ClickHouse otherwise permits duplicate keys. Closed enums add an allowed-number
+check; open enums remain unconstrained `Int32`, preserving unknown numbers.
+ClickHouse reserves `null` as a Tuple element name, so that otherwise
+non-canonical storage name is rejected with an unsupported diagnostic. Tuple
+syntax has no per-element comments: nested comments remain canonical in
+SchemaBundle, while ClickHouse `COMMENT` clauses are emitted for top-level
+columns.
+`FixedString(N)` is emitted only for widths 1–256 so the schema needs no
+`allow_suspicious_fixed_string_types` setting. Every publisher must still
+validate exact width before insertion because ClickHouse pads shorter
+`FixedString` input with NUL bytes.
+
+The Go API is:
+
+```go
+schema, diagnostics, err := clickhouse.Schema(dataset)
+fragment := schema.ColumnDeclarations()
+
+projection, projectionDiagnostics, err := clickhouse.ProjectToIceberg(dataset)
+encoded, err := clickhouse.ProjectionJSON(projection)
+```
+
+`ProjectToIceberg` is a structural publishing plan over the existing
+`iceberg.Schema(dataset)` representation. Each node carries `{value}` and,
+for oneofs, `{case}` expression templates plus a separate presence predicate;
+publishers can therefore emit null for absent optional composite values without
+enabling beta `Nullable(Tuple)` behavior. Unsigned 64-bit leaves use exactly
+`accurateCast({value}, 'Decimal(20, 0)')`: the maximum UInt64 value
+18,446,744,073,709,551,615 is below the Decimal(20,0) maximum and is converted
+without a signed or floating-point intermediate. `uint32`/`fixed32` use
+`toInt64`, and timestamps use `toUnixTimestamp64Nano`.
+Its diagnostics include both the ClickHouse source mapping and Iceberg target
+mapping, so range or representation differences on either side remain visible.
+
+This plan is not a writer, buffer, watermark manager, direct ClickHouse-to-
+Iceberg `INSERT`, or catalog integration. The application evaluates the plan
+while publishing rows and owns retries, transactions, table format/version,
+and catalog commits. A protobuf `required` field remains unsupported by the
+Iceberg projection because historical Iceberg rows have no safe missing value,
+even though the native ClickHouse schema can enforce it.
+
+The ordinary Go test skips the live boundary unless
+`INVARIANT_CLICKHOUSE_URL` is set. The repository command starts an exact
+pinned ClickHouse image and runs the guarded DDL/value round trip:
+
+```bash
+flox activate -- make clickhouse-integration
+```
+
+That test wraps the generated declarations in a test-owned `MergeTree`,
+round-trips absent/present/default values, validates oneof and required
+constraints, rejects duplicate map keys and invalid UTF-8, and proves the
+maximum UInt64 converts exactly to Decimal(20,0).
+
 ## Deliberate schema boundary
 
 This release compiles and renders **schemas**, and Python can convert matching
@@ -330,4 +455,5 @@ The format references behind these decisions are the
 [Parquet logical types](https://parquet.apache.org/docs/file-format/types/logicaltypes/),
 [Iceberg schema evolution rules](https://iceberg.apache.org/docs/latest/evolution/#schema-evolution),
 [protobuf field presence](https://protobuf.dev/programming-guides/field_presence/),
-and [Atlas SQL schema sources](https://atlasgo.io/atlas-schema/sql).
+[Atlas SQL schema sources](https://atlasgo.io/atlas-schema/sql), and
+[ClickHouse data types](https://clickhouse.com/docs/reference/data-types).

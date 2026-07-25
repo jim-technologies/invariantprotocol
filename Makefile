@@ -1,11 +1,17 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help check quality version-check parity parity-release git-install-check data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate deps verify-generate breaking
+.PHONY: help build check quality version-check parity parity-release git-install-check postgres-integration clickhouse-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
 help: ## Show available make targets.
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+build: node_modules/.package-lock.json ## Build every language package and command.
+	GOFLAGS=-mod=readonly go build ./...
+	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; cd python && uv build --out-dir "$$tmp"
+	cd rust && cargo build --workspace --locked
+	npm run build
 
 # Single local entry point. CI runs quality and language coverage as separate
 # jobs so failures are easy to identify and the four suites execute in parallel.
@@ -28,8 +34,13 @@ parity-release: ## Reject a release while any core feature lacks four-language s
 git-install-check: ## Install every language package from the current Git commit.
 	scripts/check_git_installs.sh
 
-data-integration: ## Apply and round-trip generated SQL through PostgreSQL and Atlas.
+postgres-integration: ## Apply and round-trip generated PostgreSQL through Atlas.
 	scripts/check_postgres_atlas.sh
+
+clickhouse-integration: ## Apply generated declarations and round-trip values through ClickHouse.
+	scripts/check_clickhouse.sh
+
+data-integration: postgres-integration clickhouse-integration ## Exercise every external data-schema boundary.
 
 integration: git-install-check data-integration ## Exercise Git installation and external data boundaries.
 

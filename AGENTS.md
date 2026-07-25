@@ -11,8 +11,8 @@ One protobuf definition → all protocols. Write a `.proto` file with comments, 
 - **HTTP** — Connect endpoints over the canonical gRPC method paths
 - **gRPC** — native generated-service registration and language-standard serving
 - **Data schemas** — annotated dataset roots compile once into a versioned
-  logical bundle rendered as Arrow, Parquet, Iceberg, or PostgreSQL; explicit
-  `--message` selection is the controlled-build override
+  logical bundle rendered as Arrow, Parquet, Iceberg, PostgreSQL, or
+  ClickHouse; explicit `--message` selection is the controlled-build override
 
 The core idea: proto comments become tool descriptions, field comments become JSON Schema descriptions, enums become constrained choices. Zero glue code.
 
@@ -25,7 +25,7 @@ The core idea: proto comments become tool descriptions, field comments become JS
        │                                                    │
        ├─ invariant.Server ←──── generated registration ────┘
        │    └─ native gRPC / HTTP / MCP / CLI
-       └─ invariant-schema → SchemaBundle → Arrow / Parquet / Iceberg / PostgreSQL
+       └─ invariant-schema → SchemaBundle → Arrow / Parquet / Iceberg / PostgreSQL / ClickHouse
 ```
 
 The descriptor image is a compiled artifact, not a second authored contract.
@@ -143,8 +143,9 @@ second native gRPC listener.
 `proto/invariant/data/v1/schema.proto` is the language-neutral IR. There is one
 descriptor compiler in `go/data`; Python, Rust, and TypeScript decode the same
 generated bundle rather than reimplementing protobuf inference. Target
-renderers live in isolated `go/data/{arrow,parquet,iceberg,postgres}` packages,
-and `go/cmd/invariant-schema` is the build-time CLI.
+renderers live in isolated
+`go/data/{arrow,parquet,iceberg,postgres,clickhouse}` packages, and
+`go/cmd/invariant-schema` is the build-time CLI.
 
 Python's optional data surface maps a bundle dataset to `pyarrow.Schema` and
 matching generated protobuf messages to `pyarrow.Table`; standard PyArrow owns
@@ -180,6 +181,25 @@ carry protobuf-compatible initial/write defaults, while protobuf `required`
 fields are rejected because historical rows have no safe missing value.
 PostgreSQL emits desired-state DDL directly for Atlas; do not introduce HCL as
 an intermediate source.
+
+ClickHouse emits only column and constraint declarations, never a table engine
+or physical layout. Optional scalar-like fields use `Nullable(T)`. Optional
+composites use `Tuple(present Bool, value T)` because stable ClickHouse does not
+support nullable arrays/maps and nullable tuples remain beta. Required fields
+use the same wrapper plus a presence check. Oneofs use an explicit
+`__invariant_oneof_<oneof>_case Int32` discriminator containing `0` or the
+selected protobuf field number. Every member also uses
+`Tuple(present Bool, value T)`, with checks requiring both representations to
+agree, so the synthetic discriminator is not the sole source of presence. The
+`__invariant_` prefix is renderer-owned. Quote committed storage names without
+normalizing them.
+
+The ClickHouse-to-Iceberg model is a structural publishing plan over the
+existing sibling schemas, not an ingestion runtime or direct catalog bridge.
+Keep presence separate from values so optional composite rows never require
+beta `Nullable(Tuple)`. The UInt64/fixed64 boundary must remain the checked,
+exact `accurateCast(value, 'Decimal(20, 0)')`; never pass through Float64 or
+Int64.
 
 The committed SchemaBundle—not an Arrow IPC projection—is the evolution
 registry. Arrow-Go v18 preserves the map shape but does not round-trip custom
@@ -395,9 +415,10 @@ and runtime projections are derived from the exact same compiled graph.
 ```bash
 flox activate
 make generate        # regenerate proto stubs and descriptor artifacts
+make build           # build every language package and command
 make check           # quality checks and maintained coverage floors for all four languages
 make security        # secrets, integrity, and vulnerability checks
-make integration     # Git installs plus disposable PostgreSQL/Atlas; requires Docker
+make integration     # Git installs plus PostgreSQL/Atlas and ClickHouse; requires Docker
 make parity-release  # strict portable-feature gate before one root tag
 ```
 
@@ -437,17 +458,19 @@ Dependency roots and lockfiles:
   that package path; their `go.mod` records the root module
   `github.com/jim-technologies/invariantprotocol`. Never recreate a nested Go
   module or new `go/vX.Y.Z` tags. Apache Arrow/Parquet and Iceberg dependencies
-  belong only to the isolated data-renderer packages; do not pull them into the
-  RPC runtime package.
+  belong only to the isolated data-renderer packages; the ClickHouse renderer
+  uses the standard library and the existing Iceberg model. Do not pull data
+  dependencies into the RPC runtime package.
 - **`rust/Cargo.toml` + `rust/Cargo.lock`** — the Rust runtime and codegen
   workspace. Commit the lockfile and use `--locked` in integrity checks.
 - **`package.json` + `package-lock.json`** — every TypeScript runtime and dev
   dep, including Biome and Vitest V8 coverage. TypeScript source remains in
   `typescript/`; `npm ci` resolves from the repository root.
 
-The Atlas integration uses the pinned PostgreSQL 18.4 Docker image and requires
-a host Docker daemon. It verifies the generated desired state; it is not a
-production DDL-application API.
+The data integration uses pinned PostgreSQL 18.4 and ClickHouse Docker images
+and requires a host Docker daemon. It verifies generated desired state,
+ClickHouse declarations, constraints, value round trips, and the exact UInt64
+conversion; it is not a production DDL-application or publishing API.
 
 CI (`.github/workflows/ci.yml`) runs everything inside `flox activate`, so contributors and CI hit the same toolchain by construction.
 
@@ -502,4 +525,7 @@ as stdio; do not add a second tool registry.
   path currently uses canonical Connect routes
 - Go-native protobuf-record to Arrow conversion and framework-owned data-file writing
 - Iceberg catalog commits, partition policies, and table migration/application
+- ClickHouse engines, sorting/partition keys, TTLs, codecs, indexes,
+  projections, storage policies, ingestion, and direct Iceberg publication
 - Relational keys, indexes, normalization, and SQL dialects beyond PostgreSQL
+  and ClickHouse

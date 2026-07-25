@@ -76,8 +76,12 @@ the portable remote-HTTP contract is the canonical Connect method path.
 The data compiler follows the same rule: dataset and field annotations are
 language-neutral protobuf options, one Go build tool compiles the descriptor
 image, and all four languages decode the same versioned SchemaBundle. Decimal,
-UUID, and fixed-byte refinements are generated IR variants in every reader;
-PyArrow record conversion remains a Python ecosystem adapter.
+UUID, and fixed-byte refinements are generated IR variants in every reader.
+The same build tool renders Arrow, Parquet, Iceberg, PostgreSQL, and ClickHouse
+artifacts, including a language-neutral structural ClickHouse-to-Iceberg
+publishing plan; duplicating target inference in four runtimes would create
+competing schemas. PyArrow record conversion remains a Python ecosystem
+adapter.
 
 The OpenAPI importer is a build-time bootstrap, not a portable runtime surface
 or synchronization engine. It accepts bundled OpenAPI 3.0/3.1 input, produces

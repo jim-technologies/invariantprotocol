@@ -144,7 +144,7 @@ func TestRenderersEmitOfficialArtifactsAndSelectMessage(t *testing.T) {
 	bundle.Datasets = append(bundle.Datasets, oneFieldBundle("example.v1.First").Datasets[0])
 	bundlePath := writeBundle(t, bundle)
 
-	for _, target := range []string{"arrow", "parquet", "iceberg"} {
+	for _, target := range []string{"arrow", "parquet", "iceberg", "clickhouse-iceberg"} {
 		t.Run(target+" requires selection", func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			err := run([]string{target, "--bundle", bundlePath}, &stdout, &stderr)
@@ -153,9 +153,9 @@ func TestRenderersEmitOfficialArtifactsAndSelectMessage(t *testing.T) {
 		})
 	}
 
-	t.Run("sql renders the complete bundle deterministically", func(t *testing.T) {
+	t.Run("postgres renders the complete bundle deterministically", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		require.NoError(t, run([]string{"sql", "--bundle", bundlePath}, &stdout, &stderr))
+		require.NoError(t, run([]string{"postgres", "--bundle", bundlePath}, &stdout, &stderr))
 		ddl := stdout.String()
 		require.Equal(t, 2, strings.Count(ddl, "CREATE TABLE"))
 		first := strings.Index(ddl, `CREATE TABLE "example_v1_first"`)
@@ -164,8 +164,26 @@ func TestRenderersEmitOfficialArtifactsAndSelectMessage(t *testing.T) {
 		require.NotEqual(t, -1, second)
 		assert.Less(t, first, second, "bundle SQL must be independent of input dataset order")
 		assert.Contains(t, ddl, ");\n\nCREATE TABLE", "dataset statements must have one readable separator")
-		assert.Equal(t, 2, strings.Count(stderr.String(), "sql: MAPPING_COMPATIBILITY_LOSSLESS: id:"))
+		assert.Equal(t, 2, strings.Count(stderr.String(), "postgres: MAPPING_COMPATIBILITY_LOSSLESS: id:"))
 		assert.NotContains(t, ddl, "MAPPING_COMPATIBILITY")
+	})
+
+	t.Run("clickhouse requires selection and emits only a table body", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		err := run([]string{"clickhouse", "--bundle", bundlePath}, &stdout, &stderr)
+		require.EqualError(t, err, "clickhouse: --message is required because bundle contains 2 datasets")
+		assert.Empty(t, stdout.String())
+
+		require.NoError(t, run([]string{
+			"clickhouse",
+			"--bundle", bundlePath,
+			"--message", "example.v1.Second",
+		}, &stdout, &stderr))
+		assert.Contains(t, stdout.String(), "(\n  `id` Int64 DEFAULT 0")
+		assert.NotContains(t, stdout.String(), "CREATE TABLE")
+		assert.NotContains(t, stdout.String(), "ENGINE")
+		assert.True(t, strings.HasSuffix(stdout.String(), "\n)\n"))
+		assert.Contains(t, stderr.String(), "clickhouse: MAPPING_COMPATIBILITY_LOSSLESS: id:")
 	})
 
 	var stdout, stderr bytes.Buffer
@@ -175,7 +193,8 @@ func TestRenderersEmitOfficialArtifactsAndSelectMessage(t *testing.T) {
 	}{
 		{target: "parquet", contains: "group field_id=-1 example_v1_second"},
 		{target: "iceberg", contains: `"type":"struct"`},
-		{target: "sql", contains: `CREATE TABLE "example_v1_second"`},
+		{target: "clickhouse-iceberg", contains: `"version":1`},
+		{target: "postgres", contains: `CREATE TABLE "example_v1_second"`},
 	} {
 		t.Run(test.target, func(t *testing.T) {
 			stdout.Reset()
@@ -194,14 +213,14 @@ func TestRenderersEmitOfficialArtifactsAndSelectMessage(t *testing.T) {
 	}
 }
 
-func TestSQLRejectsAnEmptyBundle(t *testing.T) {
+func TestPostgresRejectsAnEmptyBundle(t *testing.T) {
 	bundlePath := writeBundle(t, &datav1.SchemaBundle{
 		IrVersion:      data.IRVersion,
 		MappingVersion: data.MappingVersion,
 	})
 	var stdout, stderr bytes.Buffer
-	err := run([]string{"sql", "--bundle", bundlePath}, &stdout, &stderr)
-	require.EqualError(t, err, "sql: bundle contains no datasets")
+	err := run([]string{"postgres", "--bundle", bundlePath}, &stdout, &stderr)
+	require.EqualError(t, err, "postgres: bundle contains no datasets")
 	assert.Empty(t, stdout.String())
 	assert.Empty(t, stderr.String())
 }
@@ -211,7 +230,7 @@ func TestRenderOutputFileDoesNotContainDiagnostics(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "schema.sql")
 	var stdout, stderr bytes.Buffer
 	require.NoError(t, run([]string{
-		"sql",
+		"postgres",
 		"--bundle", bundlePath,
 		"--output", outputPath,
 	}, &stdout, &stderr))
@@ -249,7 +268,7 @@ func TestRenderRejectsUnknownBundleVersions(t *testing.T) {
 			test.mutate(bundle)
 			bundlePath := writeBundle(t, bundle)
 			var stdout, stderr bytes.Buffer
-			err := run([]string{"sql", "--bundle", bundlePath}, &stdout, &stderr)
+			err := run([]string{"postgres", "--bundle", bundlePath}, &stdout, &stderr)
 			require.ErrorContains(t, err, test.wantError)
 			assert.Empty(t, stdout.String())
 			assert.Empty(t, stderr.String())

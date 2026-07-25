@@ -14,8 +14,8 @@ runtimes. Language-specific ecosystem adapters remain explicit rather than
 being mistaken for portable runtime features.
 
 Annotated protobuf dataset messages can also compile into one versioned data
-schema for Arrow, Parquet, Iceberg, and PostgreSQL. Explicit `--message`
-selection remains available for controlled builds.
+schema for Arrow, Parquet, Iceberg, PostgreSQL, and ClickHouse. Explicit
+`--message` selection remains available for controlled builds.
 
 ```text
 .proto (the only authored contract)
@@ -25,7 +25,7 @@ selection remains available for controlled builds.
        ├─ invariant.Server ←──── generated registration ────┘
        │    └─ native gRPC / HTTP-Connect / MCP / CLI
        └─ invariant-schema → SchemaBundle
-                              └─ Arrow / Parquet / Iceberg / PostgreSQL
+                              └─ Arrow / Parquet / Iceberg / PostgreSQL / ClickHouse
 ```
 
 Proto comments become MCP tool descriptions, CLI help, JSON Schema field
@@ -493,8 +493,12 @@ go run ./go/cmd/invariant-schema parquet \
   --bundle ledger.schema.binpb --output ledger.parquet.schema
 go run ./go/cmd/invariant-schema iceberg \
   --bundle ledger.schema.binpb --output ledger.iceberg.json
-go run ./go/cmd/invariant-schema sql \
+go run ./go/cmd/invariant-schema postgres \
   --bundle ledger.schema.binpb --output ledger.sql
+go run ./go/cmd/invariant-schema clickhouse \
+  --bundle ledger.schema.binpb --output ledger.clickhouse.sql
+go run ./go/cmd/invariant-schema clickhouse-iceberg \
+  --bundle ledger.schema.binpb --output ledger.clickhouse-iceberg.json
 ```
 
 `compile` reads an existing output bundle before replacing it. Numeric
@@ -508,14 +512,15 @@ Repeated `--message` flags can explicitly select roots for controlled or
 one-off builds; annotation discovery is the normal convention. Commit and
 review the bundle, but continue to author only protobuf.
 
-When a bundle contains multiple datasets, `sql` emits every table in
+When a bundle contains multiple datasets, `postgres` emits every table in
 deterministic source-message order so the result is one complete Atlas desired
-state. Pass `--message` to render one table as a controlled override.
-Arrow, Parquet, and Iceberg artifacts each describe one dataset and therefore
-require `--message` for a multi-dataset bundle.
+state. Pass `--message` to render one table as a controlled override. Arrow,
+Parquet, Iceberg, and ClickHouse artifacts each describe one dataset and
+therefore require `--message` for a multi-dataset bundle.
 
 Portable field refinements map canonical decimal text, canonical UUID text,
-and exact-width bytes to native Arrow, Parquet, Iceberg, and PostgreSQL types.
+and exact-width bytes to native Arrow, Parquet, Iceberg, PostgreSQL, and
+ClickHouse types.
 Annotations declare those value domains; they do not validate message values by
 themselves. Python's `arrow_table()` currently enforces the canonical values,
 and other writers must validate at their own boundary. The options do not
@@ -528,6 +533,24 @@ PostgreSQL 18.4, verifies defaults, nullability, collection defaults, comments,
 and constraints in the live catalog, and requires a zero diff. Invariant does
 not infer keys, indexes, partitions, catalog operations, file layout, or
 migrations, and it does not apply production database changes.
+
+The ClickHouse renderer emits only a parenthesized table-body fragment:
+deterministic columns, comments, defaults, and logical `CHECK` constraints. It
+does not choose `MergeTree`, `ORDER BY`, partitions, TTLs, codecs, indexes,
+projections, or storage policy. Optional scalar-like values use `Nullable(T)`;
+optional composite values use `Tuple(present Bool, value T)` because stable
+ClickHouse cannot wrap arrays/maps and does not enable nullable tuples by
+default. Oneofs use an explicit
+`__invariant_oneof_<oneof>_case Int32` discriminator whose nonzero value is
+the selected protobuf field number. Each member is also a
+`Tuple(present Bool, value T)`, and generated checks require the discriminator
+and member presence to agree. This redundancy prevents a synthetic column from
+becoming the sole source of protobuf presence and preserves selected defaults
+through schema evolution. The `__invariant_` namespace is renderer-owned. A
+structural ClickHouse-to-Iceberg publishing plan keeps presence separate from
+values and uses `accurateCast(value, 'Decimal(20, 0)')` for the exact
+full-domain `UInt64` conversion. It is not an ingestion runtime or a
+ClickHouse/Iceberg catalog integration.
 
 Python's optional data adapter converts a bundle dataset and matching generated
 messages into a real `pyarrow.Table`:
@@ -552,14 +575,14 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.11.0`; new releases do not create language-prefixed tags. The project
+tag `v0.12.0`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.11.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.12.0
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -569,26 +592,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.11.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.0#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.11.0#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.0#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.11.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.0" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.11.0" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.0" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.11.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.12.0"
 ```
 
 For reproducible production builds, replace the tag with a full commit
@@ -604,9 +627,10 @@ dependency, or a `protoc -I` path) so
 ```bash
 flox activate
 make generate
+make build
 make check        # quality checks and coverage-gated suites for all four languages
 make security
-make integration  # Git-install and PostgreSQL/Atlas boundaries; requires Docker
+make integration  # Git installs, PostgreSQL/Atlas, and ClickHouse; requires Docker
 make parity-release
 make bench
 ```
@@ -619,10 +643,11 @@ instead of being duplicated for artificial symmetry. See
 [feature parity](docs/feature-parity.md) and [runtime stack policy](docs/runtime-stacks.md).
 
 CI runs quality checks, four coverage-gated suites, dependency and secret
-audits, generated-code checks, clean Git installs, and PostgreSQL/Atlas
-apply-inspect-diff integration. Pull requests also run protobuf breaking
-checks. Dependency upgrades are intentional and review-driven; the repository
-does not require a scheduled dependency job.
+audits, generated-code checks, clean Git installs, PostgreSQL/Atlas
+apply-inspect-diff integration, and a real ClickHouse DDL/value round trip.
+Pull requests also run protobuf breaking checks. Dependency upgrades are
+intentional and review-driven; the repository does not require a scheduled
+dependency job.
 
 ## Deliberate scope
 
