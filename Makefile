@@ -35,6 +35,16 @@ git-install-check: ## Install every language package from the current Git commit
 	scripts/check_git_installs.sh
 
 connect-interop: node_modules/.package-lock.json ## Exercise Go, Python, and Rust HTTP projections with Connect-ES.
+	@set -eu; \
+	tmp="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	rust_target="$${CARGO_TARGET_DIR:-rust/target}"; \
+	case "$$rust_target" in /*) ;; *) rust_target="$(CURDIR)/$$rust_target" ;; esac; \
+	GOFLAGS=-mod=readonly go build -o "$$tmp/go-connect-interop" ./go/tests/connectinterop; \
+	uv sync --locked --project python; \
+	cargo build --manifest-path rust/Cargo.toml --locked --target-dir "$$rust_target" --example connect_interop_server; \
+	INVARIANT_CONNECT_INTEROP_GO="$$tmp/go-connect-interop" \
+	INVARIANT_CONNECT_INTEROP_RUST="$$rust_target/debug/examples/connect_interop_server" \
 	node typescript/tests/connect_interop.ts
 
 postgres-integration: ## Apply and round-trip generated PostgreSQL through Atlas.

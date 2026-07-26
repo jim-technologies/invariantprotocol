@@ -19,6 +19,10 @@ but never silent wire-behavior regressions.
   intentionally unshallow and release-tag verification rejects shallow
   checkouts early with an actionable diagnostic. The temporary source still
   uses an independent Git transport clone and never includes worktree state.
+- **Connect interoperability readiness no longer includes compiler latency.**
+  The Go and Rust fixtures are built before their servers start, so the
+  readiness deadline measures process startup instead of a cold toolchain
+  build.
 
 ## v0.12.1 — 2026-07-26
 

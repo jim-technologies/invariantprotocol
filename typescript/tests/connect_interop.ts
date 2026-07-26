@@ -16,7 +16,13 @@ const resolvedService = createFileRegistry(descriptor).getService("greet.v1.Gree
 assert.ok(resolvedService, "shared descriptor is missing greet.v1.GreetService");
 const greetService = resolvedService as typeof import("./gen/greet_pb.js").GreetService;
 
-const startupTimeoutMs = 120_000;
+const goServer = process.env.INVARIANT_CONNECT_INTEROP_GO;
+const rustServer = process.env.INVARIANT_CONNECT_INTEROP_RUST;
+if (!goServer || !rustServer) {
+  throw new Error("run this interoperability check through `make connect-interop`");
+}
+
+const startupTimeoutMs = 30_000;
 const shutdownTimeoutMs = 5_000;
 const rpcTimeoutMs = 5_000;
 
@@ -30,20 +36,20 @@ type Runtime = {
 const runtimes: Runtime[] = [
   {
     name: "Go",
-    command: "go",
-    args: ["run", "./go/tests/connectinterop"],
+    command: goServer,
+    args: [],
     cwd: root,
   },
   {
     name: "Python",
     command: "uv",
-    args: ["run", "python", "tests/connect_interop_server.py"],
+    args: ["run", "--locked", "--no-sync", "python", "tests/connect_interop_server.py"],
     cwd: fileURLToPath(new URL("../../python", import.meta.url)),
   },
   {
     name: "Rust",
-    command: "cargo",
-    args: ["run", "--quiet", "--locked", "--example", "connect_interop_server"],
+    command: rustServer,
+    args: [],
     cwd: fileURLToPath(new URL("../../rust", import.meta.url)),
   },
 ];
