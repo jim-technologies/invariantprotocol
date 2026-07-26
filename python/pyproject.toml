@@ -1,6 +1,6 @@
 [project]
 name = "invariant-protocol"
-version = "0.12.0"
+version = "0.12.1"
 description = "Project protobuf/gRPC services into MCP, CLI, HTTP, and logical data schemas"
 requires-python = ">=3.14"
 license = "Apache-2.0"

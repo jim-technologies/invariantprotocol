@@ -10,6 +10,21 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.12.1 — 2026-07-26
+
+### Changed
+
+- **Release-tag verification now installs the exact root tag.** CI requires the
+  tag to match the repository version and checked-out commit before testing
+  clean Go, Python, Rust, and TypeScript installation, and every tag still runs
+  the complete release gates.
+- **Existing portability claims have independent build and wire checks.** An
+  official Connect-ES client now exercises the Go, Python, and Rust HTTP
+  projections in JSON and protobuf modes, while imported OpenAPI output is
+  compiled through Go, Python, Rust, and TypeScript from one generated
+  descriptor. ClickHouse tests now round-trip every semantic type and exercise
+  nested/oneof evolution.
+
 ## v0.12.0 — 2026-07-24
 
 ### Added

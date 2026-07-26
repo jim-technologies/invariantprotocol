@@ -418,7 +418,7 @@ make generate        # regenerate proto stubs and descriptor artifacts
 make build           # build every language package and command
 make check           # quality checks and maintained coverage floors for all four languages
 make security        # secrets, integrity, and vulnerability checks
-make integration     # Git installs plus PostgreSQL/Atlas and ClickHouse; requires Docker
+make integration     # Git installs, Connect interop, PostgreSQL/Atlas, and ClickHouse; requires Docker
 make parity-release  # strict portable-feature gate before one root tag
 ```
 
@@ -428,6 +428,9 @@ The root `VERSION` is the release version for every language package. CI checks
 that package metadata and runtime version constants stay synchronized.
 Releases use one repository tag, `vX.Y.Z`; do not create new language-prefixed
 tags.
+Push the release commit to `main`, wait for its CI workflow, then create the
+annotated tag. Tag CI repeats the full release gates and verifies clean Git
+installs from that exact tag.
 
 Invariant-owned packages are distributed only from Git. Do not publish them to,
 or document installation from, PyPI, the npm registry, crates.io, or another
@@ -470,7 +473,8 @@ Dependency roots and lockfiles:
 The data integration uses pinned PostgreSQL 18.4 and ClickHouse Docker images
 and requires a host Docker daemon. It verifies generated desired state,
 ClickHouse declarations, constraints, value round trips, and the exact UInt64
-conversion; it is not a production DDL-application or publishing API.
+and UInt32/timestamp conversion expressions; it is not a production
+DDL-application or publishing API.
 
 CI (`.github/workflows/ci.yml`) runs everything inside `flox activate`, so contributors and CI hit the same toolchain by construction.
 

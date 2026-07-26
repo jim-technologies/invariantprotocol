@@ -432,9 +432,10 @@ flox activate -- make clickhouse-integration
 ```
 
 That test wraps the generated declarations in a test-owned `MergeTree`,
-round-trips absent/present/default values, validates oneof and required
-constraints, rejects duplicate map keys and invalid UTF-8, and proves the
-maximum UInt64 converts exactly to Decimal(20,0).
+round-trips absent/present/default values plus decimal, UUID, temporal, enum,
+and every ProtoJSON shape; validates oneof and required constraints; rejects
+duplicate map keys, invalid UTF-8, and invalid JSON; and executes the exact
+UInt64, UInt32, and timestamp Iceberg conversion expressions.
 
 ## Deliberate schema boundary
 

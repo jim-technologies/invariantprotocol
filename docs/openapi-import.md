@@ -35,6 +35,12 @@ deps:
 Run `buf format`, `buf lint`, `buf build`, and the normal language generators
 before accepting the generated source.
 
+The repository fixture follows that exact boundary. `make generate` commits its
+descriptor image, and `make openapi-codegen-check` generates into a temporary
+directory and compiles the generated service surfaces for Go, Python, Rust, and
+TypeScript. Language bindings remain disposable build output rather than four
+additional authored contracts.
+
 ## Canonical mapping
 
 - One OpenAPI document becomes one protobuf service.

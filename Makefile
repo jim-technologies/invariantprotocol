@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build check quality version-check parity parity-release git-install-check postgres-integration clickhouse-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate deps verify-generate breaking
+.PHONY: help build check quality version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
@@ -34,6 +34,9 @@ parity-release: ## Reject a release while any core feature lacks four-language s
 git-install-check: ## Install every language package from the current Git commit.
 	scripts/check_git_installs.sh
 
+connect-interop: node_modules/.package-lock.json ## Exercise Go, Python, and Rust HTTP projections with Connect-ES.
+	node typescript/tests/connect_interop.ts
+
 postgres-integration: ## Apply and round-trip generated PostgreSQL through Atlas.
 	scripts/check_postgres_atlas.sh
 
@@ -42,7 +45,7 @@ clickhouse-integration: ## Apply generated declarations and round-trip values th
 
 data-integration: postgres-integration clickhouse-integration ## Exercise every external data-schema boundary.
 
-integration: git-install-check data-integration ## Exercise Git installation and external data boundaries.
+integration: git-install-check connect-interop data-integration ## Exercise Git installs and external protocol/data boundaries.
 
 fmt-check: node_modules/.package-lock.json ## Verify formatting without modifying files.
 	test -z "$$(gofmt -l go)" || { echo "gofmt: files need formatting:"; gofmt -l go; exit 1; }
@@ -104,7 +107,7 @@ test-go: ## Run Go unit and transport-integration tests.
 	GOFLAGS=-mod=readonly go test ./...
 
 race-go: ## Run the concurrent Go runtime under the race detector.
-	GOFLAGS=-mod=readonly go test -count=1 -race ./go
+	GOFLAGS=-mod=readonly go test -count=1 -race ./...
 
 test-python: ## Run Python unit and transport-integration tests.
 	cd python && uv run python -m pytest tests/
@@ -120,7 +123,7 @@ coverage: coverage-go coverage-python coverage-rust coverage-typescript ## Run t
 coverage-go: ## Run Go tests and enforce authored-code statement coverage.
 	@set -eu; \
 	all_packages="$$(GOFLAGS=-mod=readonly go list ./go/...)"; \
-	packages="$$(printf '%s\n' "$$all_packages" | grep -Ev '/go/(gen/|tests/(gen|manual)$$)')"; \
+	packages="$$(printf '%s\n' "$$all_packages" | grep -Ev '/go/(gen/|tests/(connectinterop|gen|manual)$$)')"; \
 	profile="$$(mktemp)"; \
 	trap 'rm -f "$$profile"' EXIT; \
 	GOFLAGS=-mod=readonly go test -count=1 -covermode=atomic -coverprofile="$$profile" $$packages; \
@@ -163,6 +166,10 @@ generate: node_modules/.package-lock.json ## Regenerate committed build artifact
 	mkdir -p testdata/openapi/gen/library/v1
 	GOFLAGS=-mod=readonly go run ./go/cmd/invariant-openapi import --input testdata/openapi/library.yaml --package library.v1 --go-package example.com/project/gen/library/v1 --output testdata/openapi/gen/library/v1/library.proto
 	cd testdata/openapi && buf format -w gen/library/v1/library.proto
+	cd testdata/openapi && buf build -o descriptor.binpb
+
+openapi-codegen-check: node_modules/.package-lock.json ## Compile the imported OpenAPI fixture through every language toolchain.
+	scripts/check_openapi_codegen.sh
 
 deps: ## Tidy/update language dependency lockfiles.
 	flox upgrade
@@ -178,8 +185,9 @@ breaking: ## Check proto breaking changes against BASE_REF.
 
 verify-generate: ## Verify generated build artifacts are committed.
 	$(MAKE) generate
-	@if [ -n "$$(git status --porcelain --untracked-files=all -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen)" ]; then \
+	@if [ -n "$$(git status --porcelain --untracked-files=all -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb testdata/openapi/descriptor.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen)" ]; then \
 		echo "Generated files are out of date. Run 'make generate' and commit the results."; \
-		git status --short -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen; \
+		git status --short -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb testdata/openapi/descriptor.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen; \
 		exit 1; \
 	fi
+	$(MAKE) openapi-codegen-check

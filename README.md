@@ -575,14 +575,14 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.12.0`; new releases do not create language-prefixed tags. The project
+tag `v0.12.1`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.12.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.12.1
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -592,26 +592,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.1#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.0#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.1#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.1" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.0" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.1" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.12.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.12.1"
 ```
 
 For reproducible production builds, replace the tag with a full commit
@@ -630,7 +630,7 @@ make generate
 make build
 make check        # quality checks and coverage-gated suites for all four languages
 make security
-make integration  # Git installs, PostgreSQL/Atlas, and ClickHouse; requires Docker
+make integration  # Git installs, Connect interop, PostgreSQL/Atlas, and ClickHouse; requires Docker
 make parity-release
 make bench
 ```
@@ -642,9 +642,14 @@ Build tools and language-specific ecosystem bridges are classified separately
 instead of being duplicated for artificial symmetry. See
 [feature parity](docs/feature-parity.md) and [runtime stack policy](docs/runtime-stacks.md).
 
+Release commits are pushed to `main` and must complete the full CI workflow
+before their single annotated `vX.Y.Z` tag is created. Tag pushes repeat the
+complete release gates and verify clean Git installs from that exact tag.
+
 CI runs quality checks, four coverage-gated suites, dependency and secret
-audits, generated-code checks, clean Git installs, PostgreSQL/Atlas
-apply-inspect-diff integration, and a real ClickHouse DDL/value round trip.
+audits, generated-code checks, clean Git installs, official-client Connect
+interoperability, PostgreSQL/Atlas apply-inspect-diff integration, and a real
+ClickHouse DDL/value round trip.
 Pull requests also run protobuf breaking checks. Dependency upgrades are
 intentional and review-driven; the repository does not require a scheduled
 dependency job.

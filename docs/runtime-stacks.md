@@ -85,6 +85,11 @@ message types, status/details, metadata, deadlines, cancellation, limits, and
 current wire requirements. Descriptor-only remote adapters may use dynamic
 protobuf messages at their boundary.
 
+`make connect-interop` complements those runtime tests with one black-box
+official-client check. Connect-ES calls the Go, Python, and Rust HTTP
+projections over ephemeral HTTP/1.1 listeners using both JSON and binary
+encoding, covering unary success, server streaming, and a canonical error.
+
 ## Dependency rules
 
 1. Prefer the official project and public stable APIs. Depending on exports

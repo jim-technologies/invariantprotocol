@@ -66,23 +66,53 @@ func TestClickHouseDDLAndValueRoundTrip(t *testing.T) {
 		projectionValuePlaceholder,
 		quoteIdentifier("id"),
 	)
+	uint32Projection := findProjection(t, projection.Fields, "uint32_value")
+	uint32Expression := strings.ReplaceAll(
+		uint32Projection.ValueExpression,
+		projectionValuePlaceholder,
+		quoteIdentifier("counter32"),
+	)
+	timestampProjection := findProjection(t, projection.Fields, "created_at")
+	timestampExpression := strings.ReplaceAll(
+		timestampProjection.ValueExpression,
+		projectionValuePlaceholder,
+		quoteIdentifier("created_at"),
+	)
 
 	runClickHouse(t, endpoint, "INSERT INTO "+quoteIdentifier(table)+
-		" (`id`, `note`, `nested`, `labels`, `attributes`, `events`, `__invariant_oneof_choice_case`, `choice_count`, `choice_name`, `digest`, `required_id`) VALUES "+
-		"(18446744073709551615, NULL, (false, (0, NULL)), ['a'], map('x', toUInt64(1)), [(1, (true, 'ok'), (false, 0))], 0, (false, 0), (false, ''), 'ABCD', (true, 7)),"+
-		"(0, '', (true, (0, '')), [], map(), [], 6, (true, 0), (false, ''), 'WXYZ', (true, 0))",
+		" (`id`, `note`, `nested`, `labels`, `attributes`, `events`, `__invariant_oneof_choice_case`, `choice_count`, `choice_name`, `digest`, `required_id`, "+
+		"`counter32`, `amount`, `record_id`, `created_at`, `elapsed`, `state`, `json_object`, `json_any`, `json_value`, `json_list`) VALUES "+
+		"(18446744073709551615, NULL, (false, (0, NULL)), ['a'], map('x', toUInt64(1)), [(1, (true, 'ok'), (false, 0))], 0, (false, 0), (false, ''), 'ABCD', (true, 7), "+
+		"0, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL),"+
+		"(0, '', (true, (0, '')), [], map(), [], 6, (true, 0), (false, ''), 'WXYZ', (true, 0), "+
+		"4294967295, 12345678901234.5678, '550e8400-e29b-41d4-a716-446655440000', "+
+		"toDateTime64('1969-12-31 23:59:59.123456789', 9, 'UTC'), -1234567890123456789, 123, "+
+		quoteLiteral(`{"name":"Ada"}`)+", "+
+		quoteLiteral(`{"@type":"type.googleapis.com/google.protobuf.Int32Value","value":7}`)+", "+
+		quoteLiteral(`42`)+", "+
+		quoteLiteral(`[1,"x",null]`)+")",
 	)
 
 	rows := runClickHouse(t, endpoint,
 		"SELECT toString(`id`), isNull(`note`), `nested`.`present`, `__invariant_oneof_choice_case`, `choice_count`.`value`, "+
-			"toString("+uint64Expression+"), hex(`digest`), `required_id`.`value` "+
+			"toString("+uint64Expression+"), hex(`digest`), `required_id`.`value`, "+
+			"toString("+uint32Expression+"), ifNull(toString(`amount`), 'NULL'), ifNull(toString(`record_id`), 'NULL'), "+
+			"ifNull(toString(`created_at`), 'NULL'), ifNull(toString(`elapsed`), 'NULL'), `state`, "+
+			"ifNull(`json_object`, 'NULL'), ifNull(`json_any`, 'NULL'), ifNull(`json_value`, 'NULL'), ifNull(`json_list`, 'NULL') "+
 			"FROM "+quoteIdentifier(table)+" ORDER BY `id` FORMAT TabSeparated",
 	)
 	require.Equal(t,
-		"0\t0\ttrue\t6\t0\t0\t5758595A\t0\n"+
-			"18446744073709551615\t1\tfalse\t0\t0\t18446744073709551615\t41424344\t7\n",
+		"0\t0\ttrue\t6\t0\t0\t5758595A\t0\t4294967295\t12345678901234.5678\t550e8400-e29b-41d4-a716-446655440000\t"+
+			"1969-12-31 23:59:59.123456789\t-1234567890123456789\t123\t"+
+			"{\"name\":\"Ada\"}\t{\"@type\":\"type.googleapis.com/google.protobuf.Int32Value\",\"value\":7}\t42\t[1,\"x\",null]\n"+
+			"18446744073709551615\t1\tfalse\t0\t0\t18446744073709551615\t41424344\t7\t0\tNULL\tNULL\tNULL\tNULL\t0\tNULL\tNULL\tNULL\tNULL\n",
 		rows,
 	)
+	convertedTimestamp := runClickHouse(t, endpoint,
+		"SELECT toString("+timestampExpression+") FROM "+quoteIdentifier(table)+
+			" WHERE `id` = 0 FORMAT TabSeparated",
+	)
+	require.Equal(t, "-876543211\n", convertedTimestamp)
 
 	for _, invalid := range []struct {
 		name string
@@ -117,6 +147,11 @@ func TestClickHouseDDLAndValueRoundTrip(t *testing.T) {
 			name: "invalid protobuf UTF-8",
 			sql: "INSERT INTO " + quoteIdentifier(table) +
 				" (`note`, `required_id`) SELECT reinterpretAsString(unhex('FF')), (true, 1)",
+		},
+		{
+			name: "invalid ProtoJSON",
+			sql: "INSERT INTO " + quoteIdentifier(table) +
+				" (`json_object`, `required_id`) VALUES ('{bad', (true, 1))",
 		},
 	} {
 		t.Run(invalid.name, func(t *testing.T) {
@@ -205,6 +240,53 @@ func integrationDataset() *datav1.DatasetSchema {
 			Element: eventElement,
 		}}},
 	}
+	counter32 := primitiveField("counter32", 101, datav1.PrimitiveKind_PRIMITIVE_KIND_UINT32)
+	amount := semanticField("amount", 102, &datav1.DataType{
+		Kind: &datav1.DataType_Decimal{Decimal: &datav1.DecimalType{Precision: 18, Scale: 4}},
+	})
+	recordID := semanticField("record_id", 103, &datav1.DataType{
+		Kind: &datav1.DataType_Uuid{Uuid: &datav1.UuidType{}},
+	})
+	createdAt := semanticField("created_at", 104, &datav1.DataType{
+		Kind: &datav1.DataType_Timestamp{Timestamp: &datav1.TimestampType{
+			Unit:     datav1.TimeUnit_TIME_UNIT_NANOSECOND,
+			Timezone: "UTC",
+		}},
+	})
+	elapsed := semanticField("elapsed", 105, &datav1.DataType{
+		Kind: &datav1.DataType_Duration{Duration: &datav1.DurationType{
+			Unit: datav1.TimeUnit_TIME_UNIT_NANOSECOND,
+		}},
+	})
+	state := &datav1.Field{
+		Name:            "state",
+		ProtoFullName:   "test.IntegrationRecord.state",
+		ProtoNumberPath: []uint32{106},
+		StableId:        106,
+		Presence:        datav1.Presence_PRESENCE_IMPLICIT,
+		Type: &datav1.DataType{Kind: &datav1.DataType_Enum{Enum: &datav1.EnumType{
+			FullName: "test.IntegrationState",
+			Values: []*datav1.EnumValue{
+				{Name: "INTEGRATION_STATE_UNSPECIFIED", Number: 0},
+				{Name: "INTEGRATION_STATE_READY", Number: 1},
+			},
+		}}},
+		SyntheticRole:     datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
+		JsonName:          "state",
+		StorageNameSource: "state",
+	}
+	jsonObject := semanticField("json_object", 107, &datav1.DataType{
+		Kind: &datav1.DataType_Json{Json: &datav1.JsonType{Kind: datav1.JsonKind_JSON_KIND_STRUCT}},
+	})
+	jsonAny := semanticField("json_any", 108, &datav1.DataType{
+		Kind: &datav1.DataType_Json{Json: &datav1.JsonType{Kind: datav1.JsonKind_JSON_KIND_ANY}},
+	})
+	jsonValue := semanticField("json_value", 109, &datav1.DataType{
+		Kind: &datav1.DataType_Json{Json: &datav1.JsonType{Kind: datav1.JsonKind_JSON_KIND_VALUE}},
+	})
+	jsonList := semanticField("json_list", 110, &datav1.DataType{
+		Kind: &datav1.DataType_Json{Json: &datav1.JsonType{Kind: datav1.JsonKind_JSON_KIND_LIST_VALUE}},
+	})
 
 	return &datav1.DatasetSchema{
 		Name:          "integration_record",
@@ -220,6 +302,16 @@ func integrationDataset() *datav1.DatasetSchema {
 			digest,
 			required,
 			events,
+			counter32,
+			amount,
+			recordID,
+			createdAt,
+			elapsed,
+			state,
+			jsonObject,
+			jsonAny,
+			jsonValue,
+			jsonList,
 		},
 	}
 }

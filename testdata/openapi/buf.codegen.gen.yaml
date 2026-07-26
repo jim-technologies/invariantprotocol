@@ -1,0 +1,18 @@
+version: v2
+plugins:
+  - protoc_builtin: go
+    out: go
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: go
+    opt: paths=source_relative
+  - protoc_builtin: python
+    out: python
+  - protoc_builtin: pyi
+    out: python
+  - local: ./node_modules/.bin/protoc-gen-es
+    out: typescript
+    include_imports: true
+    opt:
+      - target=ts
+      - import_extension=.js

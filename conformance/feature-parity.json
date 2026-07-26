@@ -87,10 +87,25 @@
       },
       "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
       "tests": {
-        "go": ["go/http_test.go", "go/streaming_test.go"],
-        "python": ["python/tests/test_http.py", "python/tests/test_streaming.py"],
-        "rust": ["rust/tests/http.rs", "rust/tests/streaming.rs"],
-        "typescript": ["typescript/tests/runtime.test.ts"]
+        "go": [
+          "go/http_test.go",
+          "go/streaming_test.go",
+          "go/tests/connectinterop/main.go",
+          "typescript/tests/connect_interop.ts"
+        ],
+        "python": [
+          "python/tests/test_http.py",
+          "python/tests/test_streaming.py",
+          "python/tests/connect_interop_server.py",
+          "typescript/tests/connect_interop.ts"
+        ],
+        "rust": [
+          "rust/tests/http.rs",
+          "rust/tests/streaming.rs",
+          "rust/examples/connect_interop_server.rs",
+          "typescript/tests/connect_interop.ts"
+        ],
+        "typescript": ["typescript/tests/runtime.test.ts", "typescript/tests/connect_interop.ts"]
       }
     },
     {
@@ -303,7 +318,8 @@
       ],
       "tests": [
         "go/internal/openapiimport/importer_test.go",
-        "go/cmd/invariant-openapi/main_test.go"
+        "go/cmd/invariant-openapi/main_test.go",
+        "scripts/check_openapi_codegen.sh"
       ]
     },
     {

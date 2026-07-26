@@ -603,6 +603,103 @@ func TestSchemaEvolutionPreservesCompatibleColumnsAndRejectsTypeReuse(t *testing
 	require.ErrorContains(t, err, "logical shape changed")
 }
 
+func TestSchemaEvolutionPreservesNestedAdditions(t *testing.T) {
+	first := compileEvolutionFile(t, nil, nestedEvolutionFile(
+		evolutionField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32),
+	))
+	second := compileEvolutionFile(t, first, nestedEvolutionFile(
+		evolutionField("id", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32),
+		evolutionField("label", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+	))
+
+	firstDataset := first.GetDatasets()[0]
+	secondDataset := second.GetDatasets()[0]
+	firstSchema, _, err := Schema(firstDataset)
+	require.NoError(t, err)
+	secondSchema, diagnostics, err := Schema(secondDataset)
+	require.NoError(t, err)
+
+	require.Equal(t, findColumn(t, firstSchema, "detail").StableID, findColumn(t, secondSchema, "detail").StableID)
+	require.Equal(t,
+		"Tuple(`present` Bool, `value` Tuple(`id` Int32))",
+		findColumn(t, firstSchema, "detail").Type,
+	)
+	require.Equal(t,
+		"Tuple(`present` Bool, `value` Tuple(`id` Int32, `label` String))",
+		findColumn(t, secondSchema, "detail").Type,
+	)
+	firstID := datasetField(t, firstDataset, "detail").GetType().GetStruct().GetFields()[0]
+	secondID := datasetField(t, secondDataset, "detail").GetType().GetStruct().GetFields()[0]
+	require.Equal(t, firstID.GetStableId(), secondID.GetStableId())
+	require.Equal(t,
+		datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS,
+		findDiagnostic(t, diagnostics, "detail.label").GetCompatibility(),
+	)
+}
+
+func TestSchemaEvolutionPreservesOneofIdentityWithoutReinterpretingMembers(t *testing.T) {
+	first := compileEvolutionFile(t, nil, oneofEvolutionFile(
+		[]*descriptorpb.FieldDescriptorProto{
+			oneofEvolutionField("count", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32),
+			oneofEvolutionField("name", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+		},
+		nil,
+	))
+	added := compileEvolutionFile(t, first, oneofEvolutionFile(
+		[]*descriptorpb.FieldDescriptorProto{
+			oneofEvolutionField("count", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32),
+			oneofEvolutionField("name", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+			oneofEvolutionField("enabled", 3, descriptorpb.FieldDescriptorProto_TYPE_BOOL),
+		},
+		nil,
+	))
+
+	firstSchema, _, err := Schema(first.GetDatasets()[0])
+	require.NoError(t, err)
+	addedSchema, _, err := Schema(added.GetDatasets()[0])
+	require.NoError(t, err)
+	require.Contains(t, firstSchema.ColumnDeclarations(),
+		"CHECK `__invariant_oneof_choice_case` IN (0, 1, 2)")
+	require.Contains(t, addedSchema.ColumnDeclarations(),
+		"CHECK `__invariant_oneof_choice_case` IN (0, 1, 2, 3)")
+	require.Contains(t,
+		findColumn(t, addedSchema, "__invariant_oneof_choice_case").Comment,
+		"3=enabled",
+	)
+
+	removed := compileEvolutionFile(t, added, oneofEvolutionFile(nil, []string{
+		"count", "name", "enabled",
+	}))
+	removedSchema, _, err := Schema(removed.GetDatasets()[0])
+	require.NoError(t, err)
+	require.NotContains(t, removedSchema.ColumnDeclarations(), "__invariant_oneof_choice_case")
+	require.Len(t, removed.GetDatasets()[0].GetRetiredFields(), 3)
+
+	reintroduced := compileEvolutionFile(t, removed, oneofEvolutionFile(
+		[]*descriptorpb.FieldDescriptorProto{
+			oneofEvolutionField("replacement", 4, descriptorpb.FieldDescriptorProto_TYPE_STRING),
+		},
+		[]string{"count", "name", "enabled"},
+	))
+	reintroducedDataset := reintroduced.GetDatasets()[0]
+	reintroducedSchema, _, err := Schema(reintroducedDataset)
+	require.NoError(t, err)
+	require.Contains(t, reintroducedSchema.ColumnDeclarations(),
+		"CHECK `__invariant_oneof_choice_case` IN (0, 4)")
+	require.Contains(t, reintroducedSchema.ColumnDeclarations(),
+		"(`__invariant_oneof_choice_case` = 4) = tupleElement(`replacement`, 'present')")
+
+	projection, _, err := ProjectToIceberg(reintroducedDataset)
+	require.NoError(t, err)
+	replacement := findProjection(t, projection.Fields, "replacement")
+	require.Equal(t, "__invariant_oneof_choice_case", replacement.Discriminator)
+	require.EqualValues(t, 4, replacement.ProtobufFieldNumber)
+	require.Equal(t,
+		"tupleElement({value}, 'present') AND {case} = 4",
+		replacement.PresenceExpression,
+	)
+}
+
 func allTypesDataset(t *testing.T) *datav1.DatasetSchema {
 	t.Helper()
 	dataset, err := data.CompileMessage((&greetpb.CanonicalRecord{}).ProtoReflect().Descriptor(), nil)
@@ -784,4 +881,94 @@ func compileEvolutionError(
 		return nil, err
 	}
 	return data.CompileDescriptorBytes(encoded, []string{"example.Record"}, previous)
+}
+
+func compileEvolutionFile(
+	t *testing.T,
+	previous *datav1.SchemaBundle,
+	file *descriptorpb.FileDescriptorProto,
+) *datav1.SchemaBundle {
+	t.Helper()
+	encoded, err := proto.Marshal(&descriptorpb.FileDescriptorSet{
+		File: []*descriptorpb.FileDescriptorProto{file},
+	})
+	require.NoError(t, err)
+	bundle, err := data.CompileDescriptorBytes(encoded, []string{"example.Record"}, previous)
+	require.NoError(t, err)
+	return bundle
+}
+
+func nestedEvolutionFile(
+	detailFields ...*descriptorpb.FieldDescriptorProto,
+) *descriptorpb.FileDescriptorProto {
+	syntax := "proto3"
+	messageType := descriptorpb.FieldDescriptorProto_TYPE_MESSAGE
+	label := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL
+	return &descriptorpb.FileDescriptorProto{
+		Name:    new("example/record.proto"),
+		Package: new("example"),
+		Syntax:  &syntax,
+		MessageType: []*descriptorpb.DescriptorProto{
+			{
+				Name:  new("Detail"),
+				Field: detailFields,
+			},
+			{
+				Name: new("Record"),
+				Field: []*descriptorpb.FieldDescriptorProto{{
+					Name:     new("detail"),
+					JsonName: new("detail"),
+					Number:   new(int32(1)),
+					Label:    &label,
+					Type:     &messageType,
+					TypeName: new(".example.Detail"),
+				}},
+			},
+		},
+	}
+}
+
+func oneofEvolutionField(
+	name string,
+	number int32,
+	kind descriptorpb.FieldDescriptorProto_Type,
+) *descriptorpb.FieldDescriptorProto {
+	label := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL
+	return &descriptorpb.FieldDescriptorProto{
+		Name:       new(name),
+		JsonName:   new(name),
+		Number:     new(number),
+		Label:      &label,
+		Type:       &kind,
+		OneofIndex: new(int32(0)),
+	}
+}
+
+func oneofEvolutionFile(
+	fields []*descriptorpb.FieldDescriptorProto,
+	reservedNames []string,
+) *descriptorpb.FileDescriptorProto {
+	syntax := "proto3"
+	record := &descriptorpb.DescriptorProto{
+		Name:         new("Record"),
+		Field:        fields,
+		ReservedName: reservedNames,
+	}
+	if len(fields) != 0 {
+		record.OneofDecl = []*descriptorpb.OneofDescriptorProto{{
+			Name: new("choice"),
+		}}
+	}
+	if len(reservedNames) != 0 {
+		record.ReservedRange = []*descriptorpb.DescriptorProto_ReservedRange{{
+			Start: new(int32(1)),
+			End:   new(int32(4)),
+		}}
+	}
+	return &descriptorpb.FileDescriptorProto{
+		Name:        new("example/record.proto"),
+		Package:     new("example"),
+		Syntax:      &syntax,
+		MessageType: []*descriptorpb.DescriptorProto{record},
+	}
 }
