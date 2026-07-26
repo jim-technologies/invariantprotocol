@@ -17,6 +17,10 @@ if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
     echo "release tag is ${install_ref}; expected ${expected_tag}" >&2
     exit 1
   fi
+  if [[ "$(git -C "$root" rev-parse --is-shallow-repository)" == "true" ]]; then
+    echo "release-tag installation requires complete Git history; run 'git fetch --unshallow --tags'" >&2
+    exit 1
+  fi
   checkout_tag_commit="$(git -C "$root" rev-parse "refs/tags/${install_ref}^{commit}")"
   if [[ "$checkout_tag_commit" != "$sha" ]]; then
     echo "release tag ${install_ref} resolves to ${checkout_tag_commit}; expected checked-out commit ${sha}" >&2
@@ -31,10 +35,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# A bare clone ensures every consumer sees only files committed at this exact
-# revision, never generated files or other state from the working tree.
+# A transport clone creates an independent committed-object source without
+# copying worktree state or relying on Git's local hard-link optimization.
 source_repo="$tmp/invariantprotocol.git"
-git clone --quiet --bare "$root" "$source_repo"
+git clone --quiet --bare --no-local "$root" "$source_repo"
 git --git-dir="$source_repo" cat-file -e "${sha}^{commit}"
 if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
   source_tag_commit="$(git --git-dir="$source_repo" rev-parse "refs/tags/${install_ref}^{commit}")"

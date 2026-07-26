@@ -123,7 +123,7 @@ export type ToolCatalogEntry = Readonly<{
 }>;
 
 export const SERVER_NAME = "invariant-protocol";
-export const SERVER_VERSION = "0.12.1";
+export const SERVER_VERSION = "0.12.2";
 const DEFAULT_HTTP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_HTTP_METADATA_KEYS = ["traceparent", "tracestate", "baggage", "x-request-id"] as const;
 

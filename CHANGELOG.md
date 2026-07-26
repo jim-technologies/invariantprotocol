@@ -10,6 +10,16 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.12.2 — 2026-07-26
+
+### Fixed
+
+- **Tag CI now verifies installations from complete Git history.** Package
+  managers may traverse annotated-tag ancestry, so the integration checkout is
+  intentionally unshallow and release-tag verification rejects shallow
+  checkouts early with an actionable diagnostic. The temporary source still
+  uses an independent Git transport clone and never includes worktree state.
+
 ## v0.12.1 — 2026-07-26
 
 ### Changed
