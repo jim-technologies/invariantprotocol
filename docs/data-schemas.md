@@ -12,7 +12,7 @@ schemas from that bundle.
 descriptor.binpb
           |
           v
-versioned SchemaBundle (generated, never hand-edited)
+versioned SchemaBundle (committed evolution state, never hand-edited)
      /          |          |          |             \
   Arrow      Parquet    Iceberg    PostgreSQL    ClickHouse
                                       |          declarations
@@ -34,9 +34,11 @@ and map value. Those identities must not be reused after a field is removed.
 Protobuf field numbers give us stable source identity, but nested collection
 children need additional identities and history.
 
-The generated bundle is that history. On the first compile, top-level protobuf
-field numbers are retained where possible and nested/container identities are
-allocated deterministically. Later compiles use the previous bundle to:
+The generated bundle is that history, unlike the reproducible descriptor image,
+which contains only the current compiled protobuf graph. On the first compile,
+top-level protobuf field numbers are retained where possible and
+nested/container identities are allocated deterministically. Later compiles use
+the previous bundle to:
 
 - retain identities and storage names across same-number protobuf field renames
   when the old protobuf name remains reserved;

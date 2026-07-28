@@ -10,6 +10,23 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.12.3 — 2026-07-27
+
+### Fixed
+
+- **Rust cardinality conformance now uses the shared descriptor image.** The
+  build-time test bindings are generated from
+  `conformance/proto/descriptor.binpb`, removing a hand-built duplicate schema
+  with different package and message identities.
+
+### Documentation
+
+- **The descriptor artifact lifecycle is explicit.** Applications may generate
+  an untracked image in CI but must package or embed the exact code-generation
+  input for runtime metadata. This Git-only repository commits and verifies its
+  reproducible descriptor fixtures, while committed SchemaBundles remain
+  durable evolution state.
+
 ## v0.12.2 — 2026-07-26
 
 ### Fixed

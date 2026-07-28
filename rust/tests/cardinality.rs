@@ -8,7 +8,10 @@ use std::sync::Arc;
 use tonic::{Request, Response};
 
 mod cardinality {
-    include!(concat!(env!("OUT_DIR"), "/cardinality.v1.rs"));
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/invariantprotocol.conformance.v1.rs"
+    ));
 }
 
 #[derive(Clone)]
@@ -18,22 +21,22 @@ struct AllCardinality;
 impl cardinality::all_cardinality_service_server::AllCardinalityService for AllCardinality {
     async fn unary(
         &self,
-        request: Request<cardinality::Input>,
-    ) -> Result<Response<cardinality::Output>, Status> {
-        Ok(Response::new(cardinality::Output {
+        request: Request<cardinality::UnaryRequest>,
+    ) -> Result<Response<cardinality::UnaryResponse>, Status> {
+        Ok(Response::new(cardinality::UnaryResponse {
             value: request.into_inner().value,
         }))
     }
 
-    type ServerStreamStream = BoxResponseStream<cardinality::Output>;
+    type ServerStreamStream = BoxResponseStream<cardinality::ServerStreamResponse>;
 
     async fn server_stream(
         &self,
-        request: Request<cardinality::Input>,
+        request: Request<cardinality::ServerStreamRequest>,
     ) -> Result<Response<Self::ServerStreamStream>, Status> {
         let value = request.into_inner().value;
         let stream = futures::stream::iter([0, 1].map(move |index| {
-            Ok(cardinality::Output {
+            Ok(cardinality::ServerStreamResponse {
                 value: format!("{value}-{index}"),
             })
         }));
@@ -42,30 +45,30 @@ impl cardinality::all_cardinality_service_server::AllCardinalityService for AllC
 
     async fn client_stream(
         &self,
-        request: Request<tonic::Streaming<cardinality::Input>>,
-    ) -> Result<Response<cardinality::Output>, Status> {
+        request: Request<tonic::Streaming<cardinality::ClientStreamRequest>>,
+    ) -> Result<Response<cardinality::ClientStreamResponse>, Status> {
         let values = request
             .into_inner()
             .map(|item| item.map(|input| input.value))
             .try_collect::<Vec<_>>()
             .await?;
-        Ok(Response::new(cardinality::Output {
+        Ok(Response::new(cardinality::ClientStreamResponse {
             value: values.join(","),
         }))
     }
 
-    type BidiStream = BoxResponseStream<cardinality::Output>;
+    type BidiStream = BoxResponseStream<cardinality::BidiResponse>;
 
     async fn bidi(
         &self,
-        request: Request<tonic::Streaming<cardinality::Input>>,
+        request: Request<tonic::Streaming<cardinality::BidiRequest>>,
     ) -> Result<Response<Self::BidiStream>, Status> {
         let stream = request.into_inner().map(|item| {
             item.map(|input| {
                 if input.value == "panic" {
                     panic!("bidi-midstream-kaboom");
                 }
-                cardinality::Output {
+                cardinality::BidiResponse {
                     value: format!("echo:{}", input.value),
                 }
             })
@@ -91,8 +94,8 @@ async fn full_generated_service_remains_native_while_projections_stay_bounded() 
             .map(|tool| tool["name"].as_str().unwrap().to_string())
             .collect::<Vec<_>>(),
         [
-            "cardinality.v1.AllCardinalityService.ServerStream",
-            "cardinality.v1.AllCardinalityService.Unary"
+            "invariantprotocol.conformance.v1.AllCardinalityService.ServerStream",
+            "invariantprotocol.conformance.v1.AllCardinalityService.Unary"
         ]
     );
 
@@ -115,7 +118,7 @@ async fn full_generated_service_remains_native_while_projections_stay_bounded() 
 
     assert_eq!(
         client
-            .unary(cardinality::Input { value: "u".into() })
+            .unary(cardinality::UnaryRequest { value: "u".into() })
             .await
             .unwrap()
             .into_inner()
@@ -123,16 +126,17 @@ async fn full_generated_service_remains_native_while_projections_stay_bounded() 
         "u"
     );
     let mut server_stream = client
-        .server_stream(cardinality::Input { value: "s".into() })
+        .server_stream(cardinality::ServerStreamRequest { value: "s".into() })
         .await
         .unwrap()
         .into_inner();
     assert_eq!(server_stream.message().await.unwrap().unwrap().value, "s-0");
     assert_eq!(server_stream.message().await.unwrap().unwrap().value, "s-1");
 
-    let client_stream = futures::stream::iter(["a", "b"].map(|value| cardinality::Input {
-        value: value.into(),
-    }));
+    let client_stream =
+        futures::stream::iter(["a", "b"].map(|value| cardinality::ClientStreamRequest {
+            value: value.into(),
+        }));
     assert_eq!(
         client
             .client_stream(client_stream)
@@ -143,14 +147,14 @@ async fn full_generated_service_remains_native_while_projections_stay_bounded() 
         "a,b"
     );
 
-    let bidi = futures::stream::iter(["x", "y"].map(|value| cardinality::Input {
+    let bidi = futures::stream::iter(["x", "y"].map(|value| cardinality::BidiRequest {
         value: value.into(),
     }));
     let mut bidi = client.bidi(bidi).await.unwrap().into_inner();
     assert_eq!(bidi.message().await.unwrap().unwrap().value, "echo:x");
     assert_eq!(bidi.message().await.unwrap().unwrap().value, "echo:y");
 
-    let bidi = futures::stream::iter(["first", "panic"].map(|value| cardinality::Input {
+    let bidi = futures::stream::iter(["first", "panic"].map(|value| cardinality::BidiRequest {
         value: value.into(),
     }));
     let mut bidi = client.bidi(bidi).await.unwrap().into_inner();
@@ -161,7 +165,7 @@ async fn full_generated_service_remains_native_while_projections_stay_bounded() 
     assert!(
         status
             .message()
-            .contains("/cardinality.v1.AllCardinalityService/Bidi")
+            .contains("/invariantprotocol.conformance.v1.AllCardinalityService/Bidi")
     );
     task.abort();
 }

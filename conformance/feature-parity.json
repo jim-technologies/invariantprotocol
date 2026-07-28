@@ -15,9 +15,9 @@
       },
       "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
       "tests": {
-        "go": ["go/descriptor_test.go"],
-        "python": ["python/tests/test_descriptor.py"],
-        "rust": ["rust/tests/core.rs"],
+        "go": ["go/descriptor_test.go", "go/grpc_client_test.go", "go/grpc_native_test.go"],
+        "python": ["python/tests/test_descriptor.py", "python/tests/test_server.py"],
+        "rust": ["rust/tests/core.rs", "rust/tests/grpc.rs", "rust/tests/cardinality.rs"],
         "typescript": ["typescript/tests/runtime.test.ts"]
       }
     },

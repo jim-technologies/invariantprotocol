@@ -36,10 +36,13 @@ Run `buf format`, `buf lint`, `buf build`, and the normal language generators
 before accepting the generated source.
 
 The repository fixture follows that exact boundary. `make generate` commits its
-descriptor image, and `make openapi-codegen-check` generates into a temporary
-directory and compiles the generated service surfaces for Go, Python, Rust, and
-TypeScript. Language bindings remain disposable build output rather than four
-additional authored contracts.
+reproducible descriptor image so CI can verify the exact fixture without an
+untracked prerequisite, and `make openapi-codegen-check` generates into a
+temporary directory and compiles the generated service surfaces for Go,
+Python, Rust, and TypeScript. A consuming application may instead build and
+package the descriptor in CI without tracking it. Language bindings and
+descriptor images remain derived build output rather than additional authored
+contracts.
 
 ## Canonical mapping
 

@@ -232,12 +232,26 @@ def test_register_validates_cardinality_and_input_type():
         srv.add_registered_method_handlers(captured.service_name, handlers)
 
 
-def test_from_bytes():
+async def test_from_bytes_supports_generated_registration_and_native_grpc():
+    class FromBytesServicer(GreetServicer):
+        async def Greet(self, request, context):
+            return greet_pb2.GreetResponse(message=f"bytes:{request.name}")
+
     with open(DESCRIPTOR_PATH, "rb") as f:
         data = f.read()
     srv = Server.from_bytes(data)
-    add_greet(srv)
+    add_greet(srv, FromBytesServicer())
     assert len(srv.tools) == 3
+
+    native = srv.grpc_server()
+    port = native.add_insecure_port("127.0.0.1:0")
+    await native.start()
+    try:
+        async with grpc.aio.insecure_channel(f"127.0.0.1:{port}") as channel:
+            response = await greet_pb2_grpc.GreetServiceStub(channel).Greet(greet_pb2.GreetRequest(name="generated"))
+        assert response.message == "bytes:generated"
+    finally:
+        await srv.stop(grace=0)
 
 
 def test_include_filter():

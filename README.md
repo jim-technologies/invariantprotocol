@@ -59,6 +59,26 @@ Generated local registration is checked against the descriptor image, so stale
 bindings fail during setup instead of creating different contracts on different
 transports.
 
+### Artifact lifecycle
+
+Application repositories author contract semantics only in `.proto` files.
+They may build `descriptor.binpb` in CI instead of committing it, but the exact
+image used for code generation must still be embedded in, or copied beside, the
+deployed application because Invariant uses its source comments and descriptors
+for discovery, reflection, validation, and optional projections. Every runtime
+accepts either a descriptor path or descriptor bytes.
+
+This Git-only framework repository deliberately commits its reproducible
+descriptor fixtures and generated release artifacts. Building the Invariant
+framework packages from a Git revision therefore does not itself require Buf or
+every language generator, and `make verify-generate` rejects drift from the
+authored protobuf. These files are reviewed build artifacts, never an
+independent contract.
+
+`schema.binpb` has a different lifecycle: it is committed evolution state with
+stable storage identities and tombstones. Regenerate and review it, but never
+discard or hand-edit it as though it were a temporary descriptor image.
+
 ### Importing an existing OpenAPI contract
 
 `invariant-openapi` provides a strict, one-way bootstrap for teams starting
@@ -575,14 +595,14 @@ for mappings, diagnostics, evolution rules, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.12.2`; new releases do not create language-prefixed tags. The project
+tag `v0.12.3`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.12.2
+go get github.com/jim-technologies/invariantprotocol/go@v0.12.3
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -592,26 +612,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.2#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.3#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.2#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.3#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.2" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.3" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.2" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.3" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.12.2"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.12.3"
 ```
 
 For reproducible production builds, replace the tag with a full commit

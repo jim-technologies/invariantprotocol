@@ -34,6 +34,15 @@ descriptor interpretation is for discovery, validation, reflection, dynamic
 remote proxies, and optional projections; never generate application code at
 runtime and never generate bespoke MCP/CLI/HTTP stubs.
 
+Application repositories may generate `descriptor.binpb` in CI and leave it
+untracked, but deployments must still embed or package the exact image used for
+code generation. This Git-only framework repository intentionally commits its
+reproducible descriptor fixtures and generated release artifacts, so building
+the framework packages from Git does not itself require Buf or every generator;
+`make verify-generate` enforces freshness.
+`schema.binpb` is different again: it is committed evolution state carrying
+stable identities and tombstones, not a disposable descriptor artifact.
+
 Go, Python, Rust, and TypeScript implementations follow the same flow where
 their runtime surface exists:
 
