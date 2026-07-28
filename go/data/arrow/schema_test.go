@@ -5,8 +5,10 @@ import (
 	"testing"
 
 	arrowlib "github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/extensions"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/jim-technologies/invariantprotocol/go/data"
 	invariantarrow "github.com/jim-technologies/invariantprotocol/go/data/arrow"
 	datav1 "github.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1"
@@ -145,6 +147,61 @@ func TestSemanticRefinementSchema(t *testing.T) {
 	require.True(t, arrowlib.TypeEqual(fixed, fieldByName(t, reader.Schema(), "digest").Type))
 }
 
+func TestFixedListRecordIPCRoundTrip(t *testing.T) {
+	dataset := fixedListDataset()
+	schema, diagnostics, err := invariantarrow.Schema(dataset)
+	require.NoError(t, err)
+	vectorType, ok := fieldByName(t, schema, "vector").Type.(*arrowlib.FixedSizeListType)
+	require.True(t, ok)
+	require.EqualValues(t, 8, vectorType.Len())
+	require.Equal(t, arrowlib.FLOAT32, vectorType.Elem().ID())
+	require.False(t, vectorType.ElemField().Nullable)
+	require.Equal(t, "fixed_list", metadataValue(t, fieldByName(t, schema, "vector").Metadata, "invariant.logical_type"))
+	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS, diagnostic(t, diagnostics, "vector").GetCompatibility())
+
+	allocator := memory.NewGoAllocator()
+	idBuilder := array.NewStringBuilder(allocator)
+	defer idBuilder.Release()
+	labelBuilder := array.NewStringBuilder(allocator)
+	defer labelBuilder.Release()
+	vectorBuilder := array.NewBuilder(allocator, vectorType).(*array.FixedSizeListBuilder)
+	defer vectorBuilder.Release()
+	values := vectorBuilder.ValueBuilder().(*array.Float32Builder)
+
+	idBuilder.AppendValues([]string{"a", "b"}, nil)
+	labelBuilder.AppendValues([]string{"first", "second"}, nil)
+	for row := range 2 {
+		vectorBuilder.Append(true)
+		for column := range 8 {
+			values.Append(float32(row*8 + column))
+		}
+	}
+	columns := []arrowlib.Array{idBuilder.NewArray(), labelBuilder.NewArray(), vectorBuilder.NewArray()}
+	for _, column := range columns {
+		defer column.Release()
+	}
+	record := array.NewRecordBatch(schema, columns, 2)
+	defer record.Release()
+
+	var encoded bytes.Buffer
+	writer := ipc.NewWriter(&encoded, ipc.WithSchema(schema))
+	require.NoError(t, writer.Write(record))
+	require.NoError(t, writer.Close())
+
+	reader, err := ipc.NewReader(bytes.NewReader(encoded.Bytes()))
+	require.NoError(t, err)
+	defer reader.Release()
+	require.True(t, reader.Next())
+	restored := reader.RecordBatch()
+	require.EqualValues(t, 2, restored.NumRows())
+	restoredVector, ok := restored.Column(2).(*array.FixedSizeList)
+	require.True(t, ok)
+	require.EqualValues(t, 8, restoredVector.DataType().(*arrowlib.FixedSizeListType).Len())
+	require.Equal(t, []float32{0, 1, 2, 3, 4, 5, 6, 7}, restoredVector.ListValues().(*array.Float32).Float32Values()[:8])
+	require.False(t, reader.Next())
+	require.NoError(t, reader.Err())
+}
+
 func semanticDataset() *datav1.DatasetSchema {
 	return &datav1.DatasetSchema{
 		Name:          "semantic_record",
@@ -174,6 +231,39 @@ func semanticDataset() *datav1.DatasetSchema {
 				Nullable: true,
 				Type: &datav1.DataType{Kind: &datav1.DataType_FixedBytes{FixedBytes: &datav1.FixedBytesType{
 					ByteLength: 24,
+				}}},
+			},
+		},
+	}
+}
+
+func fixedListDataset() *datav1.DatasetSchema {
+	primitive := func(name string, id int32, kind datav1.PrimitiveKind) *datav1.Field {
+		return &datav1.Field{
+			Name: name, StableId: id, Presence: datav1.Presence_PRESENCE_IMPLICIT,
+			SyntheticRole: datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
+			Type: &datav1.DataType{Kind: &datav1.DataType_Primitive{
+				Primitive: &datav1.PrimitiveType{Kind: kind},
+			}},
+		}
+	}
+	return &datav1.DatasetSchema{
+		Name: "example_v1_vector", SourceMessage: "example.v1.Vector",
+		Fields: []*datav1.Field{
+			primitive("id", 1, datav1.PrimitiveKind_PRIMITIVE_KIND_STRING),
+			primitive("label", 2, datav1.PrimitiveKind_PRIMITIVE_KIND_STRING),
+			{
+				Name: "vector", StableId: 3, Presence: datav1.Presence_PRESENCE_REPEATED,
+				SyntheticRole: datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
+				Type: &datav1.DataType{Kind: &datav1.DataType_List{List: &datav1.ListType{
+					FixedLength: 8,
+					Element: &datav1.Field{
+						Name: "element", StableId: 4, Presence: datav1.Presence_PRESENCE_NOT_APPLICABLE,
+						SyntheticRole: datav1.SyntheticRole_SYNTHETIC_ROLE_LIST_ELEMENT,
+						Type: &datav1.DataType{Kind: &datav1.DataType_Primitive{
+							Primitive: &datav1.PrimitiveType{Kind: datav1.PrimitiveKind_PRIMITIVE_KIND_FLOAT},
+						}},
+					},
 				}}},
 			},
 		},

@@ -22,14 +22,15 @@ import (
 
 const (
 	// IRVersion is the current SchemaBundle protobuf model version.
-	IRVersion uint32 = 3
+	IRVersion uint32 = 4
 
 	// MappingVersion is the current protobuf-to-logical-type mapping version.
-	MappingVersion uint32 = 2
+	MappingVersion uint32 = 3
 
 	maxStableID int32 = 2147483447
 
 	maxFixedBytesLength uint32 = 1<<31 - 1
+	maxFixedListLength  uint32 = 1<<31 - 1
 )
 
 // CompileDescriptorBytes compiles protobuf messages from a serialized
@@ -247,8 +248,12 @@ func hasDatasetOption(md protoreflect.MessageDescriptor) (bool, error) {
 	if !ok || datasetOptions == nil {
 		return false, fmt.Errorf("dataset option has unexpected type %T", value)
 	}
-	if len(datasetOptions.ProtoReflect().GetUnknown()) != 0 {
-		return false, errors.New("dataset option contains fields unsupported by this compiler")
+	if err := rejectUnknownFields(
+		datasetOptions.ProtoReflect(),
+		"dataset option",
+		"unsupported by this compiler",
+	); err != nil {
+		return false, err
 	}
 	return true, nil
 }
@@ -263,8 +268,12 @@ func dataFieldOptions(fd protoreflect.FieldDescriptor) (*datav1.FieldOptions, er
 	if !ok || fieldOptions == nil {
 		return nil, fmt.Errorf("field option has unexpected type %T", value)
 	}
-	if len(fieldOptions.ProtoReflect().GetUnknown()) != 0 {
-		return nil, errors.New("field option contains fields unsupported by this compiler")
+	if err := rejectUnknownFields(
+		fieldOptions.ProtoReflect(),
+		"field option",
+		"unsupported by this compiler",
+	); err != nil {
+		return nil, err
 	}
 	return fieldOptions, nil
 }
@@ -627,6 +636,32 @@ func (c *datasetCompiler) compileProtoField(
 	if err != nil {
 		return nil, fmt.Errorf("field %q: %w", fd.FullName(), err)
 	}
+	if options != nil && options.GetFixedList() != nil {
+		switch {
+		case fd.IsMap() || !fd.IsList():
+			return nil, fmt.Errorf(
+				"field %q: fixed_list refinement requires a non-map repeated field",
+				fd.FullName(),
+			)
+		case options.GetSemanticType() != nil:
+			return nil, fmt.Errorf(
+				"field %q: fixed_list cannot be combined with a semantic type refinement",
+				fd.FullName(),
+			)
+		case fd.Kind() != protoreflect.FloatKind && fd.Kind() != protoreflect.DoubleKind:
+			return nil, fmt.Errorf(
+				"field %q: fixed_list refinement requires a protobuf float or double carrier, got %s",
+				fd.FullName(), fd.Kind(),
+			)
+		case options.GetFixedList().GetLength() == 0:
+			return nil, fmt.Errorf("field %q: fixed_list length must be greater than zero", fd.FullName())
+		case options.GetFixedList().GetLength() > maxFixedListLength:
+			return nil, fmt.Errorf(
+				"field %q: fixed_list length must not exceed %d, got %d",
+				fd.FullName(), maxFixedListLength, options.GetFixedList().GetLength(),
+			)
+		}
+	}
 	if options != nil && !fd.IsList() && !fd.IsMap() {
 		if presence != datav1.Presence_PRESENCE_EXPLICIT && presence != datav1.Presence_PRESENCE_ONEOF {
 			return nil, fmt.Errorf(
@@ -700,6 +735,12 @@ func (c *datasetCompiler) compileListType(
 	stack map[protoreflect.FullName]bool,
 	options *datav1.FieldOptions,
 ) (*datav1.DataType, error) {
+	var fixedLength uint32
+	elementOptions := options
+	if options != nil && options.GetFixedList() != nil {
+		fixedLength = options.GetFixedList().GetLength()
+		elementOptions = nil
+	}
 	elementIdentity := appendIdentity(identity, "list:element")
 	element, err := c.compileSyntheticField(
 		fd,
@@ -709,13 +750,16 @@ func (c *datasetCompiler) compileListType(
 		elementIdentity,
 		datav1.SyntheticRole_SYNTHETIC_ROLE_LIST_ELEMENT,
 		stack,
-		options,
+		elementOptions,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list element: %w", err)
 	}
 	return &datav1.DataType{
-		Kind: &datav1.DataType_List{List: &datav1.ListType{Element: element}},
+		Kind: &datav1.DataType_List{List: &datav1.ListType{
+			Element:     element,
+			FixedLength: fixedLength,
+		}},
 	}, nil
 }
 
@@ -1213,8 +1257,11 @@ func sameLogicalShape(previous, current *datav1.DataType) bool {
 		_, ok := current.GetKind().(*datav1.DataType_Struct)
 		return ok && previous.GetProtobufType() == current.GetProtobufType()
 	case *datav1.DataType_List:
-		_, ok := current.GetKind().(*datav1.DataType_List)
-		return ok
+		currentKind, ok := current.GetKind().(*datav1.DataType_List)
+		return ok &&
+			previousKind.List != nil &&
+			currentKind.List != nil &&
+			previousKind.List.GetFixedLength() == currentKind.List.GetFixedLength()
 	case *datav1.DataType_Map:
 		_, ok := current.GetKind().(*datav1.DataType_Map)
 		return ok
@@ -1281,16 +1328,11 @@ func indexPreviousBundle(previous *datav1.SchemaBundle) (map[string]*datav1.Data
 	if previous == nil {
 		return indexed, nil
 	}
-	if previous.GetIrVersion() != IRVersion {
-		return nil, fmt.Errorf("previous ir_version is %d, want %d", previous.GetIrVersion(), IRVersion)
+	migrated, err := MigrateSchemaBundle(previous)
+	if err != nil {
+		return nil, fmt.Errorf("previous bundle: %w", err)
 	}
-	if previous.GetMappingVersion() != MappingVersion {
-		return nil, fmt.Errorf(
-			"previous mapping_version is %d, want %d",
-			previous.GetMappingVersion(), MappingVersion,
-		)
-	}
-	for _, dataset := range previous.GetDatasets() {
+	for _, dataset := range migrated.GetDatasets() {
 		if dataset == nil || dataset.GetSourceMessage() == "" {
 			return nil, errors.New("previous bundle contains a dataset without source_message")
 		}

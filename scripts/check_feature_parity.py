@@ -100,7 +100,10 @@ def main() -> int:
         for gap in gaps:
             print(f"- {gap}")
     if release and gaps:
-        print("release blocked: every core feature must support all four languages", file=sys.stderr)
+        print(
+            "release blocked: every core feature must support all four languages",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

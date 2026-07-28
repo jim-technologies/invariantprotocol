@@ -30,6 +30,14 @@ message FixedBytesOptions {
   uint32 byte_length = 1;
 }
 
+// FixedListOptions refines a protobuf repeated field to an exact, non-zero
+// cardinality. It describes logical shape only; vector indexes and other
+// physical policy remain target configuration.
+message FixedListOptions {
+  // Required number of elements in every value.
+  uint32 length = 1;
+}
+
 // FieldOptions refines protobuf carrier types with portable logical meaning.
 // It deliberately contains no renderer-specific type strings or physical
 // storage policy.
@@ -44,6 +52,10 @@ message FieldOptions {
     // Bytes whose length is exactly fixed_bytes.byte_length.
     FixedBytesOptions fixed_bytes = 3;
   }
+
+  // Exact cardinality for a non-map repeated field. This is separate from
+  // semantic_type because it refines the collection rather than its element.
+  FixedListOptions fixed_list = 4;
 }
 
 // Invariant repository policy assigns 51974 from Protobuf's

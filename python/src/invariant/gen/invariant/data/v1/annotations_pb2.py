@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from google.protobuf import descriptor_pb2 as google_dot_protobuf_dot_descriptor__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#invariant/data/v1/annotations.proto\x12\x11invariant.data.v1\x1a google/protobuf/descriptor.proto\"\x10\n\x0e\x44\x61tasetOptions\"D\n\x0e\x44\x65\x63imalOptions\x12\x1c\n\tprecision\x18\x01 \x01(\rR\tprecision\x12\x14\n\x05scale\x18\x02 \x01(\rR\x05scale\"\r\n\x0bUuidOptions\"4\n\x11\x46ixedBytesOptions\x12\x1f\n\x0b\x62yte_length\x18\x01 \x01(\rR\nbyteLength\"\xdd\x01\n\x0c\x46ieldOptions\x12=\n\x07\x64\x65\x63imal\x18\x01 \x01(\x0b\x32!.invariant.data.v1.DecimalOptionsH\x00R\x07\x64\x65\x63imal\x12\x34\n\x04uuid\x18\x02 \x01(\x0b\x32\x1e.invariant.data.v1.UuidOptionsH\x00R\x04uuid\x12G\n\x0b\x66ixed_bytes\x18\x03 \x01(\x0b\x32$.invariant.data.v1.FixedBytesOptionsH\x00R\nfixedBytesB\x0f\n\rsemantic_type:^\n\x07\x64\x61taset\x12\x1f.google.protobuf.MessageOptions\x18\x86\x96\x03 \x01(\x0b\x32!.invariant.data.v1.DatasetOptionsR\x07\x64\x61taset:V\n\x05\x66ield\x12\x1d.google.protobuf.FieldOptions\x18\x86\x96\x03 \x01(\x0b\x32\x1f.invariant.data.v1.FieldOptionsR\x05\x66ieldBOZMgithub.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1;datav1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n#invariant/data/v1/annotations.proto\x12\x11invariant.data.v1\x1a google/protobuf/descriptor.proto\"\x10\n\x0e\x44\x61tasetOptions\"D\n\x0e\x44\x65\x63imalOptions\x12\x1c\n\tprecision\x18\x01 \x01(\rR\tprecision\x12\x14\n\x05scale\x18\x02 \x01(\rR\x05scale\"\r\n\x0bUuidOptions\"4\n\x11\x46ixedBytesOptions\x12\x1f\n\x0b\x62yte_length\x18\x01 \x01(\rR\nbyteLength\"*\n\x10\x46ixedListOptions\x12\x16\n\x06length\x18\x01 \x01(\rR\x06length\"\xa1\x02\n\x0c\x46ieldOptions\x12=\n\x07\x64\x65\x63imal\x18\x01 \x01(\x0b\x32!.invariant.data.v1.DecimalOptionsH\x00R\x07\x64\x65\x63imal\x12\x34\n\x04uuid\x18\x02 \x01(\x0b\x32\x1e.invariant.data.v1.UuidOptionsH\x00R\x04uuid\x12G\n\x0b\x66ixed_bytes\x18\x03 \x01(\x0b\x32$.invariant.data.v1.FixedBytesOptionsH\x00R\nfixedBytes\x12\x42\n\nfixed_list\x18\x04 \x01(\x0b\x32#.invariant.data.v1.FixedListOptionsR\tfixedListB\x0f\n\rsemantic_type:^\n\x07\x64\x61taset\x12\x1f.google.protobuf.MessageOptions\x18\x86\x96\x03 \x01(\x0b\x32!.invariant.data.v1.DatasetOptionsR\x07\x64\x61taset:V\n\x05\x66ield\x12\x1d.google.protobuf.FieldOptions\x18\x86\x96\x03 \x01(\x0b\x32\x1f.invariant.data.v1.FieldOptionsR\x05\x66ieldBOZMgithub.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1;datav1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -41,6 +41,8 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_UUIDOPTIONS']._serialized_end=193
   _globals['_FIXEDBYTESOPTIONS']._serialized_start=195
   _globals['_FIXEDBYTESOPTIONS']._serialized_end=247
-  _globals['_FIELDOPTIONS']._serialized_start=250
-  _globals['_FIELDOPTIONS']._serialized_end=471
+  _globals['_FIXEDLISTOPTIONS']._serialized_start=249
+  _globals['_FIXEDLISTOPTIONS']._serialized_end=291
+  _globals['_FIELDOPTIONS']._serialized_start=294
+  _globals['_FIELDOPTIONS']._serialized_end=583
 # @@protoc_insertion_point(module_scope)

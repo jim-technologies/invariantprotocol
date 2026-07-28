@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build check quality version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
+.PHONY: help build check quality version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
@@ -53,7 +53,10 @@ postgres-integration: ## Apply and round-trip generated PostgreSQL through Atlas
 clickhouse-integration: ## Apply generated declarations and round-trip values through ClickHouse.
 	scripts/check_clickhouse.sh
 
-data-integration: postgres-integration clickhouse-integration ## Exercise every external data-schema boundary.
+lance-integration: ## Exercise invariant-generated Arrow data through a local LanceDB lifecycle.
+	cd python && uv run python -m pytest tests/test_data_lance.py
+
+data-integration: postgres-integration clickhouse-integration lance-integration ## Exercise every external data-schema boundary.
 
 integration: git-install-check connect-interop data-integration ## Exercise Git installs and external protocol/data boundaries.
 

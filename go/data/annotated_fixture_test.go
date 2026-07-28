@@ -9,6 +9,7 @@ import (
 
 	arrowlib "github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/extensions"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
 	parquetlib "github.com/apache/arrow-go/v18/parquet"
 	parquetschema "github.com/apache/arrow-go/v18/parquet/schema"
 	iceberglib "github.com/apache/iceberg-go"
@@ -18,6 +19,7 @@ import (
 	invarianticeberg "github.com/jim-technologies/invariantprotocol/go/data/iceberg"
 	invariantparquet "github.com/jim-technologies/invariantprotocol/go/data/parquet"
 	"github.com/jim-technologies/invariantprotocol/go/data/postgres"
+	datav1 "github.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,9 +40,10 @@ func TestAnnotatedFixtureCompilesAndRendersEveryTarget(t *testing.T) {
 	encoded, err := data.MarshalSchemaBundle(bundle)
 	require.NoError(t, err)
 	require.Equal(t, committed, encoded, "the committed bundle must be the deterministic descriptor compilation")
-	require.Len(t, bundle.GetDatasets(), 1)
+	require.Len(t, bundle.GetDatasets(), 2)
 
-	dataset := bundle.GetDatasets()[0]
+	dataset := data.FindDataset(bundle, "schema.test.v1.AnnotatedRecord")
+	require.NotNil(t, dataset)
 	require.Equal(t, "schema.test.v1.AnnotatedRecord", dataset.GetSourceMessage())
 	require.Equal(t, "AnnotatedRecord exercises the complete authored-proto data-schema path.", dataset.GetDescription())
 	require.Len(t, dataset.GetFields(), 5)
@@ -107,4 +110,111 @@ func TestAnnotatedFixtureCompilesAndRendersEveryTarget(t *testing.T) {
 	require.Contains(t, clickhouseColumns, "`__invariant_oneof_reference_case` Int32 DEFAULT 0")
 	require.Contains(t, clickhouseColumns, "`external_id` Tuple(`present` Bool, `value` String)")
 	require.Contains(t, clickhouseColumns, "CHECK `__invariant_oneof_reference_case` IN (0, 4, 5)")
+
+	lanceDataset := data.FindDataset(bundle, "schema.test.v1.LanceRecord")
+	require.NotNil(t, lanceDataset)
+	require.Len(t, lanceDataset.GetFields(), 4)
+	vector := lanceDataset.GetFields()[2].GetType().GetList()
+	require.NotNil(t, vector)
+	require.EqualValues(t, 8, vector.GetFixedLength())
+	require.Equal(t, datav1.PrimitiveKind_PRIMITIVE_KIND_FLOAT, vector.GetElement().GetType().GetPrimitive().GetKind())
+	vector64 := lanceDataset.GetFields()[3].GetType().GetList()
+	require.NotNil(t, vector64)
+	require.EqualValues(t, 4, vector64.GetFixedLength())
+	require.Equal(t, datav1.PrimitiveKind_PRIMITIVE_KIND_DOUBLE, vector64.GetElement().GetType().GetPrimitive().GetKind())
+
+	lanceArrow, lanceArrowDiagnostics, err := invariantarrow.Schema(lanceDataset)
+	require.NoError(t, err)
+	fixedList, ok := lanceArrow.Field(2).Type.(*arrowlib.FixedSizeListType)
+	require.True(t, ok)
+	require.EqualValues(t, 8, fixedList.Len())
+	require.Equal(t, arrowlib.PrimitiveTypes.Float32, fixedList.Elem())
+	require.False(t, fixedList.ElemField().Nullable)
+	fixedList64, ok := lanceArrow.Field(3).Type.(*arrowlib.FixedSizeListType)
+	require.True(t, ok)
+	require.EqualValues(t, 4, fixedList64.Len())
+	require.Equal(t, arrowlib.PrimitiveTypes.Float64, fixedList64.Elem())
+	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS, diagnostic(t, lanceArrowDiagnostics, "vector").GetCompatibility())
+
+	var lanceIPC bytes.Buffer
+	require.NoError(t, invariantarrow.WriteIPC(&lanceIPC, lanceArrow))
+	reader, err := ipc.NewReader(bytes.NewReader(lanceIPC.Bytes()))
+	require.NoError(t, err)
+	defer reader.Release()
+	restored, ok := reader.Schema().Field(2).Type.(*arrowlib.FixedSizeListType)
+	require.True(t, ok)
+	require.EqualValues(t, 8, restored.Len())
+
+	lanceParquet, lanceParquetDiagnostics, err := invariantparquet.Schema(lanceDataset)
+	require.NoError(t, err)
+	require.Contains(t, lanceParquet.String(), "vector (List)")
+	parquetVector := diagnostic(t, lanceParquetDiagnostics, "vector")
+	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED, parquetVector.GetCompatibility())
+	require.Contains(t, parquetVector.GetMessage(), "does not enforce element count")
+
+	lanceIceberg, lanceIcebergDiagnostics, err := invarianticeberg.Schema(lanceDataset)
+	require.NoError(t, err)
+	icebergVector, ok := lanceIceberg.FindFieldByName("vector")
+	require.True(t, ok)
+	require.False(t, icebergVector.Required)
+	require.Nil(t, icebergVector.InitialDefault)
+	require.Nil(t, icebergVector.WriteDefault)
+	icebergVectorDiagnostic := diagnostic(t, lanceIcebergDiagnostics, "vector")
+	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED, icebergVectorDiagnostic.GetCompatibility())
+	require.Contains(t, icebergVectorDiagnostic.GetMessage(), "no fixed-cardinality list")
+
+	lancePostgres, lancePostgresDiagnostics, err := postgres.DDL(lanceDataset)
+	require.NoError(t, err)
+	require.Contains(t, lancePostgres, `"vector" JSONB NOT NULL CONSTRAINT "schema_test_v1_lance_record_vector_fixed_list_check"`)
+	require.Contains(t, lancePostgres, `jsonb_array_length("vector") = 8`)
+	require.NotContains(t, lancePostgres, `"vector" JSONB NOT NULL DEFAULT '[]'`)
+	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED, diagnostic(t, lancePostgresDiagnostics, "vector").GetCompatibility())
+
+	lanceClickHouse, lanceClickHouseDiagnostics, err := clickhouse.Schema(lanceDataset)
+	require.NoError(t, err)
+	require.Contains(t, lanceClickHouse.ColumnDeclarations(), "`vector` Array(Float32)")
+	require.Contains(t, lanceClickHouse.ColumnDeclarations(), "CHECK length(`vector`) = 8")
+	require.NotContains(t, lanceClickHouse.ColumnDeclarations(), "`vector` Array(Float32) DEFAULT []")
+	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS, diagnostic(t, lanceClickHouseDiagnostics, "vector").GetCompatibility())
+
+	projection, projectionDiagnostics, err := clickhouse.ProjectToIceberg(lanceDataset)
+	require.NoError(t, err)
+	require.EqualValues(t, clickhouse.ProjectionVersion, projection.Version)
+	require.EqualValues(t, 8, projection.Fields[2].FixedLength)
+	require.EqualValues(t, 4, projection.Fields[3].FixedLength)
+	projectionJSON, err := clickhouse.ProjectionJSON(projection)
+	require.NoError(t, err)
+	require.Contains(t, string(projectionJSON), `"field_path":"vector","name":"vector"`)
+	require.Contains(t, string(projectionJSON), `"fixed_length":8`)
+	require.Contains(t, string(projectionJSON), `"field_path":"vector64","name":"vector64"`)
+	require.Contains(t, string(projectionJSON), `"fixed_length":4`)
+	secondProjection, _, err := clickhouse.ProjectToIceberg(lanceDataset)
+	require.NoError(t, err)
+	secondProjectionJSON, err := clickhouse.ProjectionJSON(secondProjection)
+	require.NoError(t, err)
+	require.JSONEq(t, string(projectionJSON), string(secondProjectionJSON))
+	var sawIcebergWidening bool
+	for _, item := range projectionDiagnostics {
+		if item.GetFieldPath() == "vector" &&
+			item.GetCompatibility() == datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED {
+			sawIcebergWidening = true
+			break
+		}
+	}
+	require.True(t, sawIcebergWidening)
+}
+
+func diagnostic(
+	t *testing.T,
+	diagnostics []*datav1.MappingDiagnostic,
+	path string,
+) *datav1.MappingDiagnostic {
+	t.Helper()
+	for _, item := range diagnostics {
+		if item.GetFieldPath() == path {
+			return item
+		}
+	}
+	require.FailNow(t, "mapping diagnostic not found", "path %q", path)
+	return nil
 }

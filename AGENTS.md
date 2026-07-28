@@ -12,7 +12,8 @@ One protobuf definition → all protocols. Write a `.proto` file with comments, 
 - **gRPC** — native generated-service registration and language-standard serving
 - **Data schemas** — annotated dataset roots compile once into a versioned
   logical bundle rendered as Arrow, Parquet, Iceberg, PostgreSQL, or
-  ClickHouse; explicit `--message` selection is the controlled-build override
+  ClickHouse; Lance/LanceDB consumes the Arrow projection directly, and
+  explicit `--message` selection is the controlled-build override
 
 The core idea: proto comments become tool descriptions, field comments become JSON Schema descriptions, enums become constrained choices. Zero glue code.
 
@@ -25,7 +26,9 @@ The core idea: proto comments become tool descriptions, field comments become JS
        │                                                    │
        ├─ invariant.Server ←──── generated registration ────┘
        │    └─ native gRPC / HTTP / MCP / CLI
-       └─ invariant-schema → SchemaBundle → Arrow / Parquet / Iceberg / PostgreSQL / ClickHouse
+       └─ invariant-schema → SchemaBundle
+                              ├─ Arrow → Lance/LanceDB SDK
+                              └─ Parquet / Iceberg / PostgreSQL / ClickHouse
 ```
 
 The descriptor image is a compiled artifact, not a second authored contract.
@@ -166,19 +169,25 @@ Protobuf is the only authored logical contract, not a physical storage format.
 Messages marked `(invariant.data.v1.dataset)` are discovered when the compiler
 is run without `--message`; explicit names remain a root-selection override.
 Portable field annotations refine string carriers to decimal/UUID and bytes to
-an exact width. Refined singular carriers require explicit or oneof presence,
-repeated refinements apply per element, and maps are not refined. The existing
-output bundle is derived evolution state: while the dataset full name remains
-stable, numeric protobuf paths retain active IDs and field storage names. Every
-removed nested/list/map ID is tombstoned, and reuse or a
-type/presence/refinement change on an active ID fails. Never delete
-or hand-edit that history to make a schema change pass; use a new protobuf
-field number and reserve the old number/name.
+an exact width. `fixed_list` refines a non-map repeated `float` or `double` to
+an exact cardinality from 1 through 2,147,483,647; it cannot be combined with
+an element semantic refinement. Refined singular carriers require explicit or
+oneof presence, repeated semantic refinements apply per element, and maps are
+not refined. The existing output bundle is derived evolution state: while the
+dataset full name remains stable, numeric protobuf paths retain active IDs and
+field storage names. Every removed nested/list/map ID is tombstoned, and reuse
+or a type/presence/refinement change on an active ID fails. A fixed-list
+dimension is part of logical shape: change it only by reserving the old field
+number/name and adding a new field. Never delete or hand-edit history to make a
+schema change pass.
 
 Annotations declare a logical value domain; they do not validate runtime
-message values. Python's `arrow_table()` enforces canonical decimal/UUID text
-and fixed byte width. Every other writer must enforce the same domain at its
-own boundary rather than assuming the option is a validation interceptor.
+message values. Python's `arrow_table()` enforces canonical decimal/UUID text,
+fixed byte width, and exact fixed-list length. Omitted and empty fixed lists
+are invalid; never synthesize a zero vector. Every other writer must enforce
+the same domain at its own boundary rather than assuming the option is a
+validation interceptor. Conversion failures name the canonical dataset/field
+path.
 
 Renderers emit a diagnostic per logical node. Do not silently collapse maps,
 unsigned values, enum numbers, temporal precision/range, or recursive types.
@@ -190,6 +199,13 @@ carry protobuf-compatible initial/write defaults, while protobuf `required`
 fields are rejected because historical rows have no safe missing value.
 PostgreSQL emits desired-state DDL directly for Atlas; do not introduce HCL as
 an intermediate source.
+
+Arrow maps fixed lists to native `FixedSizeList`. Parquet's physical LIST and
+Iceberg's list do not enforce cardinality, so both emit explicit widening
+diagnostics and require writer-side bundle validation; Iceberg uses an optional
+list with no invented default. PostgreSQL adds an exact length check only for a
+top-level JSONB fixed list and diagnoses nested non-enforcement. ClickHouse
+uses `Array(T)` with an exact length check and no empty default.
 
 ClickHouse emits only column and constraint declarations, never a table engine
 or physical layout. Optional scalar-like fields use `Nullable(T)`. Optional
@@ -208,7 +224,24 @@ existing sibling schemas, not an ingestion runtime or direct catalog bridge.
 Keep presence separate from values so optional composite rows never require
 beta `Nullable(Tuple)`. The UInt64/fixed64 boundary must remain the checked,
 exact `accurateCast(value, 'Decimal(20, 0)')`; never pass through Float64 or
-Int64.
+Int64. Carry fixed-list length in the plan so a publisher can enforce the
+canonical shape before projecting into Iceberg's unconstrained list.
+
+Lance/LanceDB is an Arrow ecosystem consumer, not another renderer or CLI
+target. The Python bridge must hand its native `FixedSizeList` schema and
+arrays directly to LanceDB without application-side casts. The Lance SDK owns
+Lance manifests, fragments, data files, indexes, primary keys, MemWAL/LSM
+policy, compaction, object-store credentials, and namespace/catalog behavior.
+Do not add any of those to SchemaBundle or implement a Lance file writer.
+Repository qualification pins LanceDB 0.34.0 and PyArrow 25.0.0. That LanceDB
+release has no supported public end-to-end MemWAL flush/visibility/compaction
+lifecycle, so do not import private LSM symbols or claim MemWAL support. It
+also drops custom metadata on a persisted `FixedSizeList` value child while
+retaining the dimension and top-level field metadata; SchemaBundle, never a
+reopened Lance schema, remains the identity and tombstone registry. Arrow maps
+require application-owned Lance data storage format 2.2 instead of the 2.1
+new-table default. LanceDB also rejects NaN vector values by default; retain
+that fail-closed policy rather than silently choosing drop/fill/null behavior.
 
 The committed SchemaBundle—not an Arrow IPC projection—is the evolution
 registry. Arrow-Go v18 preserves the map shape but does not round-trip custom
@@ -230,10 +263,13 @@ Go, Python, Rust, and TypeScript bundle readers reject unknown IR or mapping
 versions by default. Raw generated messages remain wire types, not permission
 to interpret a newer mapping with older code.
 
-SchemaBundle v3 carries compiler-owned storage-name provenance. Once a released
-bundle carries real identities or tombstones for consumers, do not bump its
-accepted version and abandon that history; ship an explicit artifact migration
-before changing the compiler's required version.
+SchemaBundle IR v4/mapping v3 carries fixed-list cardinality in addition to
+v3's compiler-owned storage-name provenance. All readers automatically migrate
+the exact v3/mapping-v2 pair while rejecting unknown fields and every other
+version pair; `invariant-schema migrate` rewrites it deterministically. Once a
+released bundle carries real identities or tombstones for consumers, do not
+bump its accepted version and abandon that history; ship an explicit artifact
+migration before changing the compiler's required version.
 
 ## Convention over configuration
 
@@ -427,7 +463,7 @@ make generate        # regenerate proto stubs and descriptor artifacts
 make build           # build every language package and command
 make check           # quality checks and maintained coverage floors for all four languages
 make security        # secrets, integrity, and vulnerability checks
-make integration     # Git installs, Connect interop, PostgreSQL/Atlas, and ClickHouse; requires Docker
+make integration     # Local LanceDB plus Git/Connect and Docker-backed PostgreSQL/ClickHouse
 make parity-release  # strict portable-feature gate before one root tag
 ```
 
@@ -463,7 +499,8 @@ Dependency roots and lockfiles:
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev
   dep, including pytest-cov. `uv run` resolves against this. PyArrow belongs in
   the optional `data` extra and the dev test group; importing the core RPC
-  package must not import PyArrow.
+  package must not import PyArrow. LanceDB is a pinned development
+  qualification dependency, not an Invariant runtime dependency.
 - **`go.mod` + `go.sum`** — every Go dep. The root module keeps Go packages in
   `go/` while allowing one repository-wide `vX.Y.Z` release tag. Consumers run
   `go get github.com/jim-technologies/invariantprotocol/go@vX.Y.Z` and import
@@ -479,11 +516,13 @@ Dependency roots and lockfiles:
   dep, including Biome and Vitest V8 coverage. TypeScript source remains in
   `typescript/`; `npm ci` resolves from the repository root.
 
-The data integration uses pinned PostgreSQL 18.4 and ClickHouse Docker images
-and requires a host Docker daemon. It verifies generated desired state,
-ClickHouse declarations, constraints, value round trips, and the exact UInt64
-and UInt32/timestamp conversion expressions; it is not a production
-DDL-application or publishing API.
+The data integration includes an unconditional local LanceDB lifecycle plus
+pinned PostgreSQL 18.4 and ClickHouse Docker images. It verifies native Arrow
+fixed-list handoff, create/append/reopen/index/search/merge/optimize behavior,
+generated desired state, ClickHouse declarations, constraints, value round
+trips, and the exact UInt64 and UInt32/timestamp conversion expressions; it is
+not a production file writer, DDL application, or publishing API. Run the
+Lance-only boundary with `flox activate -- make lance-integration`.
 
 CI (`.github/workflows/ci.yml`) runs everything inside `flox activate`, so contributors and CI hit the same toolchain by construction.
 
@@ -537,6 +576,8 @@ as stdio; do not add a second tool registry.
 - Rust `google.api.http` transcoding for the remote HTTP client; its portable
   path currently uses canonical Connect routes
 - Go-native protobuf-record to Arrow conversion and framework-owned data-file writing
+- Lance manifests/fragments/files, vector-index policy, primary-key policy,
+  MemWAL/LSM configuration, compaction, credentials, and namespace operations
 - Iceberg catalog commits, partition policies, and table migration/application
 - ClickHouse engines, sorting/partition keys, TTLs, codecs, indexes,
   projections, storage policies, ingestion, and direct Iceberg publication

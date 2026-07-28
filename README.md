@@ -14,8 +14,10 @@ runtimes. Language-specific ecosystem adapters remain explicit rather than
 being mistaken for portable runtime features.
 
 Annotated protobuf dataset messages can also compile into one versioned data
-schema for Arrow, Parquet, Iceberg, PostgreSQL, and ClickHouse. Explicit
-`--message` selection remains available for controlled builds.
+schema for Arrow, Parquet, Iceberg, PostgreSQL, and ClickHouse. Lance and
+LanceDB consume the same canonical Arrow schema and table; Invariant does not
+implement a competing Lance file writer. Explicit `--message` selection
+remains available for controlled builds.
 
 ```text
 .proto (the only authored contract)
@@ -25,7 +27,8 @@ schema for Arrow, Parquet, Iceberg, PostgreSQL, and ClickHouse. Explicit
        ├─ invariant.Server ←──── generated registration ────┘
        │    └─ native gRPC / HTTP-Connect / MCP / CLI
        └─ invariant-schema → SchemaBundle
-                              └─ Arrow / Parquet / Iceberg / PostgreSQL / ClickHouse
+                              ├─ Arrow ──→ Lance/LanceDB SDK
+                              └─ Parquet / Iceberg / PostgreSQL / ClickHouse
 ```
 
 Proto comments become MCP tool descriptions, CLI help, JSON Schema field
@@ -499,6 +502,9 @@ message LedgerEvent {
   optional bytes checksum = 3 [(invariant.data.v1.field) = {
     fixed_bytes: { byte_length: 32 }
   }];
+  repeated float embedding = 4 [(invariant.data.v1.field) = {
+    fixed_list: { length: 1536 }
+  }];
 }
 ```
 
@@ -532,6 +538,17 @@ Repeated `--message` flags can explicitly select roots for controlled or
 one-off builds; annotation discovery is the normal convention. Commit and
 review the bundle, but continue to author only protobuf.
 
+SchemaBundle IR v4 and mapping v3 add fixed-cardinality lists. All four
+language readers migrate the exact historical v3/mapping-v2 pair without
+changing identities or tombstones. The build-time CLI can rewrite that
+migration deterministically for review:
+
+```bash
+go run ./go/cmd/invariant-schema migrate \
+  --bundle ledger.schema.binpb \
+  --output ledger.schema.binpb
+```
+
 When a bundle contains multiple datasets, `postgres` emits every table in
 deterministic source-message order so the result is one complete Atlas desired
 state. Pass `--message` to render one table as a controlled override. Arrow,
@@ -539,12 +556,16 @@ Parquet, Iceberg, and ClickHouse artifacts each describe one dataset and
 therefore require `--message` for a multi-dataset bundle.
 
 Portable field refinements map canonical decimal text, canonical UUID text,
-and exact-width bytes to native Arrow, Parquet, Iceberg, PostgreSQL, and
-ClickHouse types.
-Annotations declare those value domains; they do not validate message values by
-themselves. Python's `arrow_table()` currently enforces the canonical values,
-and other writers must validate at their own boundary. The options do not
-encode keys, indexes, partitions, placement, or migration policy.
+exact-width bytes, and fixed-cardinality float or double lists to target
+types. A fixed list has a positive length of at most 2,147,483,647, is valid
+only on a non-map repeated `float` or `double`, and is part of the field's
+logical shape. Changing its length under the same protobuf number fails
+evolution validation; add a new field number and reserve the retired one.
+Python's `arrow_table()` requires exactly that many values, including rejecting
+an omitted or empty vector, before constructing a native
+`pyarrow.FixedSizeListArray`. Other writers must perform the same boundary
+validation. The options do not encode keys, indexes, partitions, placement,
+or migration policy.
 
 The PostgreSQL renderer emits desired-state DDL directly for Atlas; HCL is not
 another source format. Atlas consumes the generated `file://` SQL desired state
@@ -570,7 +591,8 @@ through schema evolution. The `__invariant_` namespace is renderer-owned. A
 structural ClickHouse-to-Iceberg publishing plan keeps presence separate from
 values and uses `accurateCast(value, 'Decimal(20, 0)')` for the exact
 full-domain `UInt64` conversion. It is not an ingestion runtime or a
-ClickHouse/Iceberg catalog integration.
+ClickHouse/Iceberg catalog integration. Fixed lists remain `Array(T)` with an
+exact `length(...)` check; the publishing plan carries the declared length.
 
 Python's optional data adapter converts a bundle dataset and matching generated
 messages into a real `pyarrow.Table`:
@@ -587,22 +609,34 @@ table, diagnostics = arrow_table(dataset, events)
 pq.write_table(table, "ledger.parquet")
 ```
 
-PyArrow owns Parquet file writing. See [the data-schema contract](docs/data-schemas.md)
-for mappings, diagnostics, evolution rules, and target limitations.
+That same table is the LanceDB boundary; no application-side vector cast or
+second schema is required:
+
+```python
+import lancedb
+
+database = await lancedb.connect_async("./data/lance")
+lance_table = await database.create_table("ledger_events", data=table)
+```
+
+PyArrow owns Parquet file writing, while the Lance SDK owns Lance manifests,
+fragments, data files, indexes, compaction, and object-store access. See
+[the data-schema contract](docs/data-schemas.md) for mappings, diagnostics,
+evolution rules, the qualified LanceDB lifecycle, and target limitations.
 
 ## Install
 
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.12.3`; new releases do not create language-prefixed tags. The project
+tag `v0.13.0`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.12.3
+go get github.com/jim-technologies/invariantprotocol/go@v0.13.0
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -612,26 +646,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.3#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.13.0#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.12.3#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.13.0#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.3" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.13.0" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.12.3" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.13.0" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.12.3"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.13.0"
 ```
 
 For reproducible production builds, replace the tag with a full commit
@@ -650,7 +684,7 @@ make generate
 make build
 make check        # quality checks and coverage-gated suites for all four languages
 make security
-make integration  # Git installs, Connect interop, PostgreSQL/Atlas, and ClickHouse; requires Docker
+make integration  # Includes local LanceDB plus Docker-backed PostgreSQL/Atlas and ClickHouse
 make parity-release
 make bench
 ```
@@ -668,8 +702,8 @@ complete release gates and verify clean Git installs from that exact tag.
 
 CI runs quality checks, four coverage-gated suites, dependency and secret
 audits, generated-code checks, clean Git installs, official-client Connect
-interoperability, PostgreSQL/Atlas apply-inspect-diff integration, and a real
-ClickHouse DDL/value round trip.
+interoperability, a local LanceDB lifecycle, PostgreSQL/Atlas
+apply-inspect-diff integration, and a real ClickHouse DDL/value round trip.
 Pull requests also run protobuf breaking checks. Dependency upgrades are
 intentional and review-driven; the repository does not require a scheduled
 dependency job.
@@ -685,7 +719,9 @@ dependency job.
 - The MCP surface is the non-SSE tool-server subset of `2025-11-25`.
 - The data layer compiles and renders schemas. Deployment policy and physical
   writes remain consumer-owned, except for the explicit Python-to-PyArrow value
-  bridge.
+  bridge. Lance/LanceDB is qualified through that Arrow boundary; Invariant
+  does not own Lance files, indexes, primary keys, MemWAL/LSM policy,
+  compaction, credentials, or manifest placement.
 
 ## License
 

@@ -34,7 +34,7 @@ cancellation, limits, registration freeze, and lifecycle behavior.
 | In-process call | `Invoke` / `InvokeStream` | `invoke` / `invoke_stream` | `invoke` / `invoke_stream` | `invoke` / `invokeStream` |
 | HTTP host adapter | `HTTPHandler` | `asgi_app` | `http_router` | `httpHandler` |
 | Per-method limits | `ConfigureMethod` | `configure_method` | `configure_method` | `configureMethod` |
-| Data bundle reader | `data.ParseSchemaBundle` | `parse_schema_bundle` | `parse_schema_bundle` | `parseSchemaBundle` |
+| Data bundle read/migrate | `data.ParseSchemaBundle` / `data.MigrateSchemaBundle` | `parse_schema_bundle` / `migrate_schema_bundle` | `parse_schema_bundle` / `migrate_schema_bundle` | `parseSchemaBundle` / `migrateSchemaBundle` |
 
 Generated conventions win over artificial symmetry. grpcio keeps its generated
 helper argument order. Rust uses generated Tonic traits and routes. TypeScript
@@ -75,13 +75,15 @@ the portable remote-HTTP contract is the canonical Connect method path.
 
 The data compiler follows the same rule: dataset and field annotations are
 language-neutral protobuf options, one Go build tool compiles the descriptor
-image, and all four languages decode the same versioned SchemaBundle. Decimal,
-UUID, and fixed-byte refinements are generated IR variants in every reader.
-The same build tool renders Arrow, Parquet, Iceberg, PostgreSQL, and ClickHouse
-artifacts, including a language-neutral structural ClickHouse-to-Iceberg
-publishing plan; duplicating target inference in four runtimes would create
-competing schemas. PyArrow record conversion remains a Python ecosystem
-adapter.
+image, and all four languages decode and migrate the same versioned
+SchemaBundle. Decimal, UUID, fixed-byte, and fixed-list refinements are
+generated IR variants in every reader. The same build tool renders Arrow,
+Parquet, Iceberg, PostgreSQL, and ClickHouse artifacts, including a
+language-neutral structural ClickHouse-to-Iceberg publishing plan; duplicating
+target inference in four runtimes would create competing schemas. PyArrow
+record conversion and LanceDB qualification remain Python ecosystem adapters.
+LanceDB consumes the canonical Arrow table; it is not a sixth renderer or a
+portable server-runtime feature.
 
 The OpenAPI importer is a build-time bootstrap, not a portable runtime surface
 or synchronization engine. It accepts bundled OpenAPI 3.0/3.1 input, produces

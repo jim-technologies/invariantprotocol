@@ -12,7 +12,7 @@ import (
 
 // ProjectionVersion is the version of the ClickHouse-to-Iceberg projection
 // model. It is independent of SchemaBundle's canonical IR version.
-const ProjectionVersion = 1
+const ProjectionVersion = 2
 
 // IcebergProjection describes how a publisher reads ClickHouse values into the
 // existing Iceberg-compatible representation. It is a conversion plan, not an
@@ -36,6 +36,7 @@ type IcebergFieldProjection struct {
 	IcebergType         string                   `json:"iceberg_type"`
 	PresenceExpression  string                   `json:"presence_expression"`
 	ValueExpression     string                   `json:"value_expression"`
+	FixedLength         uint32                   `json:"fixed_length,omitempty"`
 	Discriminator       string                   `json:"discriminator,omitempty"`
 	ProtobufFieldNumber uint32                   `json:"protobuf_field_number,omitempty"`
 	Children            []IcebergFieldProjection `json:"children,omitempty"`
@@ -170,6 +171,9 @@ func projectField(
 		ValueExpression:     conversionExpression(field.GetType(), value),
 		Discriminator:       discriminator,
 		ProtobufFieldNumber: fieldNumber,
+	}
+	if list := field.GetType().GetList(); list != nil {
+		projected.FixedLength = list.GetFixedLength()
 	}
 
 	appendChild := func(child *datav1.Field, childPath string) error {

@@ -114,6 +114,8 @@ func TestClickHouseDDLAndValueRoundTrip(t *testing.T) {
 	)
 	require.Equal(t, "-876543211\n", convertedTimestamp)
 
+	testFixedListRoundTrip(t, endpoint, table+"_fixed_list")
+
 	for _, invalid := range []struct {
 		name string
 		sql  string
@@ -159,6 +161,176 @@ func TestClickHouseDDLAndValueRoundTrip(t *testing.T) {
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "VIOLATED_CONSTRAINT")
 		})
+	}
+}
+
+func testFixedListRoundTrip(t *testing.T, endpoint, table string) {
+	t.Helper()
+	schema, diagnostics, err := Schema(fixedListIntegrationDataset())
+	require.NoError(t, err)
+	require.Equal(t,
+		datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS,
+		findDiagnostic(t, diagnostics, "vector").GetCompatibility(),
+	)
+	require.Contains(t, schema.ColumnDeclarations(), "`vector` Array(Float32)")
+	require.Contains(t, schema.ColumnDeclarations(), "CHECK length(`vector`) = 4")
+	require.Contains(t, schema.ColumnDeclarations(), "`vector64` Array(Float64)")
+	require.Contains(t, schema.ColumnDeclarations(), "CHECK length(`vector64`) = 2")
+	require.Contains(t, schema.ColumnDeclarations(),
+		"`nested` Tuple(`present` Bool, `value` Tuple(`vector` Array(Float32)))")
+	require.Contains(t, schema.ColumnDeclarations(),
+		"NOT tupleElement(`nested`, 'present') OR (length(tupleElement(tupleElement(`nested`, 'value'), 'vector')) = 3)")
+	require.NotContains(t, schema.ColumnDeclarations(), "`vector` Array(Float32) DEFAULT []")
+
+	runClickHouse(t, endpoint, "DROP TABLE IF EXISTS "+quoteIdentifier(table))
+	t.Cleanup(func() {
+		runClickHouse(t, endpoint, "DROP TABLE IF EXISTS "+quoteIdentifier(table))
+	})
+	runClickHouse(t, endpoint,
+		"CREATE TABLE "+quoteIdentifier(table)+" (\n"+
+			schema.ColumnDeclarations()+
+			"\n) ENGINE = MergeTree ORDER BY tuple()",
+	)
+
+	runClickHouse(t, endpoint,
+		"INSERT INTO "+quoteIdentifier(table)+" (`id`, `vector`, `vector64`) VALUES "+
+			"('a', [1, 2, 3, 4], [1.5, 2.5]),"+
+			"('b', [-1, -2, -3, -4], [-1.25, -2.25])",
+	)
+	rows := runClickHouse(t, endpoint,
+		"SELECT `id`, arrayStringConcat(arrayMap(value -> toString(value), `vector`), ','), "+
+			"arrayStringConcat(arrayMap(value -> toString(value), `vector64`), ',') "+
+			"FROM "+quoteIdentifier(table)+" ORDER BY `id` FORMAT TabSeparated",
+	)
+	require.Equal(t, "a\t1,2,3,4\t1.5,2.5\nb\t-1,-2,-3,-4\t-1.25,-2.25\n", rows)
+	runClickHouse(t, endpoint,
+		"INSERT INTO "+quoteIdentifier(table)+" (`id`, `vector`, `vector64`, `nested`) VALUES "+
+			"('nested-valid', [1, 2, 3, 4], [1, 2], tuple(true, tuple([5, 6, 7])))",
+	)
+
+	for _, invalid := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "short float vector",
+			sql: "INSERT INTO " + quoteIdentifier(table) +
+				" (`id`, `vector`, `vector64`) VALUES ('short', [1, 2, 3], [1, 2])",
+		},
+		{
+			name: "long float vector",
+			sql: "INSERT INTO " + quoteIdentifier(table) +
+				" (`id`, `vector`, `vector64`) VALUES ('long', [1, 2, 3, 4, 5], [1, 2])",
+		},
+		{
+			name: "empty float vector",
+			sql: "INSERT INTO " + quoteIdentifier(table) +
+				" (`id`, `vector`, `vector64`) VALUES ('empty', [], [1, 2])",
+		},
+		{
+			name: "wrong double vector",
+			sql: "INSERT INTO " + quoteIdentifier(table) +
+				" (`id`, `vector`, `vector64`) VALUES ('double', [1, 2, 3, 4], [1])",
+		},
+		{
+			name: "omitted float vector",
+			sql: "INSERT INTO " + quoteIdentifier(table) +
+				" (`id`, `vector64`) VALUES ('omitted-float', [1, 2])",
+		},
+		{
+			name: "omitted double vector",
+			sql: "INSERT INTO " + quoteIdentifier(table) +
+				" (`id`, `vector`) VALUES ('omitted-double', [1, 2, 3, 4])",
+		},
+		{
+			name: "short nested vector",
+			sql: "INSERT INTO " + quoteIdentifier(table) +
+				" (`id`, `vector`, `vector64`, `nested`) VALUES " +
+				"('nested-short', [1, 2, 3, 4], [1, 2], tuple(true, tuple([1, 2])))",
+		},
+	} {
+		t.Run("fixed list "+invalid.name, func(t *testing.T) {
+			err := executeClickHouse(endpoint, invalid.sql)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "VIOLATED_CONSTRAINT")
+		})
+	}
+}
+
+func fixedListIntegrationDataset() *datav1.DatasetSchema {
+	floatElement := primitiveField("element", 202, datav1.PrimitiveKind_PRIMITIVE_KIND_FLOAT)
+	floatElement.Presence = datav1.Presence_PRESENCE_NOT_APPLICABLE
+	floatElement.SyntheticRole = datav1.SyntheticRole_SYNTHETIC_ROLE_LIST_ELEMENT
+	doubleElement := primitiveField("element", 204, datav1.PrimitiveKind_PRIMITIVE_KIND_DOUBLE)
+	doubleElement.Presence = datav1.Presence_PRESENCE_NOT_APPLICABLE
+	doubleElement.SyntheticRole = datav1.SyntheticRole_SYNTHETIC_ROLE_LIST_ELEMENT
+	nestedElement := primitiveField("element", 207, datav1.PrimitiveKind_PRIMITIVE_KIND_FLOAT)
+	nestedElement.Presence = datav1.Presence_PRESENCE_NOT_APPLICABLE
+	nestedElement.SyntheticRole = datav1.SyntheticRole_SYNTHETIC_ROLE_LIST_ELEMENT
+	nestedVector := &datav1.Field{
+		Name:            "vector",
+		ProtoFullName:   "test.FixedListRecord.Nested.vector",
+		ProtoNumberPath: []uint32{4, 1},
+		StableId:        206,
+		Presence:        datav1.Presence_PRESENCE_REPEATED,
+		Type: &datav1.DataType{Kind: &datav1.DataType_List{List: &datav1.ListType{
+			Element:     nestedElement,
+			FixedLength: 3,
+		}}},
+		SyntheticRole:     datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
+		JsonName:          "vector",
+		StorageNameSource: "vector",
+	}
+	nested := &datav1.Field{
+		Name:            "nested",
+		ProtoFullName:   "test.FixedListRecord.nested",
+		ProtoNumberPath: []uint32{4},
+		StableId:        205,
+		Presence:        datav1.Presence_PRESENCE_EXPLICIT,
+		Nullable:        true,
+		Type: &datav1.DataType{Kind: &datav1.DataType_Struct{Struct: &datav1.StructType{
+			Fields: []*datav1.Field{nestedVector},
+		}}},
+		SyntheticRole:     datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
+		JsonName:          "nested",
+		StorageNameSource: "nested",
+	}
+
+	return &datav1.DatasetSchema{
+		Name:          "fixed_list_record",
+		SourceMessage: "test.FixedListRecord",
+		Fields: []*datav1.Field{
+			primitiveField("id", 200, datav1.PrimitiveKind_PRIMITIVE_KIND_STRING),
+			{
+				Name:            "vector",
+				ProtoFullName:   "test.FixedListRecord.vector",
+				ProtoNumberPath: []uint32{1},
+				StableId:        201,
+				Presence:        datav1.Presence_PRESENCE_REPEATED,
+				Type: &datav1.DataType{Kind: &datav1.DataType_List{List: &datav1.ListType{
+					Element:     floatElement,
+					FixedLength: 4,
+				}}},
+				SyntheticRole:     datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
+				JsonName:          "vector",
+				StorageNameSource: "vector",
+			},
+			{
+				Name:            "vector64",
+				ProtoFullName:   "test.FixedListRecord.vector64",
+				ProtoNumberPath: []uint32{2},
+				StableId:        203,
+				Presence:        datav1.Presence_PRESENCE_REPEATED,
+				Type: &datav1.DataType{Kind: &datav1.DataType_List{List: &datav1.ListType{
+					Element:     doubleElement,
+					FixedLength: 2,
+				}}},
+				SyntheticRole:     datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
+				JsonName:          "vector64",
+				StorageNameSource: "vector64",
+			},
+			nested,
+		},
 	}
 }
 

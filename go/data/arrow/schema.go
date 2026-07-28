@@ -184,6 +184,15 @@ func mapType(dataType *datav1.DataType, path string) (arrowlib.DataType, []*data
 			return nil, diagnostics, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", err
 		}
 		mapped.Name = "item"
+		if length := kind.List.GetFixedLength(); length != 0 {
+			if length > math.MaxInt32 {
+				return nil, diagnostics, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "",
+					fmt.Errorf("arrow: field %q fixed-list length %d exceeds Arrow's maximum of %d", path, length, int64(math.MaxInt32))
+			}
+			return arrowlib.FixedSizeListOfField(int32(length), mapped), diagnostics,
+				datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS,
+				fmt.Sprintf("fixed-cardinality protobuf repeated field maps losslessly to Arrow fixed_size_list[%d]", length), nil
+		}
 		return arrowlib.ListOfField(mapped), diagnostics,
 			datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS,
 			"protobuf repeated field maps to an Arrow list", nil
@@ -336,7 +345,7 @@ func joinPath(parent, child string) string {
 }
 
 func logicalTypeName(dataType *datav1.DataType) string {
-	switch dataType.GetKind().(type) {
+	switch kind := dataType.GetKind().(type) {
 	case *datav1.DataType_Primitive:
 		return "primitive"
 	case *datav1.DataType_Enum:
@@ -344,6 +353,9 @@ func logicalTypeName(dataType *datav1.DataType) string {
 	case *datav1.DataType_Struct:
 		return "struct"
 	case *datav1.DataType_List:
+		if kind.List.GetFixedLength() != 0 {
+			return "fixed_list"
+		}
 		return "list"
 	case *datav1.DataType_Map:
 		return "map"

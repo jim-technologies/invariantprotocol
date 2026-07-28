@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/jim-technologies/invariantprotocol/go/data"
+	"github.com/jim-technologies/invariantprotocol/go/data/clickhouse"
 	datav1 "github.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -97,6 +99,58 @@ func TestCompileDiscoversAnnotatedDatasetsWithoutMessageFlags(t *testing.T) {
 	bundle := decodeBundle(t, encoded)
 	require.Len(t, bundle.GetDatasets(), 1)
 	assert.Equal(t, "example.v1.Record", bundle.GetDatasets()[0].GetSourceMessage())
+}
+
+func TestMigrateUpgradesLegacyBundleAndSupportsInPlaceWrites(t *testing.T) {
+	legacy := oneFieldBundle("example.v1.Record")
+	legacy.IrVersion = 3
+	legacy.MappingVersion = 2
+	legacy.Datasets[0].LastFieldId = 2
+	legacy.Datasets[0].RetiredFields = []*datav1.RetiredField{{
+		Identity:      "field:9",
+		StableId:      2,
+		ProtoFullName: "example.v1.Record.removed",
+		Name:          "removed",
+	}}
+
+	inputPath := writeBundle(t, legacy)
+	outputPath := filepath.Join(t.TempDir(), "migrated.binpb")
+	var stdout, stderr bytes.Buffer
+	require.NoError(t, run([]string{
+		"migrate",
+		"--bundle", inputPath,
+		"--output", outputPath,
+	}, &stdout, &stderr))
+	assert.Empty(t, stdout.String())
+	assert.Empty(t, stderr.String())
+
+	encoded, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	migrated := new(datav1.SchemaBundle)
+	require.NoError(t, proto.Unmarshal(encoded, migrated))
+	assert.Equal(t, data.IRVersion, migrated.GetIrVersion())
+	assert.Equal(t, data.MappingVersion, migrated.GetMappingVersion())
+	require.Len(t, migrated.GetDatasets(), 1)
+	assert.True(t, proto.Equal(legacy.GetDatasets()[0], migrated.GetDatasets()[0]))
+
+	require.NoError(t, run([]string{
+		"migrate",
+		"--bundle", outputPath,
+		"--output", outputPath,
+	}, &stdout, &stderr))
+	inPlace, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	assert.Equal(t, encoded, inPlace, "an already-current bundle must remain byte-for-byte stable")
+}
+
+func TestHelpDescribesMigrationAndLanceArrowBoundary(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	require.NoError(t, run([]string{"help"}, &stdout, &stderr))
+	assert.Empty(t, stderr.String())
+	assert.Contains(t, stdout.String(), "invariant-schema migrate --bundle FILE --output FILE")
+	assert.Contains(t, stdout.String(), "Arrow emits schema-only IPC")
+	assert.Contains(t, stdout.String(), "Lance/LanceDB consume that schema")
+	assert.NotContains(t, stdout.String(), "invariant-schema lance")
 }
 
 func TestCompileRejectsEmptyStorageNamesBeforeWriting(t *testing.T) {
@@ -193,7 +247,7 @@ func TestRenderersEmitOfficialArtifactsAndSelectMessage(t *testing.T) {
 	}{
 		{target: "parquet", contains: "group field_id=-1 example_v1_second"},
 		{target: "iceberg", contains: `"type":"struct"`},
-		{target: "clickhouse-iceberg", contains: `"version":1`},
+		{target: "clickhouse-iceberg", contains: fmt.Sprintf(`"version":%d`, clickhouse.ProjectionVersion)},
 		{target: "postgres", contains: `CREATE TABLE "example_v1_second"`},
 	} {
 		t.Run(test.target, func(t *testing.T) {
@@ -253,14 +307,20 @@ func TestRenderRejectsUnknownBundleVersions(t *testing.T) {
 			mutate: func(bundle *datav1.SchemaBundle) {
 				bundle.IrVersion = 0
 			},
-			wantError: "unsupported SchemaBundle ir_version 0; expected 3",
+			wantError: fmt.Sprintf(
+				"unsupported SchemaBundle version pair ir_version=0 mapping_version=%d; expected 3/2 or %d/%d",
+				data.MappingVersion, data.IRVersion, data.MappingVersion,
+			),
 		},
 		{
 			name: "mapping",
 			mutate: func(bundle *datav1.SchemaBundle) {
 				bundle.MappingVersion = 1
 			},
-			wantError: "unsupported SchemaBundle mapping_version 1; expected 2",
+			wantError: fmt.Sprintf(
+				"unsupported SchemaBundle version pair ir_version=%d mapping_version=1; expected 3/2 or %d/%d",
+				data.IRVersion, data.IRVersion, data.MappingVersion,
+			),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -10,6 +10,35 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.13.0 — 2026-07-28
+
+### Added
+
+- **Fixed-cardinality lists are now canonical schema shape.** The aggregate
+  field option accepts a positive, bounded `fixed_list` length on repeated
+  `float` and `double` carriers. SchemaBundle IR v4/mapping v3 preserves that
+  dimension through stable identities and rejects same-number dimension
+  changes. Arrow and Python emit native FixedSizeList values; Parquet and
+  Iceberg report their unenforced widening; PostgreSQL emits an exact
+  top-level JSONB cardinality constraint, and ClickHouse emits exact recursive
+  array-length checks.
+- **LanceDB is qualified through the canonical Arrow boundary.** The locked
+  LanceDB 0.34.0/PyArrow 25.0.0 integration creates, appends, reopens, indexes,
+  searches, merges, and optimizes using only Invariant-generated schema and
+  data. Lance files, indexes, primary keys, MemWAL/LSM, compaction, credentials,
+  and namespace policy remain SDK/application configuration; Invariant does
+  not implement a Lance writer or a parallel Lance schema. Qualification also
+  records LanceDB's application-owned format-2.2 requirement for Arrow maps,
+  fail-closed NaN vector policy, and persisted list-child metadata limitation.
+
+### Changed
+
+- **Historical SchemaBundles have one explicit migration path.** Go, Python,
+  Rust, and TypeScript readers migrate the exact IR-v3/mapping-v2 pair to
+  IR-v4/mapping-v3 without changing stable IDs or tombstones.
+  `invariant-schema migrate` rewrites that artifact deterministically; unknown
+  fields and every other version pair still fail closed.
+
 ## v0.12.3 — 2026-07-27
 
 ### Fixed

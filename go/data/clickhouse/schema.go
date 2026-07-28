@@ -474,7 +474,9 @@ func mapField(field *datav1.Field, path string) (mappedField, []*datav1.MappingD
 			return mappedField{}, append([]*datav1.MappingDiagnostic{unsupportedDiagnostic(path, err.Error())}, mapped.diagnostics...),
 				fmt.Errorf("clickhouse: field %q: %w", path, err)
 		}
-		result.defaultExpression = "[]"
+		if field.GetType().GetList().GetFixedLength() == 0 {
+			result.defaultExpression = "[]"
+		}
 
 	case datav1.Presence_PRESENCE_MAP:
 		if field.GetNullable() || field.GetType().GetMap() == nil {
@@ -602,16 +604,29 @@ func mapType(dataType *datav1.DataType, path string) (mappedType, error) {
 		if err != nil {
 			return mappedType{diagnostics: diagnostics}, err
 		}
-		validations := make([]validation, len(element.validations))
-		for index, check := range element.validations {
-			validations[index] = check
-			validations[index].expression = "arrayAll(element -> (" +
+		validations := make([]validation, 0, len(element.validations)+1)
+		message := "protobuf repeated field maps losslessly to ClickHouse Array(T)"
+		if kind.List.GetFixedLength() != 0 {
+			validations = append(validations, validation{
+				fieldPath:  path,
+				kind:       "fixed_list",
+				expression: "length(" + constraintValuePlaceholder + ") = " + strconv.FormatUint(uint64(kind.List.GetFixedLength()), 10),
+			})
+			message = fmt.Sprintf(
+				"fixed-cardinality protobuf repeated field maps losslessly to ClickHouse Array(T) with an exact length CHECK of %d",
+				kind.List.GetFixedLength(),
+			)
+		}
+		for _, check := range element.validations {
+			validations = append(validations, check)
+			validationIndex := len(validations) - 1
+			validations[validationIndex].expression = "arrayAll(element -> (" +
 				replaceValue(check.expression, "element") + "), " + constraintValuePlaceholder + ")"
 		}
 		return mappedType{
 			sqlType:       "Array(" + element.sqlType + ")",
 			compatibility: datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS,
-			message:       "protobuf repeated field maps losslessly to ClickHouse Array(T)",
+			message:       message,
 			diagnostics:   diagnostics,
 			validations:   validations,
 			composite:     true,

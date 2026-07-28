@@ -264,10 +264,12 @@ class StructType(_message.Message):
     def __init__(self, fields: _Optional[_Iterable[_Union[Field, _Mapping]]] = ...) -> None: ...
 
 class ListType(_message.Message):
-    __slots__ = ("element",)
+    __slots__ = ("element", "fixed_length")
     ELEMENT_FIELD_NUMBER: _ClassVar[int]
+    FIXED_LENGTH_FIELD_NUMBER: _ClassVar[int]
     element: Field
-    def __init__(self, element: _Optional[_Union[Field, _Mapping]] = ...) -> None: ...
+    fixed_length: int
+    def __init__(self, element: _Optional[_Union[Field, _Mapping]] = ..., fixed_length: _Optional[int] = ...) -> None: ...
 
 class MapType(_message.Message):
     __slots__ = ("key", "value")

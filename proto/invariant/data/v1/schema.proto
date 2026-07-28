@@ -317,6 +317,10 @@ message StructType {
 message ListType {
   // Synthetic, non-null list element with its own stable storage identity.
   Field element = 1;
+
+  // Exact element count when non-zero. Zero denotes an ordinary variable-size
+  // protobuf repeated field.
+  uint32 fixed_length = 2;
 }
 
 // MapType represents a protobuf map while retaining key and value types.

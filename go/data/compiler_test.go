@@ -328,6 +328,18 @@ func TestCompileDescriptorBytesRejectsInvalidOrNewerAnnotationDeclarations(t *te
 		}), nil)
 		require.ErrorContains(t, err, "field option contains fields unsupported by this compiler")
 	})
+
+	t.Run("newer nested fixed-list option", func(t *testing.T) {
+		option := fixedListOptions(8)
+		option.GetFixedList().ProtoReflect().SetUnknown([]byte{0x98, 0x06, 0x01})
+		_, err := CompileMessage(refinedMessage(t, refinedMessageSpec{
+			fields: []refinedFieldSpec{{
+				name: "vector", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_FLOAT,
+				repeated: true, options: option,
+			}},
+		}), nil)
+		require.ErrorContains(t, err, "field option.fixed_list contains fields unsupported by this compiler")
+	})
 }
 
 func TestRepositoryAnnotationDeclarationsMatchCompilerPolicy(t *testing.T) {
@@ -352,6 +364,8 @@ func TestCompileMessageAppliesPortableTypeRefinements(t *testing.T) {
 			// scale is deliberately omitted from the serialized proto3 option;
 			// its contractual default is zero.
 			{name: "whole_amount", number: 5, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: decimalOptions(18, 0)},
+			{name: "vector", number: 6, kind: descriptorpb.FieldDescriptorProto_TYPE_FLOAT, repeated: true, options: fixedListOptions(8)},
+			{name: "vector64", number: 7, kind: descriptorpb.FieldDescriptorProto_TYPE_DOUBLE, repeated: true, options: fixedListOptions(4)},
 		},
 	})
 
@@ -373,6 +387,14 @@ func TestCompileMessageAppliesPortableTypeRefinements(t *testing.T) {
 	require.NotNil(t, wholeAmount)
 	assert.Equal(t, uint32(18), wholeAmount.GetPrecision())
 	assert.Zero(t, wholeAmount.GetScale())
+	vector := schemaField(t, schema, 6).GetType().GetList()
+	require.NotNil(t, vector)
+	assert.EqualValues(t, 8, vector.GetFixedLength())
+	assert.Equal(t, datav1.PrimitiveKind_PRIMITIVE_KIND_FLOAT, vector.GetElement().GetType().GetPrimitive().GetKind())
+	vector64 := schemaField(t, schema, 7).GetType().GetList()
+	require.NotNil(t, vector64)
+	assert.EqualValues(t, 4, vector64.GetFixedLength())
+	assert.Equal(t, datav1.PrimitiveKind_PRIMITIVE_KIND_DOUBLE, vector64.GetElement().GetType().GetPrimitive().GetKind())
 
 	serialized := descriptorSetBytes(t, protodesc.ToFileDescriptorProto(md.ParentFile()))
 	bundle, err := CompileDescriptorBytes(serialized, []string{"shape.v1.ScalarRow"}, nil)
@@ -433,6 +455,35 @@ func TestCompileMessageValidatesPortableTypeRefinements(t *testing.T) {
 			wantError: "field option must select exactly one semantic type",
 		},
 		{
+			name:      "fixed list singular",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_FLOAT, options: fixedListOptions(8)},
+			wantError: "fixed_list refinement requires a non-map repeated field",
+		},
+		{
+			name:      "fixed list carrier",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_INT32, repeated: true, options: fixedListOptions(8)},
+			wantError: "fixed_list refinement requires a protobuf float or double carrier",
+		},
+		{
+			name:      "zero fixed list length",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_FLOAT, repeated: true, options: fixedListOptions(0)},
+			wantError: "fixed_list length must be greater than zero",
+		},
+		{
+			name:      "excess fixed list length",
+			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_FLOAT, repeated: true, options: fixedListOptions(1 << 31)},
+			wantError: "fixed_list length must not exceed 2147483647",
+		},
+		{
+			name: "fixed list semantic conflict",
+			field: refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_FLOAT, repeated: true, options: func() *datav1.FieldOptions {
+				options := fixedListOptions(8)
+				options.SemanticType = &datav1.FieldOptions_Uuid{Uuid: &datav1.UuidOptions{}}
+				return options
+			}()},
+			wantError: "fixed_list cannot be combined with a semantic type refinement",
+		},
+		{
 			name:      "implicit singular presence",
 			syntax:    "proto3",
 			field:     refinedFieldSpec{name: "value", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_STRING, options: uuidOptions()},
@@ -465,6 +516,50 @@ func TestCompileMessageRejectsMapRefinement(t *testing.T) {
 	md := refinedMapMessage(t, decimalOptions(10, 2))
 	_, err := CompileMessage(md, nil)
 	require.ErrorContains(t, err, "semantic type refinements are not supported on protobuf maps")
+
+	md = refinedMapMessage(t, fixedListOptions(8))
+	_, err = CompileMessage(md, nil)
+	require.ErrorContains(t, err, "fixed_list refinement requires a non-map repeated field")
+}
+
+func TestCompileMessageTreatsFixedListLengthAsEvolutionaryShape(t *testing.T) {
+	firstDescriptor := refinedMessage(t, refinedMessageSpec{fields: []refinedFieldSpec{{
+		name: "vector", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_FLOAT,
+		repeated: true, options: fixedListOptions(8),
+	}}})
+	first, err := CompileMessage(firstDescriptor, nil)
+	require.NoError(t, err)
+	assert.EqualValues(t, 8, schemaField(t, first, 1).GetType().GetList().GetFixedLength())
+
+	for name, options := range map[string]*datav1.FieldOptions{
+		"changed": fixedListOptions(16),
+		"removed": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := CompileMessage(refinedMessage(t, refinedMessageSpec{fields: []refinedFieldSpec{{
+				name: "vector", number: 1, kind: descriptorpb.FieldDescriptorProto_TYPE_FLOAT,
+				repeated: true, options: options,
+			}}}), first)
+			require.ErrorContains(t, err, "logical shape changed")
+			require.ErrorContains(t, err, "use a new protobuf field number")
+		})
+	}
+
+	replacement, err := CompileMessage(refinedMessage(t, refinedMessageSpec{
+		reservedNames:   []string{"vector"},
+		reservedNumbers: []int32{1},
+		fields: []refinedFieldSpec{{
+			name: "vector_v2", number: 2, kind: descriptorpb.FieldDescriptorProto_TYPE_FLOAT,
+			repeated: true, options: fixedListOptions(16),
+		}},
+	}), first)
+	require.NoError(t, err)
+	assert.EqualValues(t, 16, schemaField(t, replacement, 2).GetType().GetList().GetFixedLength())
+	require.Len(t, replacement.GetRetiredFields(), 2, "the retired list and its element identities are tombstoned")
+	assert.Equal(t, []string{"field:1", "field:1/list:element"}, []string{
+		replacement.GetRetiredFields()[0].GetIdentity(),
+		replacement.GetRetiredFields()[1].GetIdentity(),
+	})
 }
 
 func TestCompileMessageOwnsStorageNamesAndPreservesReservedRenames(t *testing.T) {
@@ -1554,6 +1649,10 @@ func fixedBytesOptions(byteLength uint32) *datav1.FieldOptions {
 	return &datav1.FieldOptions{SemanticType: &datav1.FieldOptions_FixedBytes{
 		FixedBytes: &datav1.FixedBytesOptions{ByteLength: byteLength},
 	}}
+}
+
+func fixedListOptions(length uint32) *datav1.FieldOptions {
+	return &datav1.FieldOptions{FixedList: &datav1.FixedListOptions{Length: length}}
 }
 
 func rowFile(path, packageName string) *descriptorpb.FileDescriptorProto {

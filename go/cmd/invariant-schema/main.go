@@ -34,12 +34,14 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("command required: compile, arrow, parquet, iceberg, clickhouse, clickhouse-iceberg, or postgres")
+		return errors.New("command required: compile, migrate, arrow, parquet, iceberg, clickhouse, clickhouse-iceberg, or postgres")
 	}
 
 	switch args[0] {
 	case "compile":
 		return runCompile(args[1:], stderr)
+	case "migrate":
+		return runMigrate(args[1:], stderr)
 	case "arrow", "parquet", "iceberg", "clickhouse", "clickhouse-iceberg", "postgres":
 		return runRender(args[0], args[1:], stdout, stderr)
 	case "help", "-h", "--help":
@@ -47,7 +49,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	default:
 		return fmt.Errorf(
-			"unknown command %q; expected compile, arrow, parquet, iceberg, clickhouse, clickhouse-iceberg, or postgres",
+			"unknown command %q; expected compile, migrate, arrow, parquet, iceberg, clickhouse, clickhouse-iceberg, or postgres",
 			args[0],
 		)
 	}
@@ -57,8 +59,11 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  invariant-schema compile --descriptor FILE [--message FULL_NAME ...] --output FILE")
 	fmt.Fprintln(w, "    Without --message, messages marked (invariant.data.v1.dataset) are compiled.")
+	fmt.Fprintln(w, "  invariant-schema migrate --bundle FILE --output FILE")
+	fmt.Fprintln(w, "    Upgrade the supported historical SchemaBundle while retaining identities and tombstones.")
 	fmt.Fprintln(w, "  invariant-schema arrow|parquet|iceberg|clickhouse|clickhouse-iceberg|postgres --bundle FILE [--message FULL_NAME] [--output FILE|-]")
 	fmt.Fprintln(w, "    PostgreSQL renders every dataset when --message is omitted; other targets require one dataset.")
+	fmt.Fprintln(w, "    Arrow emits schema-only IPC; Lance/LanceDB consume that schema and Python arrow_table() through their SDK.")
 }
 
 type messageFlags []string
@@ -140,6 +145,42 @@ func loadPreviousBundle(path string) (*datav1.SchemaBundle, error) {
 		return nil, fmt.Errorf("compile: parse previous schema bundle %q: %w", path, err)
 	}
 	return previous, nil
+}
+
+func runMigrate(args []string, stderr io.Writer) error {
+	flags := flag.NewFlagSet("migrate", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var bundlePath, outputPath string
+	flags.StringVar(&bundlePath, "bundle", "", "historical SchemaBundle input")
+	flags.StringVar(&outputPath, "output", "", "migrated SchemaBundle output")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("migrate: unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	if bundlePath == "" {
+		return errors.New("migrate: --bundle is required")
+	}
+	if outputPath == "" || outputPath == "-" {
+		return errors.New("migrate: --output must be a file")
+	}
+	encoded, err := os.ReadFile(bundlePath)
+	if err != nil {
+		return fmt.Errorf("migrate: read schema bundle %q: %w", bundlePath, err)
+	}
+	bundle, err := data.ParseSchemaBundle(encoded)
+	if err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	migrated, err := data.MarshalSchemaBundle(bundle)
+	if err != nil {
+		return fmt.Errorf("migrate: marshal schema bundle: %w", err)
+	}
+	if err := writeFileAtomically(outputPath, migrated); err != nil {
+		return fmt.Errorf("migrate: write schema bundle %q: %w", outputPath, err)
+	}
+	return nil
 }
 
 func runRender(target string, args []string, stdout, stderr io.Writer) error {

@@ -291,12 +291,12 @@
     {
       "id": "schema_bundle_reader",
       "kind": "core",
-      "description": "Read and reject unsupported versions of the shared SchemaBundle artifact.",
+      "description": "Read the shared SchemaBundle artifact, migrate the exact supported historical version pair without changing identities or tombstones, and reject unknown mappings.",
       "api": {
-        "go": "data.ParseSchemaBundle",
-        "python": "parse_schema_bundle",
-        "rust": "parse_schema_bundle",
-        "typescript": "parseSchemaBundle"
+        "go": "data.ParseSchemaBundle / data.MigrateSchemaBundle",
+        "python": "parse_schema_bundle / migrate_schema_bundle",
+        "rust": "parse_schema_bundle / migrate_schema_bundle",
+        "typescript": "parseSchemaBundle / migrateSchemaBundle"
       },
       "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
       "tests": {
@@ -325,7 +325,7 @@
     {
       "id": "schema_compiler_and_renderers",
       "kind": "build_tool",
-      "description": "Discover annotated dataset roots, compile portable decimal/UUID/fixed-byte refinements into SchemaBundle, and render Arrow, Parquet, Iceberg, PostgreSQL, and ClickHouse schemas plus a ClickHouse-to-Iceberg publishing plan.",
+      "description": "Discover annotated dataset roots, compile portable decimal/UUID/fixed-byte/fixed-list refinements into SchemaBundle, and render Arrow, Parquet, Iceberg, PostgreSQL, and ClickHouse schemas plus a ClickHouse-to-Iceberg publishing plan.",
       "availability": "One repository CLI consumes language-neutral protobuf artifacts; duplicating the compiler per runtime is forbidden.",
       "consumers": ["go", "python", "rust", "typescript"],
       "implementation": [
@@ -351,12 +351,25 @@
     {
       "id": "pyarrow_record_bridge",
       "kind": "ecosystem",
-      "description": "Convert matching generated protobuf messages into native PyArrow tables for Python data workloads.",
+      "description": "Convert matching generated protobuf messages into native PyArrow tables, including exact FixedSizeList arrays with value-length enforcement, for Python data workloads.",
       "rationale": "This is a Python ecosystem bridge, not a portable server-runtime capability.",
       "support": {"go": "not_applicable", "python": "supported", "rust": "not_applicable", "typescript": "not_applicable"},
       "tests": {
         "go": [],
         "python": ["python/tests/test_data_arrow.py"],
+        "rust": [],
+        "typescript": []
+      }
+    },
+    {
+      "id": "lancedb_arrow_qualification",
+      "kind": "ecosystem",
+      "description": "Use the invariant-generated PyArrow FixedSizeList schema and table directly through a real LanceDB create, append, reopen, vector-index, search, merge, and optimize lifecycle.",
+      "rationale": "LanceDB is a Python ecosystem consumer of the canonical Arrow projection, not a separate schema renderer or a portable RPC-runtime capability.",
+      "support": {"go": "not_applicable", "python": "supported", "rust": "not_applicable", "typescript": "not_applicable"},
+      "tests": {
+        "go": [],
+        "python": ["python/tests/test_data_lance.py"],
         "rust": [],
         "typescript": []
       }

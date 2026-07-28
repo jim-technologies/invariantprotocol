@@ -76,7 +76,7 @@ jobs:
           command: make verify-generate
 
   integration:
-    name: Integration (Git installs, Connect, PostgreSQL, Atlas, ClickHouse)
+    name: Integration (Git installs, Connect, PostgreSQL, Atlas, ClickHouse, LanceDB)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

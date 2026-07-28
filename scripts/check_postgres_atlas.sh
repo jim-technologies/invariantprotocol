@@ -74,6 +74,9 @@ grep -Fq '"amount" numeric(18,4)' "$tmp_dir/inspected.sql"
 grep -Fq '"record_id" uuid' "$tmp_dir/inspected.sql"
 grep -Fq '"schema_test_v1_annotated_record_digest_fixed_bytes_check"' "$tmp_dir/inspected.sql"
 grep -Fq '"schema_test_v1_annotated_record_reference_oneof_check"' "$tmp_dir/inspected.sql"
+grep -Fq 'CREATE TABLE "schema_test_v1_lance_record"' "$tmp_dir/inspected.sql"
+grep -Fq '"schema_test_v1_lance_record_vector_fixed_list_check"' "$tmp_dir/inspected.sql"
+grep -Fq '"schema_test_v1_lance_record_vector64_fixed_list_check"' "$tmp_dir/inspected.sql"
 grep -Fq 'CREATE TABLE "data_v1_canonical_record"' "$tmp_dir/inspected.sql"
 grep -Fq '"double_value" double precision NOT NULL DEFAULT 0' "$tmp_dir/inspected.sql"
 grep -Fq '"optional_note" text NULL' "$tmp_dir/inspected.sql"
@@ -97,7 +100,7 @@ assert_query() {
 
 assert_query \
   "SELECT string_agg(tablename, ',' ORDER BY tablename) FROM pg_tables WHERE schemaname = 'public';" \
-  "data_v1_canonical_record,data_v1_proto2_record,schema_test_v1_annotated_record"
+  "data_v1_canonical_record,data_v1_proto2_record,schema_test_v1_annotated_record,schema_test_v1_lance_record"
 assert_query \
   "SELECT is_nullable || '|' || COALESCE(column_default, '<null>') FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'data_v1_canonical_record' AND column_name = 'double_value';" \
   "NO|0"
@@ -131,6 +134,46 @@ assert_query \
 assert_query \
   "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.schema_test_v1_annotated_record'::regclass AND conname = 'schema_test_v1_annotated_record_reference_oneof_check';" \
   "CHECK ((num_nonnulls(external_id, sequence) <= 1))"
+assert_query \
+  "SELECT is_nullable || '|' || COALESCE(column_default, '<null>') FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'schema_test_v1_lance_record' AND column_name = 'vector';" \
+  "NO|<null>"
+assert_query \
+  "SELECT is_nullable || '|' || COALESCE(column_default, '<null>') FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'schema_test_v1_lance_record' AND column_name = 'vector64';" \
+  "NO|<null>"
+
+docker exec "$container_id" \
+  psql --username postgres --dbname invariant --set ON_ERROR_STOP=1 --command \
+  "INSERT INTO public.schema_test_v1_lance_record (id, label, vector, vector64) VALUES (
+    'valid',
+    'fixed lists',
+    '[1, 2, 3, 4, 5, 6, 7, 8]'::jsonb,
+    '[1.5, 2.5, 3.5, 4.5]'::jsonb
+  );" >/dev/null
+assert_query \
+  "SELECT id || '|' || jsonb_array_length(vector)::text || '|' || (vector ->> 0) || '|' || jsonb_array_length(vector64)::text || '|' || (vector64 ->> 0) FROM public.schema_test_v1_lance_record;" \
+  "valid|8|1|4|1.5"
+
+assert_postgres_rejects() {
+  local query="$1"
+  if docker exec "$container_id" \
+    psql --username postgres --dbname invariant --set ON_ERROR_STOP=1 --command "$query" \
+    >"$tmp_dir/rejected.out" 2>&1; then
+    printf 'PostgreSQL unexpectedly accepted an invalid fixed-cardinality value:\n%s\n' "$query" >&2
+    return 1
+  fi
+  grep -Fq 'violates' "$tmp_dir/rejected.out"
+}
+
+assert_postgres_rejects \
+  "INSERT INTO public.schema_test_v1_lance_record (id, vector, vector64) VALUES ('short', '[1,2,3,4,5,6,7]'::jsonb, '[1,2,3,4]'::jsonb);"
+assert_postgres_rejects \
+  "INSERT INTO public.schema_test_v1_lance_record (id, vector, vector64) VALUES ('long', '[1,2,3,4,5,6,7,8,9]'::jsonb, '[1,2,3,4]'::jsonb);"
+assert_postgres_rejects \
+  "INSERT INTO public.schema_test_v1_lance_record (id, vector, vector64) VALUES ('empty', '[]'::jsonb, '[1,2,3,4]'::jsonb);"
+assert_postgres_rejects \
+  "INSERT INTO public.schema_test_v1_lance_record (id, vector, vector64) VALUES ('double', '[1,2,3,4,5,6,7,8]'::jsonb, '[1,2,3]'::jsonb);"
+assert_postgres_rejects \
+  "INSERT INTO public.schema_test_v1_lance_record (id, vector64) VALUES ('omitted', '[1,2,3,4]'::jsonb);"
 
 atlas schema diff \
   --from "$target_url" \

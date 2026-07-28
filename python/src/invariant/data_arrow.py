@@ -256,6 +256,16 @@ def _map_type(
     if kind == "list":
         element, diagnostics = _map_field(pa, data_type.list.element, f"{path}[]")
         element = element.with_name("item")
+        fixed_length = data_type.list.fixed_length
+        if fixed_length:
+            if fixed_length > _INT32_MAX:
+                raise ValueError(f"arrow: fixed-list field {path!r} length must be between 1 and {_INT32_MAX} elements")
+            return (
+                pa.list_(element, list_size=fixed_length),
+                diagnostics,
+                schema_pb2.MAPPING_COMPATIBILITY_LOSSLESS,
+                f"fixed-cardinality protobuf repeated field maps losslessly to Arrow fixed_size_list[{fixed_length}]",
+            )
         return (
             pa.list_(element),
             diagnostics,
@@ -709,7 +719,7 @@ def _message_row(
         # compatibility spelling from its base Message stub.
         missing = ", ".join(message.FindInitializationErrors())  # type: ignore[attr-defined]
         raise ValueError(f"arrow: protobuf message {actual_type!r} is missing required fields: {missing}")
-    return {field.name: _field_value(message, field, field.name) for field in dataset.fields}
+    return {field.name: _field_value(message, field, _join_path(dataset.name, field.name)) for field in dataset.fields}
 
 
 def _field_value(message: Message, field: Field, path: str) -> Any:
@@ -747,6 +757,11 @@ def _convert_value(value: Any, data_type: DataType, path: str, source: str) -> A
         }
     if kind == "list":
         element = data_type.list.element
+        fixed_length = data_type.list.fixed_length
+        if fixed_length and len(value) != fixed_length:
+            raise ValueError(
+                f"arrow: fixed-list field {path!r} has {len(value)} elements; expected exactly {fixed_length}"
+            )
         return [_convert_value(item, element.type, f"{path}[]", element.proto_full_name) for item in value]
     if kind == "map":
         key = data_type.map.key
@@ -891,7 +906,10 @@ def _join_path(parent: str, child: str) -> str:
 
 
 def _logical_type_name(data_type: DataType) -> str:
-    return data_type.WhichOneof("kind") or "unspecified"
+    kind = data_type.WhichOneof("kind")
+    if kind == "list" and data_type.list.fixed_length:
+        return "fixed_list"
+    return kind or "unspecified"
 
 
 __all__ = ["arrow_schema", "arrow_table"]

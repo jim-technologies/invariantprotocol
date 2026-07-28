@@ -32,12 +32,20 @@ class FixedBytesOptions(_message.Message):
     byte_length: int
     def __init__(self, byte_length: _Optional[int] = ...) -> None: ...
 
+class FixedListOptions(_message.Message):
+    __slots__ = ("length",)
+    LENGTH_FIELD_NUMBER: _ClassVar[int]
+    length: int
+    def __init__(self, length: _Optional[int] = ...) -> None: ...
+
 class FieldOptions(_message.Message):
-    __slots__ = ("decimal", "uuid", "fixed_bytes")
+    __slots__ = ("decimal", "uuid", "fixed_bytes", "fixed_list")
     DECIMAL_FIELD_NUMBER: _ClassVar[int]
     UUID_FIELD_NUMBER: _ClassVar[int]
     FIXED_BYTES_FIELD_NUMBER: _ClassVar[int]
+    FIXED_LIST_FIELD_NUMBER: _ClassVar[int]
     decimal: DecimalOptions
     uuid: UuidOptions
     fixed_bytes: FixedBytesOptions
-    def __init__(self, decimal: _Optional[_Union[DecimalOptions, _Mapping]] = ..., uuid: _Optional[_Union[UuidOptions, _Mapping]] = ..., fixed_bytes: _Optional[_Union[FixedBytesOptions, _Mapping]] = ...) -> None: ...
+    fixed_list: FixedListOptions
+    def __init__(self, decimal: _Optional[_Union[DecimalOptions, _Mapping]] = ..., uuid: _Optional[_Union[UuidOptions, _Mapping]] = ..., fixed_bytes: _Optional[_Union[FixedBytesOptions, _Mapping]] = ..., fixed_list: _Optional[_Union[FixedListOptions, _Mapping]] = ...) -> None: ...

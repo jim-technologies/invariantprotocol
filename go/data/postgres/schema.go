@@ -25,6 +25,7 @@ type column struct {
 	notNull     bool
 	oneof       string
 	fixedBytes  int
+	fixedList   int
 }
 
 // DDL returns complete, semicolon-terminated PostgreSQL DDL for one dataset.
@@ -73,6 +74,10 @@ func DDL(dataset *datav1.DatasetSchema) (string, []*datav1.MappingDiagnostic, er
 		if fixed := field.GetType().GetFixedBytes(); fixed != nil {
 			fixedBytes = int(fixed.GetByteLength())
 		}
+		fixedList := 0
+		if list := field.GetType().GetList(); list != nil {
+			fixedList = int(list.GetFixedLength())
+		}
 		columns = append(columns, column{
 			name:        name,
 			description: field.GetDescription(),
@@ -81,6 +86,7 @@ func DDL(dataset *datav1.DatasetSchema) (string, []*datav1.MappingDiagnostic, er
 			notNull:     !field.GetNullable(),
 			oneof:       field.GetOneof(),
 			fixedBytes:  fixedBytes,
+			fixedList:   fixedList,
 		})
 		diagnostics = append(diagnostics, &datav1.MappingDiagnostic{
 			FieldPath:     field.GetName(),
@@ -113,6 +119,16 @@ func DDL(dataset *datav1.DatasetSchema) (string, []*datav1.MappingDiagnostic, er
 			}
 			definition += fmt.Sprintf(" CONSTRAINT %s CHECK (octet_length(%s) = %d)",
 				quoteIdentifier(constraint), quoteIdentifier(col.name), col.fixedBytes)
+		}
+		if col.fixedList > 0 {
+			constraint, err := identifier(tableName + "_" + col.name + "_fixed_list_check")
+			if err != nil {
+				return "", diagnostics, fmt.Errorf("postgres: field %q fixed-list constraint: %w", col.name, err)
+			}
+			definition += fmt.Sprintf(
+				" CONSTRAINT %s CHECK (CASE WHEN jsonb_typeof(%s) = 'array' THEN jsonb_array_length(%s) = %d ELSE FALSE END)",
+				quoteIdentifier(constraint), quoteIdentifier(col.name), quoteIdentifier(col.name), col.fixedList,
+			)
 		}
 		definitions = append(definitions, definition)
 	}
@@ -156,6 +172,13 @@ func mapType(dataType *datav1.DataType) (string, datav1.MappingCompatibility, st
 		return "JSONB", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED,
 			"nested protobuf message is stored as one JSONB column", nil
 	case *datav1.DataType_List:
+		if kind.List.GetFixedLength() != 0 {
+			return "JSONB", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED,
+				fmt.Sprintf(
+					"fixed-cardinality protobuf repeated field is stored as JSONB with an exact top-level array-length check of %d; PostgreSQL does not enforce the protobuf float element domain inside JSONB",
+					kind.List.GetFixedLength(),
+				), nil
+		}
 		if canContainNUL(dataType) {
 			return "JSONB", datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED,
 				"protobuf repeated field is stored as one JSONB array column; PostgreSQL JSONB cannot represent the protobuf string value U+0000", nil
@@ -272,6 +295,9 @@ func mapPrimitive(kind datav1.PrimitiveKind) (string, datav1.MappingCompatibilit
 func defaultExpression(field *datav1.Field) (string, error) {
 	switch field.GetPresence() {
 	case datav1.Presence_PRESENCE_REPEATED:
+		if list := field.GetType().GetList(); list != nil && list.GetFixedLength() != 0 {
+			return "", nil
+		}
 		return "'[]'::jsonb", nil
 	case datav1.Presence_PRESENCE_MAP:
 		return "'{}'::jsonb", nil
@@ -314,7 +340,13 @@ func nestedDiagnostics(dataType *datav1.DataType, path string) []*datav1.Mapping
 		}
 		compatibility := datav1.MappingCompatibility_MAPPING_COMPATIBILITY_REPRESENTATION_CHANGED
 		message := "logical child is embedded in its parent PostgreSQL JSONB column rather than projected as a relational column"
-		if canContainNUL(field.GetType()) {
+		if list := field.GetType().GetList(); list != nil && list.GetFixedLength() != 0 {
+			compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED
+			message = fmt.Sprintf(
+				"fixed-cardinality logical child is embedded in its parent PostgreSQL JSONB column; the nested JSONB representation does not enforce length %d",
+				list.GetFixedLength(),
+			)
+		} else if canContainNUL(field.GetType()) {
 			compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_REDUCED
 			message += "; PostgreSQL JSONB cannot represent the protobuf string value U+0000"
 		}

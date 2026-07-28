@@ -81,15 +81,30 @@ func compatibleArrowField(field arrowlib.Field, logical *datav1.Field, path stri
 		}
 		field.Type = arrowlib.StructOf(children...)
 	case *datav1.DataType_List:
-		listType, ok := field.Type.(*arrowlib.ListType)
-		if !ok {
+		var elementField arrowlib.Field
+		switch listType := field.Type.(type) {
+		case *arrowlib.ListType:
+			if kind.List.GetFixedLength() != 0 {
+				return arrowlib.Field{}, fmt.Errorf("parquet: field %q lost its fixed-cardinality Arrow bridge", path)
+			}
+			elementField = listType.ElemField()
+		case *arrowlib.FixedSizeListType:
+			if kind.List.GetFixedLength() == 0 || uint32(listType.Len()) != kind.List.GetFixedLength() {
+				return arrowlib.Field{}, fmt.Errorf("parquet: field %q has an inconsistent fixed-cardinality Arrow bridge", path)
+			}
+			elementField = listType.ElemField()
+		default:
 			return arrowlib.Field{}, fmt.Errorf("parquet: field %q has an invalid Arrow list bridge", path)
 		}
-		element, err := compatibleArrowField(listType.ElemField(), kind.List.GetElement(), path+"[]")
+		element, err := compatibleArrowField(elementField, kind.List.GetElement(), path+"[]")
 		if err != nil {
 			return arrowlib.Field{}, err
 		}
-		field.Type = arrowlib.ListOfField(element)
+		if kind.List.GetFixedLength() == 0 {
+			field.Type = arrowlib.ListOfField(element)
+		} else {
+			field.Type = arrowlib.FixedSizeListOfField(int32(kind.List.GetFixedLength()), element)
+		}
 	case *datav1.DataType_Map:
 		mapType, ok := field.Type.(*arrowlib.MapType)
 		if !ok {
@@ -132,7 +147,15 @@ func fieldDiagnostics(field *datav1.Field, path string) []*datav1.MappingDiagnos
 			children = append(children, fieldDiagnostics(child, joinPath(path, child.GetName()))...)
 		}
 	case *datav1.DataType_List:
-		message = "protobuf repeated field maps to Parquet's canonical LIST shape"
+		if kind.List.GetFixedLength() == 0 {
+			message = "protobuf repeated field maps to Parquet's canonical LIST shape"
+		} else {
+			compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED
+			message = fmt.Sprintf(
+				"Arrow validates fixed cardinality %d before writing, but Parquet's physical LIST shape does not enforce element count; generic Parquet writers and readers must retain SchemaBundle validation",
+				kind.List.GetFixedLength(),
+			)
+		}
 		children = append(children, fieldDiagnostics(kind.List.GetElement(), path+"[]")...)
 	case *datav1.DataType_Map:
 		message = "protobuf map maps to Parquet's canonical MAP shape"

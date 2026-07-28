@@ -1476,7 +1476,10 @@ func (x *StructType) GetFields() []*Field {
 type ListType struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Synthetic, non-null list element with its own stable storage identity.
-	Element       *Field `protobuf:"bytes,1,opt,name=element,proto3" json:"element,omitempty"`
+	Element *Field `protobuf:"bytes,1,opt,name=element,proto3" json:"element,omitempty"`
+	// Exact element count when non-zero. Zero denotes an ordinary variable-size
+	// protobuf repeated field.
+	FixedLength   uint32 `protobuf:"varint,2,opt,name=fixed_length,json=fixedLength,proto3" json:"fixed_length,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1516,6 +1519,13 @@ func (x *ListType) GetElement() *Field {
 		return x.Element
 	}
 	return nil
+}
+
+func (x *ListType) GetFixedLength() uint32 {
+	if x != nil {
+		return x.FixedLength
+	}
+	return 0
 }
 
 // MapType represents a protobuf map while retaining key and value types.
@@ -1863,9 +1873,10 @@ const file_invariant_data_v1_schema_proto_rawDesc = "" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\">\n" +
 	"\n" +
 	"StructType\x120\n" +
-	"\x06fields\x18\x01 \x03(\v2\x18.invariant.data.v1.FieldR\x06fields\">\n" +
+	"\x06fields\x18\x01 \x03(\v2\x18.invariant.data.v1.FieldR\x06fields\"a\n" +
 	"\bListType\x122\n" +
-	"\aelement\x18\x01 \x01(\v2\x18.invariant.data.v1.FieldR\aelement\"e\n" +
+	"\aelement\x18\x01 \x01(\v2\x18.invariant.data.v1.FieldR\aelement\x12!\n" +
+	"\ffixed_length\x18\x02 \x01(\rR\vfixedLength\"e\n" +
 	"\aMapType\x12*\n" +
 	"\x03key\x18\x01 \x01(\v2\x18.invariant.data.v1.FieldR\x03key\x12.\n" +
 	"\x05value\x18\x02 \x01(\v2\x18.invariant.data.v1.FieldR\x05value\"\\\n" +

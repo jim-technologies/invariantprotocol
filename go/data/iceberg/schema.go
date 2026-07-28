@@ -75,10 +75,17 @@ func mapField(field *datav1.Field, path string) (iceberglib.NestedField, []*data
 	if err != nil {
 		return iceberglib.NestedField{}, children, err
 	}
+	required := !field.GetNullable()
+	if list := field.GetType().GetList(); list != nil && list.GetFixedLength() != 0 {
+		// Iceberg has no fixed-cardinality list or valid non-empty default for
+		// historical rows. Optional-without-default is the only additive-safe
+		// schema shape; publishers still validate against SchemaBundle.
+		required = false
+	}
 	return iceberglib.NestedField{
 		ID:             int(field.GetStableId()),
 		Name:           field.GetName(),
-		Required:       !field.GetNullable(),
+		Required:       required,
 		Doc:            field.GetDescription(),
 		Type:           mappedType,
 		InitialDefault: initialDefault,
@@ -103,6 +110,9 @@ func fieldDefaults(field *datav1.Field, path string) (any, any, error) {
 	case datav1.Presence_PRESENCE_REPEATED:
 		if field.GetNullable() || field.GetType().GetList() == nil {
 			return nil, nil, fmt.Errorf("iceberg: repeated protobuf field %q must be a non-null list", path)
+		}
+		if field.GetType().GetList().GetFixedLength() != 0 {
+			return nil, nil, nil
 		}
 		initial := []any{}
 		return initial, []any{}, nil
@@ -215,12 +225,20 @@ func mapType(dataType *datav1.DataType, path string) (iceberglib.Type, []*datav1
 		if err != nil {
 			return nil, diagnostics, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_UNSUPPORTED, "", err
 		}
+		compatibility := datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS
+		message := "protobuf repeated field maps to an Iceberg list with a distinct element ID"
+		if kind.List.GetFixedLength() != 0 {
+			compatibility = datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED
+			message = fmt.Sprintf(
+				"Iceberg has no fixed-cardinality list: length %d widens to an optional unconstrained list with no default; publishers must validate every value against SchemaBundle",
+				kind.List.GetFixedLength(),
+			)
+		}
 		return &iceberglib.ListType{
-				ElementID:       mapped.ID,
-				Element:         mapped.Type,
-				ElementRequired: mapped.Required,
-			}, diagnostics, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_LOSSLESS,
-			"protobuf repeated field maps to an Iceberg list with a distinct element ID", nil
+			ElementID:       mapped.ID,
+			Element:         mapped.Type,
+			ElementRequired: mapped.Required,
+		}, diagnostics, compatibility, message, nil
 	case *datav1.DataType_Map:
 		key, keyDiagnostics, err := mapField(kind.Map.GetKey(), path+".key")
 		if err != nil {

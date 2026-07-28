@@ -97,6 +97,52 @@ func TestSemanticRefinementDDL(t *testing.T) {
 	require.ErrorContains(t, err, "implicit protobuf presence has no valid default for a refined logical type")
 }
 
+func TestDDLDiagnosesNestedFixedListWithoutInventingAConstraint(t *testing.T) {
+	dataset := &datav1.DatasetSchema{
+		Name:          "nested_vector_record",
+		SourceMessage: "example.NestedVectorRecord",
+		Fields: []*datav1.Field{{
+			Name:            "nested",
+			StableId:        1,
+			Presence:        datav1.Presence_PRESENCE_EXPLICIT,
+			Nullable:        true,
+			ProtoNumberPath: []uint32{1},
+			Type: &datav1.DataType{Kind: &datav1.DataType_Struct{Struct: &datav1.StructType{
+				Fields: []*datav1.Field{{
+					Name:            "vector",
+					StableId:        2,
+					Presence:        datav1.Presence_PRESENCE_REPEATED,
+					ProtoNumberPath: []uint32{1, 1},
+					Type: &datav1.DataType{Kind: &datav1.DataType_List{List: &datav1.ListType{
+						FixedLength: 3,
+						Element: &datav1.Field{
+							Name:          "element",
+							StableId:      3,
+							Presence:      datav1.Presence_PRESENCE_NOT_APPLICABLE,
+							SyntheticRole: datav1.SyntheticRole_SYNTHETIC_ROLE_LIST_ELEMENT,
+							Type: &datav1.DataType{Kind: &datav1.DataType_Primitive{
+								Primitive: &datav1.PrimitiveType{
+									Kind: datav1.PrimitiveKind_PRIMITIVE_KIND_FLOAT,
+								},
+							}},
+						},
+					}}},
+					SyntheticRole: datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
+				}},
+			}}},
+			SyntheticRole: datav1.SyntheticRole_SYNTHETIC_ROLE_PROTO_FIELD,
+		}},
+	}
+
+	ddl, diagnostics, err := DDL(dataset)
+	require.NoError(t, err)
+	require.Contains(t, ddl, `"nested" JSONB`)
+	require.NotContains(t, ddl, "fixed_list_check")
+	nestedVector := diagnostic(t, diagnostics, "nested.vector")
+	require.Equal(t, datav1.MappingCompatibility_MAPPING_COMPATIBILITY_RANGE_WIDENED, nestedVector.GetCompatibility())
+	require.Contains(t, nestedVector.GetMessage(), "does not enforce length 3")
+}
+
 func semanticDataset() *datav1.DatasetSchema {
 	return &datav1.DatasetSchema{
 		Name:          "semantic_record",

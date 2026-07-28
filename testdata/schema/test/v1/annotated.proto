@@ -27,3 +27,20 @@ message AnnotatedRecord {
     int64 sequence = 5;
   }
 }
+
+// LanceRecord exercises canonical fixed-cardinality vector values.
+message LanceRecord {
+  option (invariant.data.v1.dataset) = {};
+
+  // Application-owned record identity.
+  string id = 1;
+
+  // Human-readable record label.
+  string label = 2;
+
+  // Single-precision vector consumed by Arrow and LanceDB.
+  repeated float vector = 3 [(invariant.data.v1.field) = {fixed_list: {length: 8}}];
+
+  // Double-precision fixed-cardinality list.
+  repeated double vector64 = 4 [(invariant.data.v1.field) = {fixed_list: {length: 4}}];
+}

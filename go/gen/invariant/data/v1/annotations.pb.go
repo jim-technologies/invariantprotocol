@@ -200,6 +200,54 @@ func (x *FixedBytesOptions) GetByteLength() uint32 {
 	return 0
 }
 
+// FixedListOptions refines a protobuf repeated field to an exact, non-zero
+// cardinality. It describes logical shape only; vector indexes and other
+// physical policy remain target configuration.
+type FixedListOptions struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Required number of elements in every value.
+	Length        uint32 `protobuf:"varint,1,opt,name=length,proto3" json:"length,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FixedListOptions) Reset() {
+	*x = FixedListOptions{}
+	mi := &file_invariant_data_v1_annotations_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FixedListOptions) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FixedListOptions) ProtoMessage() {}
+
+func (x *FixedListOptions) ProtoReflect() protoreflect.Message {
+	mi := &file_invariant_data_v1_annotations_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FixedListOptions.ProtoReflect.Descriptor instead.
+func (*FixedListOptions) Descriptor() ([]byte, []int) {
+	return file_invariant_data_v1_annotations_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *FixedListOptions) GetLength() uint32 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
+}
+
 // FieldOptions refines protobuf carrier types with portable logical meaning.
 // It deliberately contains no renderer-specific type strings or physical
 // storage policy.
@@ -210,14 +258,17 @@ type FieldOptions struct {
 	//	*FieldOptions_Decimal
 	//	*FieldOptions_Uuid
 	//	*FieldOptions_FixedBytes
-	SemanticType  isFieldOptions_SemanticType `protobuf_oneof:"semantic_type"`
+	SemanticType isFieldOptions_SemanticType `protobuf_oneof:"semantic_type"`
+	// Exact cardinality for a non-map repeated field. This is separate from
+	// semantic_type because it refines the collection rather than its element.
+	FixedList     *FixedListOptions `protobuf:"bytes,4,opt,name=fixed_list,json=fixedList,proto3" json:"fixed_list,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FieldOptions) Reset() {
 	*x = FieldOptions{}
-	mi := &file_invariant_data_v1_annotations_proto_msgTypes[4]
+	mi := &file_invariant_data_v1_annotations_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -229,7 +280,7 @@ func (x *FieldOptions) String() string {
 func (*FieldOptions) ProtoMessage() {}
 
 func (x *FieldOptions) ProtoReflect() protoreflect.Message {
-	mi := &file_invariant_data_v1_annotations_proto_msgTypes[4]
+	mi := &file_invariant_data_v1_annotations_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -242,7 +293,7 @@ func (x *FieldOptions) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FieldOptions.ProtoReflect.Descriptor instead.
 func (*FieldOptions) Descriptor() ([]byte, []int) {
-	return file_invariant_data_v1_annotations_proto_rawDescGZIP(), []int{4}
+	return file_invariant_data_v1_annotations_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *FieldOptions) GetSemanticType() isFieldOptions_SemanticType {
@@ -275,6 +326,13 @@ func (x *FieldOptions) GetFixedBytes() *FixedBytesOptions {
 		if x, ok := x.SemanticType.(*FieldOptions_FixedBytes); ok {
 			return x.FixedBytes
 		}
+	}
+	return nil
+}
+
+func (x *FieldOptions) GetFixedList() *FixedListOptions {
+	if x != nil {
+		return x.FixedList
 	}
 	return nil
 }
@@ -347,12 +405,16 @@ const file_invariant_data_v1_annotations_proto_rawDesc = "" +
 	"\vUuidOptions\"4\n" +
 	"\x11FixedBytesOptions\x12\x1f\n" +
 	"\vbyte_length\x18\x01 \x01(\rR\n" +
-	"byteLength\"\xdd\x01\n" +
+	"byteLength\"*\n" +
+	"\x10FixedListOptions\x12\x16\n" +
+	"\x06length\x18\x01 \x01(\rR\x06length\"\xa1\x02\n" +
 	"\fFieldOptions\x12=\n" +
 	"\adecimal\x18\x01 \x01(\v2!.invariant.data.v1.DecimalOptionsH\x00R\adecimal\x124\n" +
 	"\x04uuid\x18\x02 \x01(\v2\x1e.invariant.data.v1.UuidOptionsH\x00R\x04uuid\x12G\n" +
 	"\vfixed_bytes\x18\x03 \x01(\v2$.invariant.data.v1.FixedBytesOptionsH\x00R\n" +
-	"fixedBytesB\x0f\n" +
+	"fixedBytes\x12B\n" +
+	"\n" +
+	"fixed_list\x18\x04 \x01(\v2#.invariant.data.v1.FixedListOptionsR\tfixedListB\x0f\n" +
 	"\rsemantic_type:^\n" +
 	"\adataset\x12\x1f.google.protobuf.MessageOptions\x18\x86\x96\x03 \x01(\v2!.invariant.data.v1.DatasetOptionsR\adataset:V\n" +
 	"\x05field\x12\x1d.google.protobuf.FieldOptions\x18\x86\x96\x03 \x01(\v2\x1f.invariant.data.v1.FieldOptionsR\x05fieldBOZMgithub.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1;datav1b\x06proto3"
@@ -369,29 +431,31 @@ func file_invariant_data_v1_annotations_proto_rawDescGZIP() []byte {
 	return file_invariant_data_v1_annotations_proto_rawDescData
 }
 
-var file_invariant_data_v1_annotations_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_invariant_data_v1_annotations_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_invariant_data_v1_annotations_proto_goTypes = []any{
 	(*DatasetOptions)(nil),              // 0: invariant.data.v1.DatasetOptions
 	(*DecimalOptions)(nil),              // 1: invariant.data.v1.DecimalOptions
 	(*UuidOptions)(nil),                 // 2: invariant.data.v1.UuidOptions
 	(*FixedBytesOptions)(nil),           // 3: invariant.data.v1.FixedBytesOptions
-	(*FieldOptions)(nil),                // 4: invariant.data.v1.FieldOptions
-	(*descriptorpb.MessageOptions)(nil), // 5: google.protobuf.MessageOptions
-	(*descriptorpb.FieldOptions)(nil),   // 6: google.protobuf.FieldOptions
+	(*FixedListOptions)(nil),            // 4: invariant.data.v1.FixedListOptions
+	(*FieldOptions)(nil),                // 5: invariant.data.v1.FieldOptions
+	(*descriptorpb.MessageOptions)(nil), // 6: google.protobuf.MessageOptions
+	(*descriptorpb.FieldOptions)(nil),   // 7: google.protobuf.FieldOptions
 }
 var file_invariant_data_v1_annotations_proto_depIdxs = []int32{
 	1, // 0: invariant.data.v1.FieldOptions.decimal:type_name -> invariant.data.v1.DecimalOptions
 	2, // 1: invariant.data.v1.FieldOptions.uuid:type_name -> invariant.data.v1.UuidOptions
 	3, // 2: invariant.data.v1.FieldOptions.fixed_bytes:type_name -> invariant.data.v1.FixedBytesOptions
-	5, // 3: invariant.data.v1.dataset:extendee -> google.protobuf.MessageOptions
-	6, // 4: invariant.data.v1.field:extendee -> google.protobuf.FieldOptions
-	0, // 5: invariant.data.v1.dataset:type_name -> invariant.data.v1.DatasetOptions
-	4, // 6: invariant.data.v1.field:type_name -> invariant.data.v1.FieldOptions
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	5, // [5:7] is the sub-list for extension type_name
-	3, // [3:5] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	4, // 3: invariant.data.v1.FieldOptions.fixed_list:type_name -> invariant.data.v1.FixedListOptions
+	6, // 4: invariant.data.v1.dataset:extendee -> google.protobuf.MessageOptions
+	7, // 5: invariant.data.v1.field:extendee -> google.protobuf.FieldOptions
+	0, // 6: invariant.data.v1.dataset:type_name -> invariant.data.v1.DatasetOptions
+	5, // 7: invariant.data.v1.field:type_name -> invariant.data.v1.FieldOptions
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	6, // [6:8] is the sub-list for extension type_name
+	4, // [4:6] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_invariant_data_v1_annotations_proto_init() }
@@ -399,7 +463,7 @@ func file_invariant_data_v1_annotations_proto_init() {
 	if File_invariant_data_v1_annotations_proto != nil {
 		return
 	}
-	file_invariant_data_v1_annotations_proto_msgTypes[4].OneofWrappers = []any{
+	file_invariant_data_v1_annotations_proto_msgTypes[5].OneofWrappers = []any{
 		(*FieldOptions_Decimal)(nil),
 		(*FieldOptions_Uuid)(nil),
 		(*FieldOptions_FixedBytes)(nil),
@@ -410,7 +474,7 @@ func file_invariant_data_v1_annotations_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_invariant_data_v1_annotations_proto_rawDesc), len(file_invariant_data_v1_annotations_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 2,
 			NumServices:   0,
 		},

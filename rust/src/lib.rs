@@ -24,8 +24,8 @@ pub mod data {
 
 pub use data::v1::{DatasetSchema, SchemaBundle};
 pub use data_schema::{
-    DataSchemaError, SCHEMA_IR_VERSION, SCHEMA_MAPPING_VERSION, find_dataset, parse_schema_bundle,
-    validate_schema_bundle,
+    DataSchemaError, SCHEMA_IR_VERSION, SCHEMA_MAPPING_VERSION, find_dataset,
+    migrate_schema_bundle, parse_schema_bundle, validate_schema_bundle,
 };
 pub use descriptor::{MethodInfo, ParsedDescriptor, ServiceInfo};
 pub use server::{

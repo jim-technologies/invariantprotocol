@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file invariant/data/v1/annotations.proto.
  */
 export const file_invariant_data_v1_annotations: GenFile = /*@__PURE__*/
-  fileDesc("CiNpbnZhcmlhbnQvZGF0YS92MS9hbm5vdGF0aW9ucy5wcm90bxIRaW52YXJpYW50LmRhdGEudjEiEAoORGF0YXNldE9wdGlvbnMiMgoORGVjaW1hbE9wdGlvbnMSEQoJcHJlY2lzaW9uGAEgASgNEg0KBXNjYWxlGAIgASgNIg0KC1V1aWRPcHRpb25zIigKEUZpeGVkQnl0ZXNPcHRpb25zEhMKC2J5dGVfbGVuZ3RoGAEgASgNIsIBCgxGaWVsZE9wdGlvbnMSNAoHZGVjaW1hbBgBIAEoCzIhLmludmFyaWFudC5kYXRhLnYxLkRlY2ltYWxPcHRpb25zSAASLgoEdXVpZBgCIAEoCzIeLmludmFyaWFudC5kYXRhLnYxLlV1aWRPcHRpb25zSAASOwoLZml4ZWRfYnl0ZXMYAyABKAsyJC5pbnZhcmlhbnQuZGF0YS52MS5GaXhlZEJ5dGVzT3B0aW9uc0gAQg8KDXNlbWFudGljX3R5cGU6XgoHZGF0YXNldBIfLmdvb2dsZS5wcm90b2J1Zi5NZXNzYWdlT3B0aW9ucxiGlgMgASgLMiEuaW52YXJpYW50LmRhdGEudjEuRGF0YXNldE9wdGlvbnNSB2RhdGFzZXQ6VgoFZmllbGQSHS5nb29nbGUucHJvdG9idWYuRmllbGRPcHRpb25zGIaWAyABKAsyHy5pbnZhcmlhbnQuZGF0YS52MS5GaWVsZE9wdGlvbnNSBWZpZWxkQk9aTWdpdGh1Yi5jb20vamltLXRlY2hub2xvZ2llcy9pbnZhcmlhbnRwcm90b2NvbC9nby9nZW4vaW52YXJpYW50L2RhdGEvdjE7ZGF0YXYxYgZwcm90bzM", [file_google_protobuf_descriptor]);
+  fileDesc("CiNpbnZhcmlhbnQvZGF0YS92MS9hbm5vdGF0aW9ucy5wcm90bxIRaW52YXJpYW50LmRhdGEudjEiEAoORGF0YXNldE9wdGlvbnMiMgoORGVjaW1hbE9wdGlvbnMSEQoJcHJlY2lzaW9uGAEgASgNEg0KBXNjYWxlGAIgASgNIg0KC1V1aWRPcHRpb25zIigKEUZpeGVkQnl0ZXNPcHRpb25zEhMKC2J5dGVfbGVuZ3RoGAEgASgNIiIKEEZpeGVkTGlzdE9wdGlvbnMSDgoGbGVuZ3RoGAEgASgNIvsBCgxGaWVsZE9wdGlvbnMSNAoHZGVjaW1hbBgBIAEoCzIhLmludmFyaWFudC5kYXRhLnYxLkRlY2ltYWxPcHRpb25zSAASLgoEdXVpZBgCIAEoCzIeLmludmFyaWFudC5kYXRhLnYxLlV1aWRPcHRpb25zSAASOwoLZml4ZWRfYnl0ZXMYAyABKAsyJC5pbnZhcmlhbnQuZGF0YS52MS5GaXhlZEJ5dGVzT3B0aW9uc0gAEjcKCmZpeGVkX2xpc3QYBCABKAsyIy5pbnZhcmlhbnQuZGF0YS52MS5GaXhlZExpc3RPcHRpb25zQg8KDXNlbWFudGljX3R5cGU6XgoHZGF0YXNldBIfLmdvb2dsZS5wcm90b2J1Zi5NZXNzYWdlT3B0aW9ucxiGlgMgASgLMiEuaW52YXJpYW50LmRhdGEudjEuRGF0YXNldE9wdGlvbnNSB2RhdGFzZXQ6VgoFZmllbGQSHS5nb29nbGUucHJvdG9idWYuRmllbGRPcHRpb25zGIaWAyABKAsyHy5pbnZhcmlhbnQuZGF0YS52MS5GaWVsZE9wdGlvbnNSBWZpZWxkQk9aTWdpdGh1Yi5jb20vamltLXRlY2hub2xvZ2llcy9pbnZhcmlhbnRwcm90b2NvbC9nby9nZW4vaW52YXJpYW50L2RhdGEvdjE7ZGF0YXYxYgZwcm90bzM", [file_google_protobuf_descriptor]);
 
 /**
  * DatasetOptions marks a message as a durable dataset root. It is an
@@ -97,6 +97,29 @@ export const FixedBytesOptionsSchema: GenMessage<FixedBytesOptions> = /*@__PURE_
   messageDesc(file_invariant_data_v1_annotations, 3);
 
 /**
+ * FixedListOptions refines a protobuf repeated field to an exact, non-zero
+ * cardinality. It describes logical shape only; vector indexes and other
+ * physical policy remain target configuration.
+ *
+ * @generated from message invariant.data.v1.FixedListOptions
+ */
+export type FixedListOptions = Message<"invariant.data.v1.FixedListOptions"> & {
+  /**
+   * Required number of elements in every value.
+   *
+   * @generated from field: uint32 length = 1;
+   */
+  length: number;
+};
+
+/**
+ * Describes the message invariant.data.v1.FixedListOptions.
+ * Use `create(FixedListOptionsSchema)` to create a new message.
+ */
+export const FixedListOptionsSchema: GenMessage<FixedListOptions> = /*@__PURE__*/
+  messageDesc(file_invariant_data_v1_annotations, 4);
+
+/**
  * FieldOptions refines protobuf carrier types with portable logical meaning.
  * It deliberately contains no renderer-specific type strings or physical
  * storage policy.
@@ -132,6 +155,14 @@ export type FieldOptions = Message<"invariant.data.v1.FieldOptions"> & {
     value: FixedBytesOptions;
     case: "fixedBytes";
   } | { case: undefined; value?: undefined };
+
+  /**
+   * Exact cardinality for a non-map repeated field. This is separate from
+   * semantic_type because it refines the collection rather than its element.
+   *
+   * @generated from field: invariant.data.v1.FixedListOptions fixed_list = 4;
+   */
+  fixedList?: FixedListOptions | undefined;
 };
 
 /**
@@ -139,7 +170,7 @@ export type FieldOptions = Message<"invariant.data.v1.FieldOptions"> & {
  * Use `create(FieldOptionsSchema)` to create a new message.
  */
 export const FieldOptionsSchema: GenMessage<FieldOptions> = /*@__PURE__*/
-  messageDesc(file_invariant_data_v1_annotations, 4);
+  messageDesc(file_invariant_data_v1_annotations, 5);
 
 /**
  * @generated from extension: invariant.data.v1.DatasetOptions dataset = 51974;

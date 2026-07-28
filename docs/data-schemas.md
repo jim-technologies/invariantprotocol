@@ -3,7 +3,8 @@
 Invariant treats protobuf as the only authored **logical** type contract. A
 `FileDescriptorSet` is compiled into a versioned `invariant.data.v1.SchemaBundle`,
 and target renderers derive Arrow, Parquet, Iceberg, PostgreSQL, or ClickHouse
-schemas from that bundle.
+schemas from that bundle. Lance and LanceDB use the Arrow projection directly;
+there is no separate Lance logical schema.
 
 ```text
 .proto + portable data annotations + source comments
@@ -15,9 +16,9 @@ descriptor.binpb
 versioned SchemaBundle (committed evolution state, never hand-edited)
      /          |          |          |             \
   Arrow      Parquet    Iceberg    PostgreSQL    ClickHouse
-                                      |          declarations
-                                      v
-                                Atlas diff/migrate
+    |                                  |          declarations
+    v                                  v
+Lance SDK                        Atlas diff/migrate
 ```
 
 This is deliberately narrower than claiming that protobuf is a physical
@@ -98,6 +99,9 @@ message LedgerEvent {
   optional bytes checksum = 3 [(invariant.data.v1.field) = {
     fixed_bytes: { byte_length: 32 }
   }];
+  repeated float embedding = 4 [(invariant.data.v1.field) = {
+    fixed_list: { length: 1536 }
+  }];
 }
 ```
 
@@ -134,18 +138,30 @@ declaration visible in the input `FileDescriptorSet`. Consumers merging
 independently governed descriptor sets should treat the number as assigned to
 Invariant.
 
-Field options express only semantics that every supported target can carry:
+Field options express only semantics that every supported target can carry
+exactly or diagnose explicitly:
 
 - `decimal`: `string` carrier, precision 1–38, scale no greater than precision;
 - `uuid`: `string` carrier containing canonical UUID text; and
 - `fixed_bytes`: `bytes` carrier with a non-zero width no greater than
-  2,147,483,647.
+  2,147,483,647; and
+- `fixed_list`: non-map repeated `float` or `double` carrier with an exact
+  element count from 1 through 2,147,483,647.
 
 A refined singular field must have explicit or oneof presence and cannot have
 a declared protobuf default. Otherwise protobuf's implicit empty string or
 bytes value would become an invalid value in the refined domain. A repeated
-refined field is valid and applies the refinement per element. Maps are not
-refined.
+semantic refinement is valid and applies per element. `fixed_list` instead
+refines the collection itself and cannot be combined with a semantic element
+refinement. It is rejected on singular fields, maps, and carriers other than
+`float` or `double`.
+
+A fixed list is not a convenient default vector. Every runtime value must
+contain exactly the declared number of elements. Because protobuf does not
+track presence for repeated fields, an omitted value and an explicit empty
+value are both invalid when the declared length is nonzero; neither is padded
+or converted into a zero vector. Conversion errors identify the canonical
+dataset storage name and nested field path.
 
 The annotation source is distributed from Git with the runtime packages. Pin
 the same repository revision and expose its `proto/` directory as a local Buf
@@ -154,20 +170,32 @@ required.
 
 ## SchemaBundle versioning
 
-IR version 3 retains the exact protobuf source of every compiler-owned storage
-name and carries that provenance into permanent field tombstones. Mapping
-version 2 defines the current target mappings. Readers reject a version mismatch
-instead of guessing forward. Regenerate or explicitly migrate a bundle with the
-matching compiler when either contract version changes; never hand-edit the
-artifact.
+IR version 4 adds fixed cardinality to the portable `ListType`; mapping version
+3 defines its target behavior. It retains v3's exact protobuf source
+provenance, active stable IDs, and permanent tombstones. Go, Python, Rust, and
+TypeScript readers automatically migrate the exact historical
+IR-v3/mapping-v2 pair in memory. Unknown fields, an impossible legacy
+`fixed_length`, any other version pair, and all future versions fail closed.
+The build-time CLI rewrites a supported bundle deterministically:
+
+```bash
+go run ./go/cmd/invariant-schema migrate \
+  --bundle data.schema.binpb \
+  --output data.schema.binpb
+```
+
+Regenerate or run that explicit migration with the matching compiler when the
+contract version changes; never hand-edit the artifact.
 
 Before removing explicit `--message` flags, annotate every existing root.
 Explicit names replace annotation discovery when supplied; the two sets are not
 unioned. Removing a committed root annotation then fails the append-only root
 check. Adding, removing, or changing a field refinement on an active numeric
-path is a logical-shape change and requires a new protobuf field number. An
-existing root can be renamed only by retaining the old message/root while
-adding the new one, or by starting a distinct bundle.
+path is a logical-shape change and requires a new protobuf field number. This
+includes changing a fixed-list dimension. Reserve the old field number and
+name so its stable identities become tombstones, then add the new dimension
+under a new number. An existing root can be renamed only by retaining the old
+message/root while adding the new one, or by starting a distinct bundle.
 
 ## Canonical mapping rules
 
@@ -189,6 +217,7 @@ checks where the target can enforce it.
 | enum | `int32` plus enum metadata | `int` | `integer` | `Int32` |
 | nested message | struct/group | struct | `jsonb` | named `Tuple` |
 | repeated field | list | list | `jsonb` | `Array(T)` |
+| fixed `float`/`double` list | `FixedSizeList<T>[N]` / physical `LIST` | optional unconstrained list, no default | `jsonb` plus exact top-level cardinality check | `Array(T)` plus exact length check |
 | map | typed map | typed map | `jsonb` | `Map(K,V)` plus unique-key check |
 | `Timestamp` | UTC nanoseconds | `timestamptz_ns` | `timestamptz` (microseconds) | `DateTime64(9,'UTC')` |
 | `Duration` | duration/int64 nanoseconds | long nanoseconds | bigint nanoseconds | `Int64` nanoseconds |
@@ -220,6 +249,15 @@ identify the canonical field path and protobuf source field.
 Diagnostics also cover constraints that a target type does not enforce. A
 closed enum projected onto an unconstrained integer, or a oneof projected to
 independent Arrow/Parquet/Iceberg fields, widens the target's valid state set.
+Arrow preserves fixed-list shape exactly. Parquet is produced through Arrow's
+official bridge, but its physical `LIST` cannot enforce length; Iceberg also
+has no fixed-cardinality list and emits an optional unconstrained list with no
+invented historical default. Both report `RANGE_WIDENED` and require
+SchemaBundle-aware value validation. PostgreSQL reports widening because its
+top-level JSONB length constraint cannot enforce the protobuf floating-point
+element domain; a fixed list nested inside JSONB cannot receive an independent
+length constraint. ClickHouse's `Array(T)` is lossless only together with its
+generated exact-length check.
 PostgreSQL enforces top-level oneofs with a check constraint, but its `text`
 and `jsonb` types cannot represent U+0000 even though that code point is valid
 inside a protobuf string. ClickHouse emits recursive checks for valid UTF-8
@@ -232,7 +270,8 @@ Presence is compiled from native descriptors rather than guessed from syntax:
 - explicit optional fields and singular messages are nullable;
 - required proto2/Editions fields are non-null;
 - oneof members are nullable and retain their oneof group;
-- repeated/map containers are non-null with empty defaults; and
+- ordinary repeated/map containers are non-null with empty defaults;
+- fixed lists are non-null but have no empty default; and
 - list elements and map keys/values are non-null.
 
 ClickHouse uses the following deterministic physical presence convention:
@@ -248,7 +287,8 @@ ClickHouse uses the following deterministic physical presence convention:
   means unset and a nonzero value is the selected protobuf field number; every
   member uses `Tuple(present Bool, value T)`, and checks require its presence
   bit to agree with the discriminator; and
-- repeated and map containers remain non-null with empty defaults.
+- ordinary repeated and map containers remain non-null with empty defaults;
+  fixed lists have no default and require the generated length check.
 
 This convention distinguishes absence from empty/default values and avoids
 session settings. The member presence bit is authoritative alongside the
@@ -262,18 +302,20 @@ of `0` or a non-zero digit followed by digits, and—when scale is non-zero—a
 decimal point followed by exactly `scale` digits. Leading `+`, exponent form,
 leading zeroes, whitespace, omitted or truncated fractional digits, and
 negative zero are rejected. UUID values use lowercase hyphenated `8-4-4-4-12`
-text. Fixed bytes must have exactly the annotated width. The Python PyArrow
-bridge enforces these rules while converting records; other data writers must
-enforce the same logical domain at their boundary.
+text. Fixed bytes must have exactly the annotated width, and fixed lists must
+have exactly the declared number of elements. The Python PyArrow bridge
+enforces these rules while converting records; other data writers must enforce
+the same logical domain at their boundary.
 
 The Iceberg renderer records both `initial-default` and `write-default` for
-implicit scalar/enum fields and for empty repeated/map containers. Those
-format-v3 defaults make a newly added required column read as the same value
-protobuf assigns to data written before the field existed. Presence-bearing
-fields remain optional and default to null. Proto2 or Editions `required`
-fields are rejected by the Iceberg renderer: protobuf does not provide a safe
-historical value for a missing required field, even when its descriptor names a
-getter default.
+implicit scalar/enum fields and for empty ordinary repeated/map containers.
+Those format-v3 defaults make a newly added required column read as the same
+value protobuf assigns to data written before the field existed. A fixed list
+has no valid non-empty protobuf default, so Iceberg widens it to an optional
+list without defaults. Presence-bearing fields remain optional and default to
+null. Proto2 or Editions `required` fields are rejected by the Iceberg
+renderer: protobuf does not provide a safe historical value for a missing
+required field, even when its descriptor names a getter default.
 
 Go, Python, Rust, and TypeScript readers validate `ir_version` and
 `mapping_version` before exposing a decoded bundle. A newer artifact therefore
@@ -302,15 +344,95 @@ converts generated messages with the matching protobuf full name into typed
 Arrow arrays using that same schema. Presence-bearing absent values become
 null, inactive oneof members become null, enums remain numeric, timestamps and
 durations retain nanoseconds within Arrow's signed-64-bit range, and protobuf
-map entries are sorted for deterministic Arrow ordering. Ordinary
-`pyarrow.parquet.write_table()` can then write the table; Invariant does not
-wrap or replace the standard writer.
+map entries are sorted for deterministic Arrow ordering. A fixed list becomes
+a native `pyarrow.FixedSizeListType` and `FixedSizeListArray`; conversion
+rejects short, long, omitted, and empty values before PyArrow or a storage SDK
+can coerce them. Ordinary `pyarrow.parquet.write_table()` can then write the
+table; Invariant does not wrap or replace the standard writer.
 
 Recursive message graphs fail compilation. Silently turning a recursive type
 into an untyped object would stop protobuf from being the canonical contract.
 Reachable messages with proto2 extension ranges also fail: an extension can add
 a field outside the message declaration, so omitting it would make the bundle
 an incomplete representation of the protobuf contract.
+
+## Lance and LanceDB through Arrow
+
+LanceDB accepts Arrow tables and record batches, so the canonical integration
+is the existing Arrow projection rather than a `lance` renderer or CLI
+command:
+
+```python
+import lancedb
+from invariant import arrow_table, find_dataset, parse_schema_bundle
+
+bundle = parse_schema_bundle(open("data.schema.binpb", "rb").read())
+dataset = find_dataset(bundle, "example.v1.Embedding")
+if dataset is None:
+    raise ValueError("missing example.v1.Embedding dataset")
+
+table, diagnostics = arrow_table(dataset, generated_messages)
+database = await lancedb.connect_async("./data/lance")
+lance_table = await database.create_table("embeddings", data=table)
+```
+
+The table already contains a native Arrow `FixedSizeList`; application-side
+`pa.array(..., type=...)` casting would create a second schema authority and is
+unnecessary. The same table can be appended or used as the source of a
+`merge_insert`.
+
+Repository qualification locks LanceDB 0.34.0 and PyArrow 25.0.0 in
+`python/uv.lock`. Its deterministic local lifecycle creates a table from only
+Invariant-generated schema/data, appends, closes and reopens, creates an
+HNSW-SQ vector index, searches, performs a standard `merge_insert`, optimizes,
+reopens in a fresh Python process, and verifies the schema and both pre-index
+and post-index rows. It separately verifies that an unenforced primary key can
+be set as table configuration without changing SchemaBundle. Run it directly
+with:
+
+```bash
+flox activate -- make lance-integration
+```
+
+Lance manifests, fragments, files, index algorithms and parameters, primary
+keys, object-store credentials, compaction policy, and manifest placement are
+Lance SDK/table policy. Invariant neither writes the Lance format nor models
+those settings. Lance Namespace REST likewise remains an SDK boundary; its
+Arrow IPC request bodies can be produced from the same canonical Arrow table.
+
+LanceDB 0.34.0 preserves `FixedSizeList` element type and dimension and the
+top-level field metadata after persistence, but normalizes away custom metadata
+on the list's synthetic Arrow value field. The committed SchemaBundle therefore
+remains the identity and tombstone registry; never reconstruct evolution state
+from a reopened Lance table schema.
+
+The same release creates new tables with Lance data storage format 2.1 by
+default, while Arrow `Map` requires format 2.2. A dataset containing protobuf
+maps is still generated canonically, but the application must opt the table
+into 2.2 as Lance storage policy:
+
+```python
+database = await lancedb.connect_async(
+    "./data/lance",
+    storage_options={"new_table_data_storage_version": "2.2"},
+)
+```
+
+The integration suite qualifies the complete canonical Arrow fixture under
+that policy. Invariant does not silently choose a Lance file-format generation
+on the application's behalf.
+
+Protobuf and Arrow floats include NaN, but LanceDB's default vector policy
+rejects NaN values. Keep the fail-closed `on_bad_vectors="error"` behavior when
+protobuf fidelity matters; LanceDB's `drop`, `fill`, and `null` modes alter data
+and must be an explicit application decision.
+
+The locked LanceDB 0.34.0 Python API does not expose a public, end-to-end
+MemWAL/LSM writer flush, visibility, and base-table compaction lifecycle.
+Private extension-module symbols are not a production contract, so the
+qualification deliberately does not import them or claim MemWAL support.
+MemWAL remains table policy and can be qualified later without changing
+SchemaBundle when LanceDB provides a stable public lifecycle.
 
 ## PostgreSQL and Atlas
 
@@ -335,11 +457,14 @@ application-level data-evolution concerns.
 
 The SQL renderer quotes identifiers, preserves comments, stores complex values
 as `jsonb`, adds an at-most-one check for each top-level oneof, and checks
-annotated fixed-byte lengths. Native decimal, UUID, and checked `bytea`
-mappings apply to top-level singular columns; refinements inside repeated or
-nested containers remain part of their `jsonb` representation. It does not
-invent primary keys, foreign keys, uniqueness, indexes, normalization, or
-partitioning.
+annotated fixed-byte lengths. A top-level fixed list has no empty default and
+adds a `jsonb_typeof(...) = 'array'` plus exact
+`jsonb_array_length(...) = N` check; PostgreSQL cannot independently enforce a
+fixed list embedded in another JSONB value. Native decimal, UUID, and checked
+`bytea` mappings apply to top-level singular columns; refinements inside
+repeated or nested containers remain part of their `jsonb` representation. It
+does not invent primary keys, foreign keys, uniqueness, indexes,
+normalization, or partitioning.
 
 ## ClickHouse hot schema
 
@@ -394,7 +519,9 @@ columns.
 `FixedString(N)` is emitted only for widths 1–256 so the schema needs no
 `allow_suspicious_fixed_string_types` setting. Every publisher must still
 validate exact width before insertion because ClickHouse pads shorter
-`FixedString` input with NUL bytes.
+`FixedString` input with NUL bytes. A fixed list maps to `Array(Float32)` or
+`Array(Float64)`, omits the ordinary empty-array default, and adds an exact
+`length(...) = N` constraint.
 
 The Go API is:
 
@@ -417,6 +544,9 @@ without a signed or floating-point intermediate. `uint32`/`fixed32` use
 `toInt64`, and timestamps use `toUnixTimestamp64Nano`.
 Its diagnostics include both the ClickHouse source mapping and Iceberg target
 mapping, so range or representation differences on either side remain visible.
+A fixed-list projection records `fixed_length` while its Iceberg target remains
+the explicitly widened unconstrained list; publishers validate the length
+before evaluating the conversion expressions.
 
 This plan is not a writer, buffer, watermark manager, direct ClickHouse-to-
 Iceberg `INSERT`, or catalog integration. The application evaluates the plan
@@ -442,10 +572,11 @@ UInt64, UInt32, and timestamp Iceberg conversion expressions.
 ## Deliberate schema boundary
 
 This release compiles and renders **schemas**, and Python can convert matching
-generated protobuf messages into a `pyarrow.Table`. Invariant does not choose
-file layout, write data files, commit an Iceberg catalog, apply database DDL,
-generate migrations, or choose partitions. Those operations combine schema
-with runtime and deployment policy and remain consumer-owned.
+generated protobuf messages into a `pyarrow.Table` accepted directly by
+LanceDB. Invariant does not choose file layout, write Parquet or Lance data
+files, commit an Iceberg catalog, apply database DDL, generate database
+migrations, or choose partitions. Those operations combine schema with runtime
+and deployment policy and remain consumer-owned.
 
 The Iceberg output is a schema snapshot, not an evolution transaction. Its
 `initial-default` and `write-default` values preserve protobuf's implicit
@@ -460,3 +591,7 @@ The format references behind these decisions are the
 [protobuf field presence](https://protobuf.dev/programming-guides/field_presence/),
 [Atlas SQL schema sources](https://atlasgo.io/atlas-schema/sql), and
 [ClickHouse data types](https://clickhouse.com/docs/reference/data-types).
+Lance integration follows the
+[LanceDB Arrow table API](https://docs.lancedb.com/tables/create)
+and leaves file-format behavior to the
+[Lance SDK](https://lance.org/).

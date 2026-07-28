@@ -18,6 +18,8 @@ from invariant import arrow_schema, arrow_table, find_dataset, parse_schema_bund
 from invariant.gen.invariant.data.v1 import schema_pb2
 
 GOLDEN_BUNDLE = Path(__file__).resolve().parents[2] / "testdata" / "data.schema.binpb"
+FIXED_LIST_BUNDLE = Path(__file__).resolve().parents[2] / "testdata" / "schema" / "schema.binpb"
+FIXED_LIST_DESCRIPTOR = Path(__file__).resolve().parents[2] / "testdata" / "schema" / "descriptor.binpb"
 
 
 def test_core_import_does_not_import_optional_pyarrow() -> None:
@@ -215,6 +217,93 @@ def test_arrow_table_preserves_absence_and_rejects_wrong_or_uninitialized_messag
     assert proto2_table.column("label").to_pylist() == [None]
 
 
+def test_fixed_lists_use_native_arrow_schema_and_arrays(tmp_path: Path) -> None:
+    dataset, record = _fixed_list_record_fixture()
+
+    schema, diagnostics = arrow_schema(dataset)
+
+    vector = schema.field("vector")
+    assert pa.types.is_fixed_size_list(vector.type)
+    assert vector.type == pa.list_(pa.field("item", pa.float32(), nullable=False), list_size=8)
+    assert vector.type.list_size == 8
+    assert vector.type.value_type == pa.float32()
+    assert _metadata(vector, "invariant.logical_type") == "fixed_list"
+
+    vector64 = schema.field("vector64")
+    assert pa.types.is_fixed_size_list(vector64.type)
+    assert vector64.type == pa.list_(pa.field("item", pa.float64(), nullable=False), list_size=4)
+    assert vector64.type.list_size == 4
+    assert vector64.type.value_type == pa.float64()
+
+    compatibility = {item.field_path: item.compatibility for item in diagnostics}
+    assert compatibility["vector"] == schema_pb2.MAPPING_COMPATIBILITY_LOSSLESS
+    assert compatibility["vector64"] == schema_pb2.MAPPING_COMPATIBILITY_LOSSLESS
+
+    table, _ = arrow_table(
+        dataset,
+        [
+            record(
+                id="first",
+                label="First",
+                vector=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+                vector64=[0.5, 1.5, 2.5, 3.5],
+            ),
+            record(
+                id="second",
+                label="Second",
+                vector=[8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
+                vector64=[4.5, 5.5, 6.5, 7.5],
+            ),
+        ],
+    )
+
+    assert pa.types.is_fixed_size_list(table.column("vector").type)
+    assert pa.types.is_fixed_size_list(table.column("vector64").type)
+    assert table.column("vector").to_pylist() == [
+        [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+        [8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
+    ]
+    assert table.column("vector64").to_pylist() == [
+        [0.5, 1.5, 2.5, 3.5],
+        [4.5, 5.5, 6.5, 7.5],
+    ]
+
+    parquet_path = tmp_path / "fixed-lists.parquet"
+    pq.write_table(table, parquet_path)
+    restored = pq.read_table(parquet_path)
+    assert pa.types.is_fixed_size_list(restored.schema.field("vector").type)
+    assert restored.schema.field("vector").type.list_size == 8
+    assert restored.column("vector").to_pylist() == table.column("vector").to_pylist()
+
+
+def test_fixed_lists_reject_wrong_length_and_omitted_values_with_canonical_paths() -> None:
+    dataset, record = _fixed_list_record_fixture()
+    valid_vector = [float(index) for index in range(8)]
+    valid_vector64 = [float(index) for index in range(4)]
+
+    for vector in ([], [0.0] * 7, [0.0] * 9):
+        with pytest.raises(
+            ValueError,
+            match=rf"fixed-list field 'schema_test_v1_lance_record\.vector' has {len(vector)} elements; "
+            r"expected exactly 8",
+        ):
+            arrow_table(
+                dataset,
+                [record(id="invalid", label="Invalid", vector=vector, vector64=valid_vector64)],
+            )
+
+    for vector64 in ([], [0.0] * 3, [0.0] * 5):
+        with pytest.raises(
+            ValueError,
+            match=rf"fixed-list field 'schema_test_v1_lance_record\.vector64' has {len(vector64)} elements; "
+            r"expected exactly 4",
+        ):
+            arrow_table(
+                dataset,
+                [record(id="invalid", label="Invalid", vector=valid_vector, vector64=vector64)],
+            )
+
+
 def test_arrow_table_rejects_stale_same_name_generated_message() -> None:
     pool = descriptor_pool.DescriptorPool()  # ty: ignore[possibly-missing-implicit-call]
     added: set[str] = set()
@@ -300,7 +389,8 @@ def test_arrow_table_reports_protojson_range_failures_with_source_context() -> N
     non_finite.attributes.fields["bad"].number_value = float("inf")
     with pytest.raises(
         ValueError,
-        match=r"protobuf JSON field 'attributes'.*data\.v1\.CanonicalRecord\.attributes.*numbers to be finite",
+        match=r"protobuf JSON field 'data_v1_canonical_record\.attributes'.*"
+        r"data\.v1\.CanonicalRecord\.attributes.*numbers to be finite",
     ):
         arrow_table(dataset, [non_finite])
 
@@ -309,7 +399,8 @@ def test_arrow_table_reports_protojson_range_failures_with_source_context() -> N
     unresolved.opaque.value = b"\x08\x01"
     with pytest.raises(
         ValueError,
-        match=r"protobuf JSON field 'opaque'.*data\.v1\.CanonicalRecord\.opaque.*type URL to resolve",
+        match=r"protobuf JSON field 'data_v1_canonical_record\.opaque'.*"
+        r"data\.v1\.CanonicalRecord\.opaque.*type URL to resolve",
     ):
         arrow_table(dataset, [unresolved])
 
@@ -361,10 +452,13 @@ def test_refined_types_reject_noncanonical_or_out_of_domain_values() -> None:
         " 1.00",
         "-0.00",
     ]:
-        with pytest.raises(ValueError, match=r"decimal field 'amount'.*(canonical|negative-zero)"):
+        with pytest.raises(
+            ValueError,
+            match=r"decimal field 'refined_record\.amount'.*(canonical|negative-zero)",
+        ):
             arrow_table(dataset, [record(amount=amount, record_id=valid_uuid, checksum=b"four")])
 
-    with pytest.raises(ValueError, match="decimal field 'amount' exceeds precision 6"):
+    with pytest.raises(ValueError, match=r"decimal field 'refined_record\.amount' exceeds precision 6"):
         arrow_table(dataset, [record(amount="10000.00", record_id=valid_uuid, checksum=b"four")])
 
     for identifier in [
@@ -373,11 +467,14 @@ def test_refined_types_reject_noncanonical_or_out_of_domain_values() -> None:
         "{550e8400-e29b-41d4-a716-446655440000}",
         "not-a-uuid",
     ]:
-        with pytest.raises(ValueError, match=r"UUID field 'record_id'.*canonical UUID"):
+        with pytest.raises(ValueError, match=r"UUID field 'refined_record\.record_id'.*canonical UUID"):
             arrow_table(dataset, [record(amount="1.00", record_id=identifier, checksum=b"four")])
 
     for checksum in [b"", b"abc", b"abcde"]:
-        with pytest.raises(ValueError, match=r"fixed-bytes field 'checksum'.*expected exactly 4 bytes"):
+        with pytest.raises(
+            ValueError,
+            match=r"fixed-bytes field 'refined_record\.checksum'.*expected exactly 4 bytes",
+        ):
             arrow_table(dataset, [record(amount="1.00", record_id=valid_uuid, checksum=checksum)])
 
 
@@ -484,6 +581,20 @@ def _refined_record_fixture():
         ),
         record,
     )
+
+
+def _fixed_list_record_fixture():
+    descriptor_set = descriptor_pb2.FileDescriptorSet.FromString(FIXED_LIST_DESCRIPTOR.read_bytes())
+    pool = descriptor_pool.DescriptorPool()  # ty: ignore[possibly-missing-implicit-call]
+    for file_descriptor in descriptor_set.file:
+        pool.Add(file_descriptor)
+
+    record_descriptor = pool.FindMessageTypeByName("schema.test.v1.LanceRecord")
+    record = message_factory.GetMessageClass(record_descriptor)
+    bundle = parse_schema_bundle(FIXED_LIST_BUNDLE.read_bytes())
+    dataset = find_dataset(bundle, record_descriptor.full_name)
+    assert dataset is not None
+    return dataset, record
 
 
 def _metadata(owner: pa.Schema | pa.Field, key: str) -> str:
