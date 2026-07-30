@@ -187,7 +187,14 @@ fixed byte width, and exact fixed-list length. Omitted and empty fixed lists
 are invalid; never synthesize a zero vector. Every other writer must enforce
 the same domain at its own boundary rather than assuming the option is a
 validation interceptor. Conversion failures name the canonical dataset/field
-path.
+path. Before reading values, `arrow_table()` also compares the generated
+message descriptor's exact Invariant field refinements with SchemaBundle; a
+removed or changed decimal, UUID, fixed-byte, or fixed-list option is schema
+drift, even when the protobuf carrier type did not change. Resolve populated
+`Any` values through their message's descriptor pool so code generated from an
+isolated `descriptor.binpb` remains self-contained. Arrow tables and Arrow IPC
+preserve zero-field message row counts; PyArrow 25 Parquet does not. Document
+that limitation rather than inventing a hidden physical column or writer.
 
 Renderers emit a diagnostic per logical node. Do not silently collapse maps,
 unsigned values, enum numbers, temporal precision/range, or recursive types.
@@ -233,15 +240,19 @@ arrays directly to LanceDB without application-side casts. The Lance SDK owns
 Lance manifests, fragments, data files, indexes, primary keys, MemWAL/LSM
 policy, compaction, object-store credentials, and namespace/catalog behavior.
 Do not add any of those to SchemaBundle or implement a Lance file writer.
-Repository qualification pins LanceDB 0.34.0 and PyArrow 25.0.0. That LanceDB
-release has no supported public end-to-end MemWAL flush/visibility/compaction
-lifecycle, so do not import private LSM symbols or claim MemWAL support. It
-also drops custom metadata on a persisted `FixedSizeList` value child while
-retaining the dimension and top-level field metadata; SchemaBundle, never a
-reopened Lance schema, remains the identity and tombstone registry. Arrow maps
-require application-owned Lance data storage format 2.2 instead of the 2.1
-new-table default. LanceDB also rejects NaN vector values by default; retain
-that fail-closed policy rather than silently choosing drop/fill/null behavior.
+Repository qualification pins LanceDB 0.36.0 and PyArrow 25.0.0. That LanceDB
+release documents MemWAL spec, inspection, and writer-drain methods, but still
+documents constructing `LsmWriteSpec` through its private `_lancedb` extension
+module. Do not import that private symbol or claim a supported public MemWAL
+lifecycle. The release also widens a persisted `FixedSizeList` value child to
+nullable and drops its custom metadata while retaining the dimension,
+top-level nullability, and top-level field metadata. `arrow_table()` must
+enforce the canonical non-null child domain before writes, and SchemaBundle,
+never a reopened Lance schema, remains the identity and tombstone registry.
+Arrow maps require application-owned Lance data storage format 2.2 instead of
+the 2.1 new-table default. LanceDB also rejects NaN vector values by default;
+retain that fail-closed policy rather than silently choosing drop/fill/null
+behavior.
 
 The committed SchemaBundle—not an Arrow IPC projection—is the evolution
 registry. Arrow-Go v18 preserves the map shape but does not round-trip custom
@@ -518,11 +529,12 @@ Dependency roots and lockfiles:
 
 The data integration includes an unconditional local LanceDB lifecycle plus
 pinned PostgreSQL 18.4 and ClickHouse Docker images. It verifies native Arrow
-fixed-list handoff, create/append/reopen/index/search/merge/optimize behavior,
-generated desired state, ClickHouse declarations, constraints, value round
-trips, and the exact UInt64 and UInt32/timestamp conversion expressions; it is
-not a production file writer, DDL application, or publishing API. Run the
-Lance-only boundary with `flox activate -- make lance-integration`.
+fixed-list handoff, representative canonical and refined Arrow value round
+trips, create/append/reopen/index/search/merge/optimize behavior, generated
+desired state, ClickHouse declarations, constraints, and the exact UInt64 and
+UInt32/timestamp conversion expressions; it is not a production file writer,
+DDL application, or publishing API. Run the Lance-only boundary with
+`flox activate -- make lance-integration`.
 
 CI (`.github/workflows/ci.yml`) runs everything inside `flox activate`, so contributors and CI hit the same toolchain by construction.
 

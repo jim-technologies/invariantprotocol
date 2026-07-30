@@ -609,6 +609,13 @@ table, diagnostics = arrow_table(dataset, events)
 pq.write_table(table, "ledger.parquet")
 ```
 
+`arrow_table()` checks that the generated message descriptor still carries the
+exact refinements recorded in SchemaBundle, then constructs nested Arrow arrays
+explicitly so canonical UUID and JSON extension values work inside structs,
+lists, and maps. Populated `Any` values resolve through that generated
+descriptor's own pool; no global import order or application-side cast is
+required.
+
 That same table is the LanceDB boundary; no application-side vector cast or
 second schema is required:
 
@@ -629,14 +636,14 @@ evolution rules, the qualified LanceDB lifecycle, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.13.0`; new releases do not create language-prefixed tags. The project
+tag `v0.13.1`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.13.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.13.1
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -646,26 +653,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.13.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.13.1#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.13.0#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.13.1#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.13.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.13.1" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.13.0" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.13.1" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.13.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.13.1"
 ```
 
 For reproducible production builds, replace the tag with a full commit

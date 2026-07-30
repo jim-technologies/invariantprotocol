@@ -81,9 +81,11 @@ generated IR variants in every reader. The same build tool renders Arrow,
 Parquet, Iceberg, PostgreSQL, and ClickHouse artifacts, including a
 language-neutral structural ClickHouse-to-Iceberg publishing plan; duplicating
 target inference in four runtimes would create competing schemas. PyArrow
-record conversion and LanceDB qualification remain Python ecosystem adapters.
-LanceDB consumes the canonical Arrow table; it is not a sixth renderer or a
-portable server-runtime feature.
+schema/value conversion covers every canonical bundle kind, including nested
+extension values, while LanceDB qualification persists representative
+canonical and refined values. Both remain Python ecosystem adapters. LanceDB
+consumes the canonical Arrow table; it is not a sixth renderer or a portable
+server-runtime feature.
 
 The OpenAPI importer is a build-time bootstrap, not a portable runtime surface
 or synchronization engine. It accepts bundled OpenAPI 3.0/3.1 input, produces

@@ -16,9 +16,9 @@ from uuid import UUID
 
 from google.protobuf import descriptor as protobuf_descriptor
 from google.protobuf import descriptor_pb2, json_format
-from google.protobuf.message import Message
+from google.protobuf.message import DecodeError, Message
 
-from invariant.gen.invariant.data.v1 import schema_pb2
+from invariant.gen.invariant.data.v1 import annotations_pb2, schema_pb2
 from invariant.gen.invariant.data.v1.schema_pb2 import (
     DatasetSchema,
     DataType,
@@ -140,7 +140,16 @@ def arrow_table(
     validated_descriptors: dict[int, Any] = {}
     field_protos: dict[int, tuple[Any, dict[str, descriptor_pb2.FieldDescriptorProto]]] = {}
     rows = [_message_row(dataset, message, validated_descriptors, field_protos) for message in messages]
-    return pa.Table.from_pylist(rows, schema=schema), diagnostics
+    if len(schema) == 0:
+        row_markers = pa.StructArray.from_arrays(
+            [],
+            fields=[],
+            mask=pa.array([False] * len(rows), type=pa.bool_()),
+        )
+        batch = pa.RecordBatch.from_struct_array(row_markers)
+        return pa.Table.from_batches([batch], schema=schema), diagnostics
+    columns = [_arrow_array(pa, [row[field.name] for row in rows], field.type) for field in schema]
+    return pa.Table.from_arrays(columns, schema=schema), diagnostics
 
 
 def _pyarrow() -> Any:
@@ -153,6 +162,70 @@ def _pyarrow() -> Any:
             "Apache Arrow support requires the optional data dependency; "
             "install invariant-protocol with its 'data' extra"
         ) from error
+
+
+def _arrow_array(pa: Any, values: list[Any], data_type: Any) -> Any:
+    """Build nested arrays explicitly so canonical extension types compose."""
+    if pa.types.is_fixed_size_list(data_type):
+        flattened: list[Any] = []
+        for value in values:
+            flattened.extend([None] * data_type.list_size if value is None else value)
+        items = _arrow_array(pa, flattened, data_type.value_type)
+        return pa.FixedSizeListArray.from_arrays(
+            items,
+            type=data_type,
+            mask=pa.array([value is None for value in values], type=pa.bool_()),
+        )
+
+    if pa.types.is_list(data_type):
+        offsets = [0]
+        flattened = []
+        for value in values:
+            if value is not None:
+                flattened.extend(value)
+            offsets.append(len(flattened))
+        items = _arrow_array(pa, flattened, data_type.value_type)
+        return pa.ListArray.from_arrays(
+            pa.array(offsets, type=pa.int32()),
+            items,
+            type=data_type,
+            mask=pa.array([value is None for value in values], type=pa.bool_()),
+        )
+
+    if pa.types.is_map(data_type):
+        offsets = [0]
+        keys: list[Any] = []
+        map_items: list[Any] = []
+        for value in values:
+            if value is not None:
+                keys.extend(key for key, _ in value)
+                map_items.extend(item for _, item in value)
+            offsets.append(len(keys))
+        return pa.MapArray.from_arrays(
+            pa.array(offsets, type=pa.int32()),
+            _arrow_array(pa, keys, data_type.key_type),
+            _arrow_array(pa, map_items, data_type.item_type),
+            type=data_type,
+            mask=pa.array([value is None for value in values], type=pa.bool_()),
+        )
+
+    if pa.types.is_struct(data_type):
+        fields = list(data_type)
+        children = [
+            _arrow_array(
+                pa,
+                [None if value is None else value[field.name] for value in values],
+                field.type,
+            )
+            for field in fields
+        ]
+        return pa.StructArray.from_arrays(
+            children,
+            fields=fields,
+            mask=pa.array([value is None for value in values], type=pa.bool_()),
+        )
+
+    return pa.array(values, type=data_type)
 
 
 def _map_field(pa: Any, field: Field, path: str) -> tuple[Any, list[MappingDiagnostic]]:
@@ -471,6 +544,7 @@ def _validate_message_fields(
 
         number_path = (*parent_number_path, number)
         _validate_field_type(logical, actual, number_path, field_path, field_protos)
+        _validate_field_refinement(logical, field_proto, field_path)
 
 
 def _validate_field_type(
@@ -522,6 +596,39 @@ def _validate_field_type(
         return
 
     _validate_value_type(logical.type, actual, number_path, path, field_protos)
+
+
+def _validate_field_refinement(
+    logical: Field,
+    actual: descriptor_pb2.FieldDescriptorProto,
+    path: str,
+) -> None:
+    expected = annotations_pb2.FieldOptions()
+    data_type = logical.type
+    kind = data_type.WhichOneof("kind")
+    if kind == "list":
+        if data_type.list.fixed_length:
+            expected.fixed_list.length = data_type.list.fixed_length
+        else:
+            data_type = data_type.list.element.type
+            kind = data_type.WhichOneof("kind")
+
+    if kind == "decimal":
+        expected.decimal.precision = data_type.decimal.precision
+        expected.decimal.scale = data_type.decimal.scale
+    elif kind == "uuid":
+        expected.uuid.SetInParent()
+    elif kind == "fixed_bytes":
+        expected.fixed_bytes.byte_length = data_type.fixed_bytes.byte_length
+
+    expected_present = bool(expected.ListFields())
+    actual_present = actual.options.HasExtension(annotations_pb2.field)  # type: ignore[arg-type]
+    if actual_present != expected_present:
+        _descriptor_mismatch(path, "Invariant field refinement does not match the SchemaBundle")
+    if actual_present:
+        actual_refinement: Any = actual.options.Extensions[annotations_pb2.field]  # type: ignore[index]
+        if actual_refinement.SerializeToString(deterministic=True) != expected.SerializeToString(deterministic=True):
+            _descriptor_mismatch(path, "Invariant field refinement does not match the SchemaBundle")
 
 
 def _validate_synthetic_field(
@@ -786,9 +893,10 @@ def _convert_value(value: Any, data_type: DataType, path: str, source: str) -> A
                 preserving_proto_field_name=False,
                 indent=None,
                 sort_keys=True,
+                descriptor_pool=value.DESCRIPTOR.file.pool,  # type: ignore[arg-type]
                 ensure_ascii=False,
             )
-        except (TypeError, ValueError) as error:
+        except (DecodeError, TypeError, ValueError) as error:
             raise ValueError(
                 f"arrow: protobuf JSON field {path!r} from {source!r} ({data_type.protobuf_type}) "
                 f"is outside the canonical ProtoJSON domain: {_json_range_reduction(data_type.json.kind)}: {error}"

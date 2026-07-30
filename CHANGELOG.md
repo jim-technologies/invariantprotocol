@@ -10,6 +10,31 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.13.1 — 2026-07-30
+
+### Changed
+
+- **The canonical Arrow-to-Lance boundary tracks current stable LanceDB.**
+  Qualification now locks LanceDB 0.36.0 with PyArrow 25.0.0 and round-trips
+  representative canonical, decimal, UUID, and fixed-byte values in addition
+  to both fixed-list vector widths through the existing lifecycle. Qualification
+  records Lance's persisted child-nullability widening and metadata
+  normalization explicitly. MemWAL remains application policy and is not
+  claimed while its documented specification constructor is exposed only
+  through LanceDB's private extension module.
+
+### Fixed
+
+- **Python's Arrow value bridge now composes every canonical nested type
+  fail-closed.** Explicit Arrow array construction supports UUID and JSON
+  extension values inside lists, maps, and structs; generated descriptors must
+  retain the exact decimal, UUID, fixed-byte, and fixed-list annotations
+  recorded in SchemaBundle; and populated `Any` values resolve against their
+  own descriptor pool instead of the global pool. Zero-field Arrow tables and
+  IPC retain row cardinality, with PyArrow 25's zero-column Parquet limitation
+  documented explicitly, and malformed embedded `Any` bytes retain canonical
+  field context in conversion errors.
+
 ## v0.13.0 — 2026-07-28
 
 ### Added

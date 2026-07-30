@@ -350,6 +350,21 @@ rejects short, long, omitted, and empty values before PyArrow or a storage SDK
 can coerce them. Ordinary `pyarrow.parquet.write_table()` can then write the
 table; Invariant does not wrap or replace the standard writer.
 
+One format edge remains explicit: Arrow tables and Arrow IPC preserve the row
+count of a valid zero-field dataset, but locked PyArrow 25 writes it to Parquet
+as a zero-column table that reopens with zero rows. Do not use Parquet for a
+zero-field dataset when row cardinality matters. Invariant does not invent a
+hidden physical column or wrap the Parquet writer to disguise that limitation.
+
+The value bridge validates the generated descriptor before reading a row,
+including the exact decimal, UUID, fixed-byte, and fixed-list field options.
+Changing or removing an annotation while retaining the same protobuf carrier
+is rejected as descriptor drift. Nested arrays are built explicitly rather
+than delegated to PyArrow's generic row inference, so UUID and JSON extension
+values compose inside lists, maps, and structs. Populated `Any` values resolve
+through the generated message's own descriptor pool, including bindings built
+from an isolated `descriptor.binpb`.
+
 Recursive message graphs fail compilation. Silently turning a recursive type
 into an untyped object would stop protobuf from being the canonical contract.
 Reachable messages with proto2 extension ranges also fail: an extension can add
@@ -381,14 +396,17 @@ The table already contains a native Arrow `FixedSizeList`; application-side
 unnecessary. The same table can be appended or used as the source of a
 `merge_insert`.
 
-Repository qualification locks LanceDB 0.34.0 and PyArrow 25.0.0 in
+Repository qualification locks LanceDB 0.36.0 and PyArrow 25.0.0 in
 `python/uv.lock`. Its deterministic local lifecycle creates a table from only
 Invariant-generated schema/data, appends, closes and reopens, creates an
 HNSW-SQ vector index, searches, performs a standard `merge_insert`, optimizes,
 reopens in a fresh Python process, and verifies the schema and both pre-index
-and post-index rows. It separately verifies that an unenforced primary key can
-be set as table configuration without changing SchemaBundle. Run it directly
-with:
+and post-index rows. The same boundary round-trips representative non-default
+primitive, enum, presence, oneof, nested, list, map, temporal, JSON, decimal,
+UUID, and fixed-byte values; JSON is compared semantically because Lance may
+normalize insignificant whitespace. It separately verifies that an unenforced
+primary key can be set as table configuration without changing SchemaBundle.
+Run it directly with:
 
 ```bash
 flox activate -- make lance-integration
@@ -400,11 +418,15 @@ Lance SDK/table policy. Invariant neither writes the Lance format nor models
 those settings. Lance Namespace REST likewise remains an SDK boundary; its
 Arrow IPC request bodies can be produced from the same canonical Arrow table.
 
-LanceDB 0.34.0 preserves `FixedSizeList` element type and dimension and the
-top-level field metadata after persistence, but normalizes away custom metadata
-on the list's synthetic Arrow value field. The committed SchemaBundle therefore
-remains the identity and tombstone registry; never reconstruct evolution state
-from a reopened Lance table schema.
+LanceDB 0.36.0 preserves the `FixedSizeList` element type and dimension,
+top-level field nullability, and top-level field metadata after persistence.
+It widens the synthetic Arrow value field from non-null to nullable and
+normalizes away that child's custom metadata. The reopened physical schema can
+therefore admit a null vector element if an application bypasses
+`arrow_table()`. Treat this as a Lance-boundary range widening: the committed
+SchemaBundle remains the identity and tombstone registry, and `arrow_table()`
+remains the value-domain enforcement boundary. Never infer evolution state or
+canonical collection-member nullability from a reopened Lance table schema.
 
 The same release creates new tables with Lance data storage format 2.1 by
 default, while Arrow `Map` requires format 2.2. A dataset containing protobuf
@@ -427,12 +449,13 @@ rejects NaN values. Keep the fail-closed `on_bad_vectors="error"` behavior when
 protobuf fidelity matters; LanceDB's `drop`, `fill`, and `null` modes alter data
 and must be an explicit application decision.
 
-The locked LanceDB 0.34.0 Python API does not expose a public, end-to-end
-MemWAL/LSM writer flush, visibility, and base-table compaction lifecycle.
-Private extension-module symbols are not a production contract, so the
-qualification deliberately does not import them or claim MemWAL support.
-MemWAL remains table policy and can be qualified later without changing
-SchemaBundle when LanceDB provides a stable public lifecycle.
+The locked LanceDB 0.36.0 Python API documents MemWAL spec, inspection, and
+writer-drain methods, but its documented `LsmWriteSpec` constructor still lives
+in the private `_lancedb` extension module. Private extension-module symbols
+are not a production contract, so the qualification deliberately does not
+import them or claim MemWAL support. MemWAL remains table policy and can be
+qualified later without changing SchemaBundle when LanceDB exposes the complete
+lifecycle through a stable public module.
 
 ## PostgreSQL and Atlas
 
