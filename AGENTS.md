@@ -85,8 +85,9 @@ dynamic protobuf messages at their boundary.
 Build-tool and ecosystem capabilities are different. The descriptor-to-
 SchemaBundle compiler is implemented once and is available to every language;
 duplicating it would create competing canonical mappings. A bridge such as
-protobuf messages to `pyarrow.Table` is explicitly a Python ecosystem adapter,
-not a missing Rust or TypeScript server feature.
+protobuf messages to `pyarrow.Table` or `pyarrow.RecordBatchReader` is
+explicitly a Python ecosystem adapter, not a missing Rust or TypeScript server
+feature.
 
 ### TypeScript
 
@@ -160,10 +161,11 @@ renderers live in isolated
 `go/cmd/invariant-schema` is the build-time CLI.
 
 Python's optional data surface maps a bundle dataset to `pyarrow.Schema` and
-matching generated protobuf messages to `pyarrow.Table`; standard PyArrow owns
-Parquet file writing. The SchemaBundle remains the mapping and evolution
-authority. Do not infer a second schema independently from Python descriptors
-or arbitrary dictionaries.
+matching generated protobuf messages to either an eager `pyarrow.Table` or a
+lazy, row-bounded `pyarrow.RecordBatchReader`; standard PyArrow owns Parquet
+file writing. The SchemaBundle remains the mapping and evolution authority. Do
+not infer a second schema independently from Python descriptors or arbitrary
+dictionaries.
 
 Protobuf is the only authored logical contract, not a physical storage format.
 Messages marked `(invariant.data.v1.dataset)` are discovered when the compiler
@@ -182,19 +184,27 @@ number/name and adding a new field. Never delete or hand-edit history to make a
 schema change pass.
 
 Annotations declare a logical value domain; they do not validate runtime
-message values. Python's `arrow_table()` enforces canonical decimal/UUID text,
-fixed byte width, and exact fixed-list length. Omitted and empty fixed lists
-are invalid; never synthesize a zero vector. Every other writer must enforce
-the same domain at its own boundary rather than assuming the option is a
-validation interceptor. Conversion failures name the canonical dataset/field
-path. Before reading values, `arrow_table()` also compares the generated
-message descriptor's exact Invariant field refinements with SchemaBundle; a
-removed or changed decimal, UUID, fixed-byte, or fixed-list option is schema
-drift, even when the protobuf carrier type did not change. Resolve populated
-`Any` values through their message's descriptor pool so code generated from an
-isolated `descriptor.binpb` remains self-contained. Arrow tables and Arrow IPC
-preserve zero-field message row counts; PyArrow 25 Parquet does not. Document
-that limitation rather than inventing a hidden physical column or writer.
+message values. Python's `arrow_table()` and
+`arrow_record_batch_reader()` enforce canonical decimal/UUID text, fixed byte
+width, and exact fixed-list length. Omitted and empty fixed lists are invalid;
+never synthesize a zero vector. Every other writer must enforce the same
+domain at its own boundary rather than assuming the option is a validation
+interceptor. Conversion failures name the canonical dataset/field path.
+Before reading values, both Python value APIs compare the generated message
+descriptor's exact Invariant field refinements with SchemaBundle; a removed or
+changed decimal, UUID, fixed-byte, or fixed-list option is schema drift, even
+when the protobuf carrier type did not change. The reader is single-pass and
+lazy: schema diagnostics are eager, while descriptor and value failures occur
+when the affected batch is pulled. Its configurable size is a row bound, not a
+byte or sink-transaction guarantee. Input resource ownership stays with the
+caller rather than becoming a custom reader-lifecycle abstraction. Resolve
+populated `Any` values through their message's descriptor pool so code
+generated from an isolated `descriptor.binpb` remains self-contained. Arrow
+tables and Arrow IPC preserve zero-field message row counts; PyArrow 25 Parquet
+does not. Document that limitation rather than inventing a hidden physical
+column or writer. Incremental Parquet row-group size and IPC batch framing
+cannot exceed the emitted reader batch, so consumers may raise `batch_size`
+for narrow schemas after measuring the memory/layout tradeoff.
 
 Renderers emit a diagnostic per logical node. Do not silently collapse maps,
 unsigned values, enum numbers, temporal precision/range, or recursive types.
@@ -236,7 +246,10 @@ canonical shape before projecting into Iceberg's unconstrained list.
 
 Lance/LanceDB is an Arrow ecosystem consumer, not another renderer or CLI
 target. The Python bridge must hand its native `FixedSizeList` schema and
-arrays directly to LanceDB without application-side casts. The Lance SDK owns
+arrays directly to LanceDB without application-side casts. Large inputs use
+the standard `RecordBatchReader` with schema-first table creation followed by
+one `add(reader)` call rather than an Invariant-specific ingestion abstraction
+or one insert per Arrow batch. The Lance SDK owns
 Lance manifests, fragments, data files, indexes, primary keys, MemWAL/LSM
 policy, compaction, object-store credentials, and namespace/catalog behavior.
 Do not add any of those to SchemaBundle or implement a Lance file writer.
@@ -246,9 +259,10 @@ documents constructing `LsmWriteSpec` through its private `_lancedb` extension
 module. Do not import that private symbol or claim a supported public MemWAL
 lifecycle. The release also widens a persisted `FixedSizeList` value child to
 nullable and drops its custom metadata while retaining the dimension,
-top-level nullability, and top-level field metadata. `arrow_table()` must
-enforce the canonical non-null child domain before writes, and SchemaBundle,
-never a reopened Lance schema, remains the identity and tombstone registry.
+top-level nullability, and top-level field metadata. The Python Arrow value
+APIs must enforce the canonical non-null child domain before writes, and
+SchemaBundle, never a reopened Lance schema, remains the identity and tombstone
+registry.
 Arrow maps require application-owned Lance data storage format 2.2 instead of
 the 2.1 new-table default. LanceDB also rejects NaN vector values by default;
 retain that fail-closed policy rather than silently choosing drop/fill/null
@@ -529,8 +543,9 @@ Dependency roots and lockfiles:
 
 The data integration includes an unconditional local LanceDB lifecycle plus
 pinned PostgreSQL 18.4 and ClickHouse Docker images. It verifies native Arrow
-fixed-list handoff, representative canonical and refined Arrow value round
-trips, create/append/reopen/index/search/merge/optimize behavior, generated
+fixed-list handoff through standard row-bounded readers, representative
+canonical and refined Arrow value round trips,
+create/append/reopen/index/search/merge/optimize behavior, generated
 desired state, ClickHouse declarations, constraints, and the exact UInt64 and
 UInt32/timestamp conversion expressions; it is not a production file writer,
 DDL application, or publishing API. Run the Lance-only boundary with

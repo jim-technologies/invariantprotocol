@@ -599,7 +599,7 @@ messages into a real `pyarrow.Table`:
 
 ```python
 import pyarrow.parquet as pq
-from invariant import arrow_table, find_dataset, parse_schema_bundle
+from invariant import arrow_record_batch_reader, arrow_table, find_dataset, parse_schema_bundle
 
 bundle = parse_schema_bundle(open("ledger.schema.binpb", "rb").read())
 dataset = find_dataset(bundle, "ledger.v1.LedgerEvent")
@@ -609,6 +609,27 @@ table, diagnostics = arrow_table(dataset, events)
 pq.write_table(table, "ledger.parquet")
 ```
 
+For an input that should not be materialized as one table, use the standard
+single-pass Arrow reader. It converts no message until a batch is pulled and
+converts at most `batch_size` messages into one batch at a time. Storage owned
+by the input iterable remains caller-managed:
+
+```python
+reader, diagnostics = arrow_record_batch_reader(dataset, events, batch_size=256)
+with pq.ParquetWriter("ledger.parquet", reader.schema) as writer:
+    for batch in reader:
+        writer.write_batch(batch)
+```
+
+This is a row bound, not a byte bound: one protobuf message can still contain a
+large string, byte sequence, list, or map. The 256-row default is deliberately
+conservative for embedding workloads. Mapping diagnostics are available when
+the reader is created; descriptor and value errors occur when the affected
+batch is pulled, so a streaming sink may already have accepted earlier valid
+batches. Incremental Parquet and Arrow IPC retain these physical batch
+boundaries, so narrow schemas may use a larger `batch_size` when row-group or
+framing efficiency matters.
+
 `arrow_table()` checks that the generated message descriptor still carries the
 exact refinements recorded in SchemaBundle, then constructs nested Arrow arrays
 explicitly so canonical UUID and JSON extension values work inside structs,
@@ -616,15 +637,21 @@ lists, and maps. Populated `Any` values resolve through that generated
 descriptor's own pool; no global import order or application-side cast is
 required.
 
-That same table is the LanceDB boundary; no application-side vector cast or
-second schema is required:
+The table or a fresh record-batch reader is the LanceDB boundary; no
+application-side vector cast or second schema is required:
 
 ```python
 import lancedb
 
+reader, diagnostics = arrow_record_batch_reader(dataset, events)
 database = await lancedb.connect_async("./data/lance")
-lance_table = await database.create_table("ledger_events", data=table)
+lance_table = await database.create_table("ledger_events", schema=reader.schema)
+await lance_table.add(reader)
 ```
+
+Pass the complete reader to one `add()` call; do not turn each Arrow batch into
+a separate insert. For a finite input that comfortably fits memory,
+`arrow_table()` remains the replayable, throughput-oriented choice.
 
 PyArrow owns Parquet file writing, while the Lance SDK owns Lance manifests,
 fragments, data files, indexes, compaction, and object-store access. See
@@ -636,14 +663,14 @@ evolution rules, the qualified LanceDB lifecycle, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.13.1`; new releases do not create language-prefixed tags. The project
+tag `v0.14.0`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.13.1
+go get github.com/jim-technologies/invariantprotocol/go@v0.14.0
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -653,26 +680,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.13.1#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.14.0#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.13.1#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.14.0#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.13.1" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.14.0" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.13.1" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.14.0" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.13.1"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.14.0"
 ```
 
 For reproducible production builds, replace the tag with a full commit

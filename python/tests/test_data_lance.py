@@ -13,7 +13,7 @@ import pytest
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from lancedb.index import HnswSq
 
-from invariant import arrow_table, find_dataset, parse_schema_bundle
+from invariant import arrow_record_batch_reader, arrow_table, find_dataset, parse_schema_bundle
 from invariant.gen.invariant.data.v1 import schema_pb2
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -96,7 +96,8 @@ asyncio.run(main())
 @pytest.mark.asyncio
 async def test_lancedb_lifecycle_uses_only_invariant_generated_arrow(tmp_path: Path) -> None:
     dataset, record = _fixture("schema.test.v1.LanceRecord")
-    initial, diagnostics = arrow_table(dataset, [_record(record, value) for value in range(128)])
+    initial_messages = [_record(record, value) for value in range(128)]
+    initial, diagnostics = arrow_table(dataset, initial_messages)
 
     vector_type = initial.schema.field("vector").type
     vector64_type = initial.schema.field("vector64").type
@@ -117,9 +118,12 @@ async def test_lancedb_lifecycle_uses_only_invariant_generated_arrow(tmp_path: P
     assert compatibility["vector64"] == schema_pb2.MAPPING_COMPATIBILITY_LOSSLESS
 
     database = await lancedb.connect_async(tmp_path)
-    table = await database.create_table("vectors", data=initial)
+    initial_reader, reader_diagnostics = arrow_record_batch_reader(dataset, iter(initial_messages), batch_size=31)
+    assert reader_diagnostics == diagnostics
+    table = await database.create_table("vectors", schema=initial_reader.schema)
+    await table.add(initial_reader)
 
-    appended, _ = arrow_table(dataset, [_record(record, 128)])
+    appended, _ = arrow_record_batch_reader(dataset, [_record(record, 128)], batch_size=1)
     await table.add(appended)
     assert await table.count_rows() == 129
     table.close()
@@ -193,10 +197,10 @@ async def test_lancedb_lifecycle_uses_only_invariant_generated_arrow(tmp_path: P
 @pytest.mark.asyncio
 async def test_lancedb_unenforced_primary_key_remains_table_policy(tmp_path: Path) -> None:
     dataset, record = _fixture("schema.test.v1.LanceRecord")
-    initial, _ = arrow_table(dataset, [_record(record, 1)])
+    initial, _ = arrow_record_batch_reader(dataset, [_record(record, 1)], batch_size=1)
 
     database = await lancedb.connect_async(tmp_path)
-    table = await database.create_table("policy", data=initial)
+    table = await database.create_table("policy", data=initial, schema=initial.schema)
     await table.set_unenforced_primary_key("id")
 
     duplicate, _ = arrow_table(dataset, [_record(record, 1, label="duplicate")])

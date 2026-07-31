@@ -325,7 +325,13 @@ Python applications that work with data can map a validated dataset directly
 to the native PyArrow schema used by Arrow and Parquet:
 
 ```python
-from invariant import arrow_schema, arrow_table, find_dataset, parse_schema_bundle
+from invariant import (
+    arrow_record_batch_reader,
+    arrow_schema,
+    arrow_table,
+    find_dataset,
+    parse_schema_bundle,
+)
 
 bundle = parse_schema_bundle(open("data.schema.binpb", "rb").read())
 dataset = find_dataset(bundle, "example.v1.Event")
@@ -349,6 +355,45 @@ a native `pyarrow.FixedSizeListType` and `FixedSizeListArray`; conversion
 rejects short, long, omitted, and empty values before PyArrow or a storage SDK
 can coerce them. Ordinary `pyarrow.parquet.write_table()` can then write the
 table; Invariant does not wrap or replace the standard writer.
+
+For large or unbounded inputs, `arrow_record_batch_reader()` exposes the same
+conversion through a standard, single-pass `pyarrow.RecordBatchReader`:
+
+```python
+import pyarrow.parquet as pq
+
+reader, diagnostics = arrow_record_batch_reader(
+    dataset,
+    generated_messages,
+    batch_size=256,
+)
+with pq.ParquetWriter("events.parquet", reader.schema) as writer:
+    for batch in reader:
+        writer.write_batch(batch)
+```
+
+The reader is lazy and converts at most `batch_size` messages at once. Its
+default is 256 rows, chosen conservatively for fixed-size embedding vectors.
+This bounds rows and Invariant's conversion intermediates, not bytes: a single
+protobuf message may itself contain large variable-width values. The canonical
+dataset is snapshotted when the reader is created, so later mutation of the
+protobuf object cannot change the advertised schema or pending conversions.
+Mapping diagnostics and schema errors are returned eagerly. Descriptor drift,
+refinement violations, invalid logical values, and source exceptions surface
+when the affected batch is pulled. A sink may therefore have committed prior
+valid batches before a later batch fails; transaction and rollback behavior
+belong to that sink. Use `arrow_table()` when the complete input must validate
+before anything is handed to a writer. The input iterable and any resources it
+owns remain caller-managed; close those resources explicitly if abandoning a
+reader before exhaustion.
+
+`ParquetWriter.write_batch()` cannot combine separate reader batches into one
+row group, and Arrow IPC preserves each emitted batch boundary. The reader's
+`batch_size` is therefore also the maximum Parquet row-group size in the
+incremental example above. The 256-row default is appropriate for wide
+embedding records; increase it for narrow schemas when measured row-group or
+IPC framing overhead warrants the additional conversion memory. Invariant does
+not guess encoded byte size or physical file layout from the logical schema.
 
 One format edge remains explicit: Arrow tables and Arrow IPC preserve the row
 count of a valid zero-field dataset, but locked PyArrow 25 writes it to Parquet
@@ -379,33 +424,42 @@ command:
 
 ```python
 import lancedb
-from invariant import arrow_table, find_dataset, parse_schema_bundle
+from invariant import arrow_record_batch_reader, find_dataset, parse_schema_bundle
 
 bundle = parse_schema_bundle(open("data.schema.binpb", "rb").read())
 dataset = find_dataset(bundle, "example.v1.Embedding")
 if dataset is None:
     raise ValueError("missing example.v1.Embedding dataset")
 
-table, diagnostics = arrow_table(dataset, generated_messages)
+reader, diagnostics = arrow_record_batch_reader(dataset, generated_messages)
 database = await lancedb.connect_async("./data/lance")
-lance_table = await database.create_table("embeddings", data=table)
+lance_table = await database.create_table("embeddings", schema=reader.schema)
+await lance_table.add(reader)
 ```
 
-The table already contains a native Arrow `FixedSizeList`; application-side
-`pa.array(..., type=...)` casting would create a second schema authority and is
-unnecessary. The same table can be appended or used as the source of a
-`merge_insert`.
+Every emitted batch already contains a native Arrow `FixedSizeList`;
+application-side `pa.array(..., type=...)` casting would create a second schema
+authority and is unnecessary. A fresh reader can be passed directly to
+`table.add()`. Pass the complete reader once rather than calling `add()` for
+each batch; reader batch boundaries do not need to become separate
+application-level inserts. For a finite input that comfortably fits memory,
+`arrow_table()` supplies a replayable materialized source and lets LanceDB
+reason about total size for write parallelism. A streaming reader instead
+prioritizes bounded conversion; explicit Lance write parallelism and its
+in-flight memory/fragment tradeoff remain application policy.
 
 Repository qualification locks LanceDB 0.36.0 and PyArrow 25.0.0 in
-`python/uv.lock`. Its deterministic local lifecycle creates a table from only
-Invariant-generated schema/data, appends, closes and reopens, creates an
-HNSW-SQ vector index, searches, performs a standard `merge_insert`, optimizes,
-reopens in a fresh Python process, and verifies the schema and both pre-index
-and post-index rows. The same boundary round-trips representative non-default
-primitive, enum, presence, oneof, nested, list, map, temporal, JSON, decimal,
-UUID, and fixed-byte values; JSON is compared semantically because Lance may
-normalize insignificant whitespace. It separately verifies that an unenforced
-primary key can be set as table configuration without changing SchemaBundle.
+`python/uv.lock`. Its deterministic local lifecycle creates an empty table
+from the Invariant-generated schema, adds the complete record-batch reader,
+appends with another reader, closes and reopens, creates an HNSW-SQ vector
+index, searches, performs a standard `merge_insert`, optimizes, reopens in a
+fresh Python process, and verifies the schema and both pre-index and post-index
+rows. A separate policy test also covers direct reader-backed creation. The
+same boundary round-trips representative non-default primitive, enum,
+presence, oneof, nested, list, map, temporal, JSON, decimal, UUID, and
+fixed-byte values; JSON is compared semantically because Lance may normalize
+insignificant whitespace. It separately verifies that an unenforced primary
+key can be set as table configuration without changing SchemaBundle.
 Run it directly with:
 
 ```bash
@@ -423,10 +477,11 @@ top-level field nullability, and top-level field metadata after persistence.
 It widens the synthetic Arrow value field from non-null to nullable and
 normalizes away that child's custom metadata. The reopened physical schema can
 therefore admit a null vector element if an application bypasses
-`arrow_table()`. Treat this as a Lance-boundary range widening: the committed
-SchemaBundle remains the identity and tombstone registry, and `arrow_table()`
-remains the value-domain enforcement boundary. Never infer evolution state or
-canonical collection-member nullability from a reopened Lance table schema.
+Invariant's Arrow value APIs. Treat this as a Lance-boundary range widening:
+the committed SchemaBundle remains the identity and tombstone registry, and
+`arrow_table()` or `arrow_record_batch_reader()` remains the value-domain
+enforcement boundary. Never infer evolution state or canonical
+collection-member nullability from a reopened Lance table schema.
 
 The same release creates new tables with Lance data storage format 2.1 by
 default, while Arrow `Map` requires format 2.2. A dataset containing protobuf
@@ -595,11 +650,12 @@ UInt64, UInt32, and timestamp Iceberg conversion expressions.
 ## Deliberate schema boundary
 
 This release compiles and renders **schemas**, and Python can convert matching
-generated protobuf messages into a `pyarrow.Table` accepted directly by
-LanceDB. Invariant does not choose file layout, write Parquet or Lance data
-files, commit an Iceberg catalog, apply database DDL, generate database
-migrations, or choose partitions. Those operations combine schema with runtime
-and deployment policy and remain consumer-owned.
+generated protobuf messages into a `pyarrow.Table` or row-bounded
+`pyarrow.RecordBatchReader` accepted directly by LanceDB. Invariant does not
+choose file layout, write Parquet or Lance data files, commit an Iceberg
+catalog, apply database DDL, generate database migrations, or choose
+partitions. Those operations combine schema with runtime and deployment policy
+and remain consumer-owned.
 
 The Iceberg output is a schema snapshot, not an evolution transaction. Its
 `initial-default` and `write-default` values preserve protobuf's implicit
@@ -609,6 +665,7 @@ needed, and commit the catalog transaction itself.
 
 The format references behind these decisions are the
 [Arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html),
+[PyArrow RecordBatchReader API](https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html),
 [Parquet logical types](https://parquet.apache.org/docs/file-format/types/logicaltypes/),
 [Iceberg schema evolution rules](https://iceberg.apache.org/docs/latest/evolution/#schema-evolution),
 [protobuf field presence](https://protobuf.dev/programming-guides/field_presence/),

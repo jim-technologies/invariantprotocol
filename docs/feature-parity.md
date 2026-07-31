@@ -82,10 +82,12 @@ Parquet, Iceberg, PostgreSQL, and ClickHouse artifacts, including a
 language-neutral structural ClickHouse-to-Iceberg publishing plan; duplicating
 target inference in four runtimes would create competing schemas. PyArrow
 schema/value conversion covers every canonical bundle kind, including nested
-extension values, while LanceDB qualification persists representative
-canonical and refined values. Both remain Python ecosystem adapters. LanceDB
-consumes the canonical Arrow table; it is not a sixth renderer or a portable
-server-runtime feature.
+extension values, through eager tables and standard row-bounded
+`RecordBatchReader` streams. LanceDB qualification persists representative
+canonical and refined values and accepts those readers directly for create and
+append. Both remain Python ecosystem adapters. LanceDB consumes the canonical
+Arrow boundary; it is not a sixth renderer or a portable server-runtime
+feature.
 
 The OpenAPI importer is a build-time bootstrap, not a portable runtime surface
 or synchronization engine. It accepts bundled OpenAPI 3.0/3.1 input, produces

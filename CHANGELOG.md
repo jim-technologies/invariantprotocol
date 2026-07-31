@@ -10,6 +10,18 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.14.0 — 2026-07-31
+
+### Added
+
+- **Python can convert protobuf streams into canonical Arrow batches without
+  materializing the complete input.** `arrow_record_batch_reader()` returns a
+  standard, single-pass `pyarrow.RecordBatchReader` and converts at most 256
+  messages per batch by default. The row bound is configurable, value and
+  descriptor errors retain canonical paths when their batch is pulled, and
+  the reader is qualified directly with Arrow IPC, incremental Parquet, and
+  LanceDB create/append operations.
+
 ## v0.13.1 — 2026-07-30
 
 ### Changed

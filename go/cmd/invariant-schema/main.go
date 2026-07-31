@@ -63,7 +63,7 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "    Upgrade the supported historical SchemaBundle while retaining identities and tombstones.")
 	fmt.Fprintln(w, "  invariant-schema arrow|parquet|iceberg|clickhouse|clickhouse-iceberg|postgres --bundle FILE [--message FULL_NAME] [--output FILE|-]")
 	fmt.Fprintln(w, "    PostgreSQL renders every dataset when --message is omitted; other targets require one dataset.")
-	fmt.Fprintln(w, "    Arrow emits schema-only IPC; Lance/LanceDB consume that schema and Python arrow_table() through their SDK.")
+	fmt.Fprintln(w, "    Arrow emits schema-only IPC; Lance/LanceDB consume that schema and Python arrow_table()/arrow_record_batch_reader() through their SDK.")
 }
 
 type messageFlags []string

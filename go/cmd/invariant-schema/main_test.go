@@ -150,6 +150,7 @@ func TestHelpDescribesMigrationAndLanceArrowBoundary(t *testing.T) {
 	assert.Contains(t, stdout.String(), "invariant-schema migrate --bundle FILE --output FILE")
 	assert.Contains(t, stdout.String(), "Arrow emits schema-only IPC")
 	assert.Contains(t, stdout.String(), "Lance/LanceDB consume that schema")
+	assert.Contains(t, stdout.String(), "arrow_record_batch_reader()")
 	assert.NotContains(t, stdout.String(), "invariant-schema lance")
 }
 

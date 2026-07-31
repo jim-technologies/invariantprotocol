@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from google.protobuf import any_pb2, descriptor_pb2, descriptor_pool, message_factory, struct_pb2, wrappers_pb2
 
-from invariant import arrow_schema, arrow_table, find_dataset, parse_schema_bundle
+from invariant import arrow_record_batch_reader, arrow_schema, arrow_table, find_dataset, parse_schema_bundle
 from invariant.gen.invariant.data.v1 import annotations_pb2, schema_pb2
 
 GOLDEN_BUNDLE = Path(__file__).resolve().parents[2] / "testdata" / "data.schema.binpb"
@@ -292,15 +292,147 @@ def test_zero_field_arrow_table_and_ipc_preserve_rows_while_pyarrow_25_parquet_c
     assert _metadata(table.schema, "invariant.dataset") == "empty_records"
     assert diagnostics == []
 
+    bounded, bounded_diagnostics = arrow_record_batch_reader(
+        dataset,
+        (record() for _ in range(257)),
+    )
+    bounded_schema = bounded.schema
+    batches = list(bounded)
+    assert bounded_diagnostics == []
+    assert [batch.num_rows for batch in batches] == [256, 1]
+    assert all(batch.num_columns == 0 for batch in batches)
+    assert all(batch.schema.equals(bounded_schema, check_metadata=True) for batch in batches)
+    assert pa.Table.from_batches(batches, schema=bounded_schema).num_rows == 257
+
+    empty, _ = arrow_record_batch_reader(dataset, [], batch_size=2)
+    empty_table = empty.read_all()
+    assert empty_table.num_rows == 0
+    assert empty_table.num_columns == 0
+    assert empty_table.schema.equals(table.schema, check_metadata=True)
+    assert empty.schema.equals(table.schema, check_metadata=True)
+
     arrow_path = tmp_path / "empty.arrow"
-    with pa.ipc.new_file(arrow_path, table.schema) as writer:
-        writer.write_table(table)
+    with pa.ipc.new_file(arrow_path, bounded_schema) as writer:
+        for batch in batches:
+            writer.write_batch(batch)
     with pa.ipc.open_file(arrow_path) as reader:
-        assert reader.read_all().num_rows == 2
+        assert reader.read_all().num_rows == 257
 
     parquet_path = tmp_path / "empty.parquet"
     pq.write_table(table, parquet_path)
     assert pq.read_table(parquet_path).num_rows == 0
+
+
+def test_arrow_record_batch_reader_is_lazy_row_bounded_and_writes_standard_arrow_sinks(
+    tmp_path: Path,
+) -> None:
+    dataset, record = _fixed_list_record_fixture()
+    consumed: list[int] = []
+
+    def message(identifier: int):
+        return record(
+            id=str(identifier),
+            label=f"row-{identifier}",
+            vector=[float(identifier + offset) for offset in range(8)],
+            vector64=[float(identifier + offset) for offset in range(4)],
+        )
+
+    def messages():
+        for identifier in range(5):
+            consumed.append(identifier)
+            yield message(identifier)
+
+    reader, diagnostics = arrow_record_batch_reader(dataset, messages(), batch_size=2)
+
+    assert isinstance(reader, pa.RecordBatchReader)
+    assert consumed == []
+    vector_type = reader.schema.field("vector").type
+    assert pa.types.is_fixed_size_list(vector_type)
+    assert vector_type.value_type == pa.float32()
+    assert vector_type.list_size == 8
+    assert diagnostics
+
+    ipc_path = tmp_path / "bounded.arrow"
+    parquet_path = tmp_path / "bounded.parquet"
+    batch_sizes = []
+    with (
+        pa.ipc.new_file(ipc_path, reader.schema) as ipc_writer,
+        pq.ParquetWriter(parquet_path, reader.schema) as parquet_writer,
+    ):
+        for batch in reader:
+            batch_sizes.append(batch.num_rows)
+            assert len(consumed) == sum(batch_sizes)
+            assert batch.schema.equals(reader.schema, check_metadata=True)
+            ipc_writer.write_batch(batch)
+            parquet_writer.write_batch(batch)
+
+    assert batch_sizes == [2, 2, 1]
+    assert consumed == [0, 1, 2, 3, 4]
+    assert list(reader) == []
+
+    expected, _ = arrow_table(dataset, [message(identifier) for identifier in range(5)])
+    with pa.ipc.open_file(ipc_path) as ipc_reader:
+        assert ipc_reader.read_all().equals(expected)
+    assert pq.read_table(parquet_path).equals(expected)
+
+
+def test_arrow_record_batch_reader_validates_batches_when_consumed() -> None:
+    dataset, record = _fixed_list_record_fixture()
+    valid_vector = [float(index) for index in range(8)]
+    valid_vector64 = [float(index) for index in range(4)]
+
+    for batch_size in (0, -1):
+        with pytest.raises(ValueError, match="batch_size must be positive"):
+            arrow_record_batch_reader(dataset, [], batch_size=batch_size)
+    for batch_size in (True, 1.5):
+        with pytest.raises(TypeError, match="batch_size must be an integer"):
+            arrow_record_batch_reader(dataset, [], batch_size=batch_size)  # ty: ignore[invalid-argument-type]
+
+    consumed = []
+
+    def messages():
+        values = [
+            record(id="first", label="First", vector=valid_vector, vector64=valid_vector64),
+            record(id="second", label="Second", vector=valid_vector, vector64=valid_vector64),
+            record(id="invalid", label="Invalid", vector=[], vector64=valid_vector64),
+            record(id="unconsumed", label="Unconsumed", vector=valid_vector, vector64=valid_vector64),
+        ]
+        for value in values:
+            consumed.append(value.id)
+            yield value
+
+    reader, _ = arrow_record_batch_reader(
+        dataset,
+        messages(),
+        batch_size=2,
+    )
+    assert reader.read_next_batch().column("id").to_pylist() == ["first", "second"]
+    assert consumed == ["first", "second"]
+    with pytest.raises(
+        ValueError,
+        match=r"fixed-list field 'schema_test_v1_lance_record\.vector' has 0 elements; expected exactly 8",
+    ):
+        reader.read_next_batch()
+    assert consumed == ["first", "second", "invalid"]
+
+    def failing_source():
+        yield record(id="valid", label="Valid", vector=valid_vector, vector64=valid_vector64)
+        raise RuntimeError("source failed")
+
+    source_reader, _ = arrow_record_batch_reader(dataset, failing_source(), batch_size=1)
+    assert source_reader.read_next_batch().column("id").to_pylist() == ["valid"]
+    with pytest.raises(RuntimeError, match="source failed"):
+        source_reader.read_next_batch()
+
+    snapshot_reader, _ = arrow_record_batch_reader(
+        dataset,
+        [record(id="snapshot", label="Snapshot", vector=valid_vector, vector64=valid_vector64)],
+        batch_size=1,
+    )
+    dataset.fields[0].name = "mutated_after_reader_creation"
+    snapshot_batch = snapshot_reader.read_next_batch()
+    assert snapshot_batch.schema.get_field_index("id") >= 0
+    assert snapshot_batch.column("id").to_pylist() == ["snapshot"]
 
 
 def test_fixed_lists_use_native_arrow_schema_and_arrays(tmp_path: Path) -> None:
@@ -437,6 +569,11 @@ def test_arrow_table_validates_each_same_name_descriptor_pool() -> None:
     stale = stale_class(id=2)
     with pytest.raises(ValueError, match=r"descriptor does not match.*protobuf default"):
         arrow_table(dataset, [current, stale])
+
+    reader, _ = arrow_record_batch_reader(dataset, [current, stale], batch_size=1)
+    assert reader.read_next_batch().column("id").to_pylist() == [1]
+    with pytest.raises(ValueError, match=r"descriptor does not match.*protobuf default"):
+        reader.read_next_batch()
 
 
 def test_arrow_table_rejects_removed_or_changed_refinement_annotations() -> None:
@@ -727,7 +864,13 @@ def test_arrow_table_composes_extension_leaves_through_nested_structs_maps_and_p
     assert table.column("entries").to_pylist()[1] == []
 
     path = tmp_path / "nested-extensions.parquet"
-    pq.write_table(table, path)
+    reader, _ = arrow_record_batch_reader(dataset, [record, record_type()], batch_size=1)
+    batch_sizes = []
+    with pq.ParquetWriter(path, reader.schema) as writer:
+        for batch in reader:
+            batch_sizes.append(batch.num_rows)
+            writer.write_batch(batch)
+    assert batch_sizes == [1, 1]
     restored = pq.read_table(path)
     assert restored.schema.equals(table.schema, check_metadata=True)
     assert restored.to_pydict() == table.to_pydict()

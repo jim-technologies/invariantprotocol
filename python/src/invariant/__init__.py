@@ -1,4 +1,4 @@
-from invariant.data_arrow import arrow_schema, arrow_table
+from invariant.data_arrow import arrow_record_batch_reader, arrow_schema, arrow_table
 from invariant.data_schema import (
     SCHEMA_IR_VERSION,
     SCHEMA_MAPPING_VERSION,
@@ -45,6 +45,7 @@ __all__ = [
     "SchemaBundle",
     "Server",
     "Tool",
+    "arrow_record_batch_reader",
     "arrow_schema",
     "arrow_table",
     "find_dataset",

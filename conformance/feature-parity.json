@@ -351,7 +351,7 @@
     {
       "id": "pyarrow_record_bridge",
       "kind": "ecosystem",
-      "description": "Convert matching generated protobuf messages into native PyArrow schemas and tables for every canonical SchemaBundle kind, including nested extension values, isolated-pool Any resolution, exact refinement matching, and FixedSizeList value-length enforcement.",
+      "description": "Convert matching generated protobuf messages into native PyArrow schemas, eager tables, and standard row-bounded RecordBatchReaders for every canonical SchemaBundle kind, including nested extension values, isolated-pool Any resolution, exact refinement matching, and FixedSizeList value-length enforcement.",
       "rationale": "This is a Python ecosystem bridge, not a portable server-runtime capability.",
       "support": {"go": "not_applicable", "python": "supported", "rust": "not_applicable", "typescript": "not_applicable"},
       "tests": {
@@ -364,7 +364,7 @@
     {
       "id": "lancedb_arrow_qualification",
       "kind": "ecosystem",
-      "description": "Use invariant-generated PyArrow schemas and tables directly through real LanceDB create, append, reopen, canonical and refined value round trips, vector indexing/search, merge, and optimize lifecycles.",
+      "description": "Use invariant-generated PyArrow schemas, tables, and RecordBatchReaders directly through real LanceDB create, append, reopen, canonical and refined value round trips, vector indexing/search, merge, and optimize lifecycles.",
       "rationale": "LanceDB is a Python ecosystem consumer of the canonical Arrow projection, not a separate schema renderer or a portable RPC-runtime capability.",
       "support": {"go": "not_applicable", "python": "supported", "rust": "not_applicable", "typescript": "not_applicable"},
       "tests": {

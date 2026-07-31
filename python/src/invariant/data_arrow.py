@@ -61,6 +61,7 @@ _NANOS_PER_SECOND = 1_000_000_000
 _TIMESTAMP_SECONDS_MIN = -62_135_596_800
 _TIMESTAMP_SECONDS_MAX = 253_402_300_799
 _DURATION_SECONDS_MAX = 315_576_000_000
+_DEFAULT_RECORD_BATCH_SIZE = 256
 _PRIMITIVE_KINDS = {
     protobuf_descriptor.FieldDescriptor.TYPE_DOUBLE: schema_pb2.PRIMITIVE_KIND_DOUBLE,
     protobuf_descriptor.FieldDescriptor.TYPE_FLOAT: schema_pb2.PRIMITIVE_KIND_FLOAT,
@@ -101,7 +102,8 @@ def arrow_schema(dataset: DatasetSchema) -> tuple[pyarrow.Schema, list[MappingDi
     """Map one validated SchemaBundle dataset to a real PyArrow schema.
 
     The returned schema is directly accepted by ``pyarrow.Table`` and
-    ``pyarrow.parquet``. Use :func:`arrow_table` to convert message values.
+    ``pyarrow.parquet``. Use :func:`arrow_table` for eager values or
+    :func:`arrow_record_batch_reader` for a row-bounded stream.
     """
     if dataset is None:
         raise ValueError("arrow: dataset schema is required")
@@ -140,16 +142,75 @@ def arrow_table(
     validated_descriptors: dict[int, Any] = {}
     field_protos: dict[int, tuple[Any, dict[str, descriptor_pb2.FieldDescriptorProto]]] = {}
     rows = [_message_row(dataset, message, validated_descriptors, field_protos) for message in messages]
+    batch = _record_batch(pa, schema, rows)
+    return pa.Table.from_batches([batch], schema=schema), diagnostics
+
+
+def arrow_record_batch_reader(
+    dataset: DatasetSchema,
+    messages: Iterable[Message],
+    *,
+    batch_size: int = _DEFAULT_RECORD_BATCH_SIZE,
+) -> tuple[pyarrow.RecordBatchReader, list[MappingDiagnostic]]:
+    """Lazily convert generated protobuf messages into typed Arrow batches.
+
+    At most ``batch_size`` messages and their intermediate Python values are
+    converted at once. This is a row bound, not a byte bound: one protobuf
+    message can itself contain arbitrarily large variable-width values. The
+    returned reader is single-pass, like every Arrow ``RecordBatchReader``.
+    """
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int):
+        raise TypeError("arrow: batch_size must be an integer")
+    if batch_size <= 0:
+        raise ValueError("arrow: batch_size must be positive")
+    if dataset is None:
+        raise ValueError("arrow: dataset schema is required")
+
+    pa = _pyarrow()
+    dataset_snapshot = DatasetSchema()
+    dataset_snapshot.CopyFrom(dataset)
+    schema, diagnostics = arrow_schema(dataset_snapshot)
+
+    def batches() -> Iterable[Any]:
+        iterator = iter(messages)
+        last_descriptor: Any = None
+        while True:
+            validated_descriptors: dict[int, Any] = (
+                {} if last_descriptor is None else {id(last_descriptor): last_descriptor}
+            )
+            field_protos: dict[int, tuple[Any, dict[str, descriptor_pb2.FieldDescriptorProto]]] = {}
+            rows = []
+            for _ in range(batch_size):
+                try:
+                    message = next(iterator)
+                except StopIteration:
+                    break
+                rows.append(_message_row(dataset_snapshot, message, validated_descriptors, field_protos))
+            if not rows:
+                return
+            last_descriptor = message.DESCRIPTOR
+            batch = _record_batch(pa, schema, rows)
+            del field_protos, message, rows, validated_descriptors
+            yield batch
+            del batch
+
+    return pa.RecordBatchReader.from_batches(schema, batches()), diagnostics
+
+
+def _record_batch(
+    pa: Any,
+    schema: Any,
+    rows: list[dict[str, Any]],
+) -> Any:
     if len(schema) == 0:
         row_markers = pa.StructArray.from_arrays(
             [],
             fields=[],
             mask=pa.array([False] * len(rows), type=pa.bool_()),
         )
-        batch = pa.RecordBatch.from_struct_array(row_markers)
-        return pa.Table.from_batches([batch], schema=schema), diagnostics
+        return pa.RecordBatch.from_struct_array(row_markers).replace_schema_metadata(schema.metadata)
     columns = [_arrow_array(pa, [row[field.name] for row in rows], field.type) for field in schema]
-    return pa.Table.from_arrays(columns, schema=schema), diagnostics
+    return pa.RecordBatch.from_arrays(columns, schema=schema)
 
 
 def _pyarrow() -> Any:
@@ -1020,4 +1081,4 @@ def _logical_type_name(data_type: DataType) -> str:
     return kind or "unspecified"
 
 
-__all__ = ["arrow_schema", "arrow_table"]
+__all__ = ["arrow_record_batch_reader", "arrow_schema", "arrow_table"]
