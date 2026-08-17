@@ -1,0 +1,264 @@
+{
+  "fixture_set": "invariant.cdc.debezium",
+  "fixture_format_version": 1,
+  "debezium_version": "3.6.1.Final",
+  "cloudevents_specification_version": "1.0.2",
+  "cloudevents_event_specversion": "1.0",
+  "native_capture_shape": {
+    "description": "A test-only pairing of the separately serialized Debezium record key and value.",
+    "key_member": "key",
+    "value_member": "value"
+  },
+  "fixtures": [
+    {
+      "path": "native-create-schemaful.json",
+      "category": "data_change",
+      "row_change": true,
+      "encoding": "debezium-native-json-kafka-connect-schema",
+      "operation": "c",
+      "canonical_operation": "CREATE",
+      "connector": "mysql",
+      "features": [
+        "record_key",
+        "kafka_connect_schema",
+        "explicit_null",
+        "absent_field",
+        "decimal_bytes",
+        "unsigned_as_precise_decimal",
+        "propagated_source_column_type",
+        "binary_bytes",
+        "microsecond_timestamp",
+        "int64_above_javascript_safe_range",
+        "array",
+        "nested_record",
+        "source_position",
+        "unknown_connector_metadata"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/mysql.html"
+      ]
+    },
+    {
+      "path": "native-update-schemaless.json",
+      "category": "data_change",
+      "row_change": true,
+      "encoding": "debezium-native-json-schemaless",
+      "operation": "u",
+      "canonical_operation": "UPDATE",
+      "connector": "postgresql",
+      "features": [
+        "record_key",
+        "before_partial",
+        "after_full",
+        "explicit_null",
+        "nested_record",
+        "array",
+        "source_position",
+        "transaction_metadata",
+        "unknown_envelope_metadata",
+        "unknown_transaction_metadata",
+        "unknown_connector_metadata"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/postgresql.html"
+      ]
+    },
+    {
+      "path": "native-delete-schemaless.json",
+      "category": "data_change",
+      "row_change": true,
+      "encoding": "debezium-native-json-schemaless",
+      "operation": "d",
+      "canonical_operation": "DELETE",
+      "connector": "postgresql",
+      "features": [
+        "record_key",
+        "before_partial",
+        "after_null",
+        "source_position"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/postgresql.html"
+      ]
+    },
+    {
+      "path": "native-snapshot-schemaless.json",
+      "category": "data_change",
+      "row_change": true,
+      "encoding": "debezium-native-json-schemaless",
+      "operation": "r",
+      "canonical_operation": "SNAPSHOT_READ",
+      "connector": "postgresql",
+      "features": [
+        "record_key",
+        "snapshot",
+        "after_full",
+        "source_position"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/postgresql.html"
+      ]
+    },
+    {
+      "path": "native-truncate-schemaless.json",
+      "category": "data_change",
+      "row_change": false,
+      "encoding": "debezium-native-json-schemaless",
+      "operation": "t",
+      "canonical_operation": "TRUNCATE",
+      "connector": "postgresql",
+      "features": [
+        "null_key",
+        "no_row_images",
+        "data_collection",
+        "source_position"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/postgresql.html"
+      ]
+    },
+    {
+      "path": "native-logical-message-schemaless.json",
+      "category": "data_change",
+      "row_change": false,
+      "encoding": "debezium-native-json-schemaless",
+      "operation": "m",
+      "canonical_operation": "SOURCE_MESSAGE",
+      "connector": "postgresql",
+      "features": [
+        "logical_message",
+        "binary_content",
+        "transaction_identity",
+        "source_position",
+        "no_row_images"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/postgresql.html"
+      ]
+    },
+    {
+      "path": "structured-cloudevent-snapshot.json",
+      "key_path": "structured-cloudevent-snapshot-key.json",
+      "category": "data_change",
+      "row_change": true,
+      "encoding": "cloudevents-structured-json",
+      "operation": "r",
+      "canonical_operation": "SNAPSHOT_READ",
+      "connector": "postgresql",
+      "features": [
+        "cloudevents_1_0",
+        "structured_mode",
+        "transaction_metadata",
+        "source_position",
+        "unknown_connector_metadata",
+        "stable_source_and_id"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/integrations/cloudevents.html",
+        "https://github.com/cloudevents/spec/blob/ce%40v1.0.2/cloudevents/formats/json-format.md"
+      ]
+    },
+    {
+      "path": "structured-cloudevent-snapshot-retry.json",
+      "key_path": "structured-cloudevent-snapshot-key.json",
+      "category": "data_change",
+      "row_change": true,
+      "encoding": "cloudevents-structured-json",
+      "operation": "r",
+      "canonical_operation": "SNAPSHOT_READ",
+      "connector": "postgresql",
+      "retry_of": "structured-cloudevent-snapshot.json",
+      "features": [
+        "retry",
+        "stable_source_and_id",
+        "byte_identical_fixture_copy"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/integrations/cloudevents.html",
+        "https://github.com/cloudevents/spec/blob/ce%40v1.0.2/cloudevents/spec.md"
+      ]
+    },
+    {
+      "path": "auxiliary-kafka-tombstone.json",
+      "category": "kafka_tombstone",
+      "row_change": false,
+      "encoding": "debezium-native-json-schemaless",
+      "operation": null,
+      "canonical_operation": null,
+      "connector": "postgresql",
+      "features": [
+        "record_key",
+        "null_record_value",
+        "must_not_become_delete"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/postgresql.html"
+      ]
+    },
+    {
+      "path": "auxiliary-heartbeat.json",
+      "category": "heartbeat",
+      "row_change": false,
+      "encoding": "debezium-native-json-schemaless",
+      "operation": null,
+      "canonical_operation": null,
+      "connector": "postgresql",
+      "features": [
+        "must_not_become_row_change"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/postgresql.html"
+      ]
+    },
+    {
+      "path": "auxiliary-schema-change.json",
+      "category": "schema_change",
+      "row_change": false,
+      "encoding": "debezium-native-json-schemaless",
+      "operation": null,
+      "canonical_operation": null,
+      "connector": "mysql",
+      "features": [
+        "source_position",
+        "table_change",
+        "must_not_become_row_change"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/mysql.html"
+      ]
+    },
+    {
+      "path": "auxiliary-transaction-begin.json",
+      "category": "transaction_boundary",
+      "row_change": false,
+      "encoding": "debezium-native-json-schemaless",
+      "operation": null,
+      "canonical_operation": null,
+      "connector": "postgresql",
+      "features": [
+        "transaction_begin",
+        "must_not_become_row_change"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/postgresql.html"
+      ]
+    },
+    {
+      "path": "auxiliary-transaction-end.json",
+      "category": "transaction_boundary",
+      "row_change": false,
+      "encoding": "debezium-native-json-schemaless",
+      "operation": null,
+      "canonical_operation": null,
+      "connector": "postgresql",
+      "features": [
+        "transaction_end",
+        "data_collection_counts",
+        "must_not_become_row_change"
+      ],
+      "sources": [
+        "https://debezium.io/documentation/reference/3.6/connectors/postgresql.html"
+      ]
+    }
+  ]
+}

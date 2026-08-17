@@ -1,0 +1,24 @@
+{
+  "key": null,
+  "value": {
+    "source": {
+      "version": "3.6.1.Final",
+      "connector": "postgresql",
+      "name": "example_postgres",
+      "ts_ms": 1704164648000,
+      "ts_us": 1704164648000123,
+      "ts_ns": 1704164648000123456,
+      "snapshot": "false",
+      "db": "inventory",
+      "schema": "public",
+      "table": "customers",
+      "txId": 558,
+      "lsn": 24023300,
+      "xmin": null
+    },
+    "op": "t",
+    "ts_ms": 1704164648123,
+    "ts_us": 1704164648123456,
+    "ts_ns": 1704164648123456789
+  }
+}

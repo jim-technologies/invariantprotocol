@@ -1,0 +1,57 @@
+{
+  "key": {
+    "id": 1001
+  },
+  "value": {
+    "before": {
+      "id": 1001
+    },
+    "after": {
+      "id": 1001,
+      "display_name": "Ada Lovelace",
+      "email": null,
+      "preferences": {
+        "theme": "dark",
+        "alerts": [
+          "billing",
+          "security"
+        ]
+      }
+    },
+    "source": {
+      "version": "3.6.1.Final",
+      "connector": "postgresql",
+      "name": "example_postgres",
+      "ts_ms": 1704164646000,
+      "ts_us": 1704164646000123,
+      "ts_ns": 1704164646000123456,
+      "snapshot": "false",
+      "db": "inventory",
+      "sequence": "[\"24023119\",\"24023128\"]",
+      "schema": "public",
+      "table": "customers",
+      "txId": 556,
+      "lsn": 24023128,
+      "xmin": null,
+      "future_connector_metadata": {
+        "epoch": "opaque-v2",
+        "token": "future-field-7"
+      }
+    },
+    "op": "u",
+    "ts_ms": 1704164646123,
+    "ts_us": 1704164646123456,
+    "ts_ns": 1704164646123456789,
+    "future_envelope_metadata": {
+      "token": "opaque-envelope-9"
+    },
+    "transaction": {
+      "id": "556:24023128",
+      "total_order": "2",
+      "data_collection_order": "1",
+      "future_transaction_metadata": {
+        "batch": "opaque-transaction-3"
+      }
+    }
+  }
+}

@@ -14,6 +14,22 @@ pub mod projections;
 pub mod schema;
 pub mod server;
 
+/// Generated messages for the canonical CDC wire contract.
+pub mod cdc {
+    /// Version 1 of the transport-neutral change-record payload.
+    pub mod v1 {
+        include!(concat!(env!("OUT_DIR"), "/invariant.cdc.v1.rs"));
+    }
+}
+
+/// Generated messages for the stable CloudEvents protobuf envelope.
+pub mod cloudevents {
+    /// CloudEvents 1.0 protobuf format (`io.cloudevents.v1`).
+    pub mod v1 {
+        include!(concat!(env!("OUT_DIR"), "/io.cloudevents.v1.rs"));
+    }
+}
+
 /// Generated messages for the language-neutral protobuf data contract.
 pub mod data {
     /// Version 1 of the derived schema intermediate representation.

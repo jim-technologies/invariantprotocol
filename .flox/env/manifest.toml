@@ -63,7 +63,7 @@ atlas.version = "1.2.3"
 UV_PYTHON_DOWNLOADS = "never"
 # Flox's catalog can lag a Go security patch. Select the exact release
 # explicitly instead of letting `auto` choose an unreviewed newer toolchain.
-GOTOOLCHAIN = "go1.26.5+auto"
+GOTOOLCHAIN = "go1.26.6+auto"
 # Flox supplies llvm-cov and llvm-profdata directly rather than through rustup.
 CARGO_LLVM_COV_SETUP = "no"
 

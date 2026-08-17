@@ -1,0 +1,15 @@
+{
+  "key": null,
+  "value": {
+    "status": "END",
+    "id": "560:24023500",
+    "ts_ms": 1704164652123,
+    "event_count": 2,
+    "data_collections": [
+      {
+        "data_collection": "public.customers",
+        "event_count": 2
+      }
+    ]
+  }
+}

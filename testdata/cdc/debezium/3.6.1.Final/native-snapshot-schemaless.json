@@ -1,0 +1,33 @@
+{
+  "key": {
+    "id": 1002
+  },
+  "value": {
+    "before": null,
+    "after": {
+      "id": 1002,
+      "display_name": "Grace Hopper",
+      "email": "grace@example.invalid"
+    },
+    "source": {
+      "version": "3.6.1.Final",
+      "connector": "postgresql",
+      "name": "example_postgres",
+      "ts_ms": 1704164600000,
+      "ts_us": 1704164600000000,
+      "ts_ns": 1704164600000000000,
+      "snapshot": "first",
+      "db": "inventory",
+      "sequence": "[null,\"24023000\"]",
+      "schema": "public",
+      "table": "customers",
+      "txId": 550,
+      "lsn": 24023000,
+      "xmin": null
+    },
+    "op": "r",
+    "ts_ms": 1704164600123,
+    "ts_us": 1704164600123456,
+    "ts_ns": 1704164600123456789
+  }
+}

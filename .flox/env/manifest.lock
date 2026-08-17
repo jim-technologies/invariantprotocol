@@ -96,7 +96,7 @@
     },
     "vars": {
       "CARGO_LLVM_COV_SETUP": "no",
-      "GOTOOLCHAIN": "go1.26.5+auto",
+      "GOTOOLCHAIN": "go1.26.6+auto",
       "UV_PYTHON_DOWNLOADS": "never"
     },
     "hook": {

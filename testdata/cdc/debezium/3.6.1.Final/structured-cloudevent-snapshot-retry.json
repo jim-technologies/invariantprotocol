@@ -1,0 +1,32 @@
+{
+  "id": "name:example_postgres;lsn:24023000;txId:550",
+  "source": "/debezium/postgresql/example_postgres",
+  "specversion": "1.0",
+  "type": "io.debezium.connector.postgresql.DataChangeEvent",
+  "time": "2024-01-02T03:03:20.000Z",
+  "datacontenttype": "application/json",
+  "dataschema": "https://schemas.example.invalid/debezium/example_postgres/inventory/public/customers/1",
+  "iodebeziumop": "r",
+  "iodebeziumversion": "3.6.1.Final",
+  "iodebeziumconnector": "postgresql",
+  "iodebeziumname": "example_postgres",
+  "iodebeziumtsms": "1704164600000",
+  "iodebeziumsnapshot": "first",
+  "iodebeziumdb": "inventory",
+  "iodebeziumschema": "public",
+  "iodebeziumtable": "customers",
+  "iodebeziumlsn": "24023000",
+  "iodebeziumxmin": null,
+  "iodebeziumtxid": "550:24023000",
+  "iodebeziumtxtotalorder": "1",
+  "iodebeziumtxdatacollectionorder": "1",
+  "iodebeziumfuturetoken": "opaque-extension-7",
+  "data": {
+    "before": null,
+    "after": {
+      "id": 1002,
+      "display_name": "Grace Hopper",
+      "email": "grace@example.invalid"
+    }
+  }
+}

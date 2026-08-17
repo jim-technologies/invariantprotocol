@@ -1,0 +1,47 @@
+{
+  "key": {
+    "databaseName": "inventory"
+  },
+  "value": {
+    "source": {
+      "version": "3.6.1.Final",
+      "connector": "mysql",
+      "name": "example_mysql",
+      "ts_ms": 1704164651000,
+      "ts_us": 1704164651000000,
+      "ts_ns": 1704164651000000000,
+      "snapshot": "false",
+      "db": "inventory",
+      "table": "accounts",
+      "server_id": 223344,
+      "gtid": null,
+      "file": "mysql-bin.000003",
+      "pos": 570,
+      "row": 0
+    },
+    "databaseName": "inventory",
+    "schemaName": null,
+    "ddl": "ALTER TABLE accounts ADD COLUMN nickname varchar(64)",
+    "tableChanges": [
+      {
+        "type": "ALTER",
+        "id": "\"inventory\".\"accounts\"",
+        "table": {
+          "primaryKeyColumnNames": [
+            "id"
+          ],
+          "columns": [
+            {
+              "name": "nickname",
+              "jdbcType": 12,
+              "typeName": "VARCHAR",
+              "length": 64,
+              "optional": true,
+              "position": 2
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

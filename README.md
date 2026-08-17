@@ -39,6 +39,22 @@ Every JSON projection emits canonical ProtoJSON field names and scalar forms,
 including explicit `json_name` overrides and decimal strings for 64-bit
 integers.
 
+## Canonical change data capture
+
+Invariant defines a transport-neutral CDC wire contract as
+`io.cloudevents.v1.CloudEvent<invariant.cdc.v1.ChangeRecord>`. The stable
+CloudEvents protobuf envelope carries a typed `ChangeRecord` in
+`google.protobuf.Any`, preserving exact keys, record images, value domains,
+source positions, transaction order, timestamps, and isolated source metadata.
+The Debezium compatibility profile is semantically lossless without making a
+connector, database, broker, outbox, or checkpoint runtime part of the core.
+The official CloudEvents protobuf schema is vendored for reproducible
+generation; its public protobuf name and wire layout are unchanged, while
+language import paths remain repository-owned distribution metadata.
+
+See the [CDC contract and Debezium mapping](docs/cdc.md) and the
+[architecture decision](docs/adr/0001-cloudevents-change-record.md).
+
 ## Build contract
 
 Build the descriptor image once, then generate normal language bindings from
@@ -663,14 +679,14 @@ evolution rules, the qualified LanceDB lifecycle, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.14.0`; new releases do not create language-prefixed tags. The project
+tag `v0.15.0`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.14.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.15.0
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -680,26 +696,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.14.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.15.0#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.14.0#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.15.0#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.14.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.15.0" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.14.0" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.15.0" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.14.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.15.0"
 ```
 
 For reproducible production builds, replace the tag with a full commit

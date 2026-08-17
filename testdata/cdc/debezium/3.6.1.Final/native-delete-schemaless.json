@@ -1,0 +1,32 @@
+{
+  "key": {
+    "id": 1001
+  },
+  "value": {
+    "before": {
+      "id": 1001,
+      "email": null
+    },
+    "after": null,
+    "source": {
+      "version": "3.6.1.Final",
+      "connector": "postgresql",
+      "name": "example_postgres",
+      "ts_ms": 1704164647000,
+      "ts_us": 1704164647000123,
+      "ts_ns": 1704164647000123456,
+      "snapshot": "false",
+      "db": "inventory",
+      "sequence": "[\"24023128\",\"24023201\"]",
+      "schema": "public",
+      "table": "customers",
+      "txId": 557,
+      "lsn": 24023201,
+      "xmin": null
+    },
+    "op": "d",
+    "ts_ms": 1704164647123,
+    "ts_us": 1704164647123456,
+    "ts_ns": 1704164647123456789
+  }
+}

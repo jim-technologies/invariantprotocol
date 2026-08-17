@@ -22,6 +22,24 @@
       }
     },
     {
+      "id": "cdc_wire_contract",
+      "kind": "core",
+      "description": "Carry the transport-neutral invariant.cdc.v1.ChangeRecord payload in the stable io.cloudevents.v1.CloudEvent protobuf envelope with exact value domains, null presence, opaque source positions, isolated source extensions, and forward-compatible protobuf decoding.",
+      "api": {
+        "go": "go/gen/invariant/cdc/v1 + go/gen/io/cloudevents/v1",
+        "python": "invariant.gen.invariant.cdc.v1 + invariant.gen.io.cloudevents.v1",
+        "rust": "invariant::cdc::v1 + invariant::cloudevents::v1",
+        "typescript": "ChangeRecordSchema + CloudEventSchema"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/cdc_contract_test.go"],
+        "python": ["python/tests/test_cdc_contract.py"],
+        "rust": ["rust/tests/cdc_contract.rs"],
+        "typescript": ["typescript/tests/cdc_contract.test.ts"]
+      }
+    },
+    {
       "id": "generated_service_registration",
       "kind": "core",
       "description": "Register an implementation through the language's generated service surface and reject descriptor drift.",

@@ -1,0 +1,290 @@
+syntax = "proto3";
+
+package invariant.cdc.v1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/jim-technologies/invariantprotocol/go/gen/invariant/cdc/v1;cdcv1";
+
+// ChangeRecord is the canonical, transport-neutral payload for one captured
+// data change or source message. It is carried in
+// io.cloudevents.v1.CloudEvent.proto_data as google.protobuf.Any.
+//
+// Operation-specific presence rules are normative:
+//
+//   - CREATE and SNAPSHOT_READ require after and prohibit source_message.
+//   - UPDATE requires after; before is optional.
+//   - DELETE prohibits after; key is required when the source has one and
+//     before is optional.
+//   - TRUNCATE requires data_collection and prohibits key, before, after, and
+//     source_message.
+//   - SOURCE_MESSAGE requires source_message and prohibits before and after;
+//     key is not a row key and therefore must be absent.
+//
+// A field omitted from Record.fields is absent. A present field whose Value
+// selects null_value is explicitly null. Producers and adapters must preserve
+// that distinction.
+message ChangeRecord {
+  // Kind of change captured from the source.
+  Operation operation = 1;
+
+  // Canonical record key. It is absent for keyless records and collection-wide
+  // operations such as TRUNCATE.
+  Record key = 2;
+
+  // Record state before the change, when the source makes it available.
+  Record before = 3;
+
+  // Record state after the change.
+  Record after = 4;
+
+  // Stable, source-scoped identity of the affected data collection. It is
+  // required except when SOURCE_MESSAGE has no meaningful collection.
+  DataCollection data_collection = 5;
+
+  // Schema identity for key and record images, when known.
+  SchemaReference schema_reference = 6;
+
+  // Opaque position and optional ordered stream identity supplied by the
+  // source adapter.
+  SourcePosition source_position = 7;
+
+  // Transaction identity and ordering, when the source supplies them.
+  TransactionContext transaction = 8;
+
+  // Time at which the source committed or observed the occurrence.
+  google.protobuf.Timestamp source_time = 9;
+
+  // Time at which the capture process observed or emitted this record.
+  google.protobuf.Timestamp capture_time = 10;
+
+  // Fields known to have changed. Absence means unknown; presence with no
+  // paths means that no record field changed.
+  ChangedFieldMask changed_fields = 11;
+
+  // Connector-specific metadata that has no canonical meaning. Adapters use
+  // either a separately defined protobuf message or an opaque encoding; core
+  // consumers do not interpret this field.
+  SourceExtension source_extension = 12;
+
+  // Non-row content for SOURCE_MESSAGE. It must be absent for every row or
+  // collection mutation.
+  Value source_message = 13;
+}
+
+// Operation is the canonical meaning of the captured source operation.
+enum Operation {
+  // Invalid or unspecified operation.
+  OPERATION_UNSPECIFIED = 0;
+
+  // A record was created.
+  OPERATION_CREATE = 1;
+
+  // A record was updated.
+  OPERATION_UPDATE = 2;
+
+  // A record was deleted.
+  OPERATION_DELETE = 3;
+
+  // A record was read from a consistent source snapshot.
+  OPERATION_SNAPSHOT_READ = 4;
+
+  // An entire data collection was truncated.
+  OPERATION_TRUNCATE = 5;
+
+  // A source-native message was captured without asserting a row mutation.
+  OPERATION_SOURCE_MESSAGE = 6;
+}
+
+// DataCollection identifies a logical collection within the CloudEvent source.
+message DataCollection {
+  // Stable source-scoped identifier. It is opaque to generic consumers and
+  // need not be a database, schema, table, topic, or other connector concept.
+  string id = 1;
+}
+
+// SchemaReference identifies the schema used by the record key and images.
+message SchemaReference {
+  // URI identifying the schema. Incompatible schemas use distinct URIs.
+  string uri = 1;
+
+  // Source-defined schema version, when one exists.
+  string version = 2;
+
+  // Optional source-defined schema fingerprint in its native bytes.
+  bytes fingerprint = 3;
+}
+
+// SourcePosition carries an adapter-defined checkpoint without assigning core
+// meaning to connector offsets.
+message SourcePosition {
+  // Source-defined stream in which ordering applies. Empty means undeclared.
+  string stream = 1;
+
+  // Format or type identifier for position, such as a media type or URI.
+  string format = 2;
+
+  // Opaque position bytes. Generic consumers compare or retain them but do not
+  // parse or order them.
+  bytes value = 3;
+}
+
+// TransactionContext identifies a transaction and this record's order in it.
+message TransactionContext {
+  // Source-defined transaction identity.
+  string id = 1;
+
+  // One-based absolute order among captured records in the transaction.
+  optional uint64 total_order = 2;
+
+  // One-based order among captured records for this data collection.
+  optional uint64 data_collection_order = 3;
+}
+
+// ChangedFieldMask lists exact field-name paths without imposing protobuf
+// FieldMask syntax on data sources whose names can contain punctuation.
+message ChangedFieldMask {
+  // Known changed field paths.
+  repeated FieldPath paths = 1;
+}
+
+// FieldPath identifies one nested field using exact source field-name segments.
+message FieldPath {
+  // Exact path segments from the record root to the changed field.
+  repeated string segments = 1;
+}
+
+// SourceExtension preserves source-specific metadata without promoting a
+// connector's concepts into the canonical contract.
+message SourceExtension {
+  oneof representation {
+    // Typed extension whose message contract is owned outside the CDC core.
+    google.protobuf.Any proto_data = 1;
+
+    // Opaque extension preserved in a declared encoding.
+    OpaqueData opaque_data = 2;
+  }
+}
+
+// OpaqueData carries bytes whose semantics are defined by an external profile.
+message OpaqueData {
+  // Media type of data.
+  string media_type = 1;
+
+  // Optional URI identifying the external schema.
+  string schema = 2;
+
+  // Encoded data bytes.
+  bytes data = 3;
+}
+
+// Record is a canonical key or record image. Field names must be unique within
+// one Record. Repeated order preserves source schema order but is not semantic.
+message Record {
+  // Present fields in this record.
+  repeated RecordField fields = 1;
+}
+
+// RecordField is one present named field. A null Value is different from
+// omitting this RecordField from its enclosing Record.
+message RecordField {
+  // Exact source field name.
+  string name = 1;
+
+  // Field value, including explicit null.
+  Value value = 2;
+}
+
+// Value preserves scalar domains and nested shapes without routing through a
+// JSON floating-point number. type_name optionally retains an external logical
+// type identifier such as a schema-qualified decimal or temporal type.
+message Value {
+  // Optional external logical type name or URI.
+  string type_name = 1;
+
+  oneof kind {
+    // Explicit null. Absence is represented by omitting the enclosing field.
+    NullValue null_value = 2;
+
+    // Boolean value.
+    bool bool_value = 3;
+
+    // Signed 32-bit integer value.
+    sint32 int32_value = 4;
+
+    // Signed 64-bit integer value.
+    sint64 int64_value = 5;
+
+    // Unsigned 32-bit integer value.
+    uint32 uint32_value = 6;
+
+    // Unsigned 64-bit integer value.
+    uint64 uint64_value = 7;
+
+    // IEEE-754 binary32 value.
+    float float32_value = 8;
+
+    // IEEE-754 binary64 value.
+    double float64_value = 9;
+
+    // Unicode string value.
+    string string_value = 10;
+
+    // Exact binary value.
+    bytes bytes_value = 11;
+
+    // Exact base-10 decimal value.
+    DecimalValue decimal_value = 12;
+
+    // Nanosecond-precision instant in the protobuf Timestamp range.
+    google.protobuf.Timestamp timestamp_value = 13;
+
+    // Nested record value.
+    Record record_value = 14;
+
+    // Ordered list value.
+    ListValue list_value = 15;
+
+    // Map value whose keys need not be strings.
+    MapValue map_value = 16;
+  }
+}
+
+// NullValue explicitly represents a present null value.
+message NullValue {}
+
+// DecimalValue preserves a decimal without binary floating-point conversion.
+message DecimalValue {
+  // Canonical non-exponent base-10 text. It has no leading plus sign or
+  // redundant integer zeroes and uses neither NaN nor infinity.
+  string value = 1;
+
+  // Source decimal scale. It is retained separately so negative scale and
+  // trailing-zero significance survive a round trip.
+  sint32 scale = 2;
+
+  // Source decimal precision, when declared by the source schema.
+  optional uint32 precision = 3;
+}
+
+// ListValue is an ordered sequence whose elements may be explicitly null.
+message ListValue {
+  // Values in source order.
+  repeated Value values = 1;
+}
+
+// MapValue preserves maps with non-string keys and explicit null values.
+message MapValue {
+  // Entries in source order. Key equality follows the source schema.
+  repeated MapEntry entries = 1;
+}
+
+// MapEntry is one key/value pair in a MapValue.
+message MapEntry {
+  // Map key.
+  Value key = 1;
+
+  // Map value.
+  Value value = 2;
+}

@@ -10,6 +10,27 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.15.0 — 2026-08-17
+
+### Added
+
+- **Canonical CDC uses the stable CloudEvents protobuf envelope.**
+  `io.cloudevents.v1.CloudEvent.proto_data` carries the transport-neutral
+  `invariant.cdc.v1.ChangeRecord` in `google.protobuf.Any`, with exact
+  absent/null and scalar value domains, opaque source positions, transaction
+  ordering, source extensions, and documented at-least-once delivery
+  semantics. A conformance profile pinned to Debezium 3.6.1.Final maps
+  `c/u/d/r/t/m` operations in both directions, preserves unknown connector
+  metadata, and classifies tombstones, heartbeats, schema changes, and
+  transaction boundaries without inventing row mutations.
+
+### Security
+
+- Updated the transitive PostCSS and Nano ID development dependencies to
+  patched releases reported clean by `npm audit`.
+- Go now requires 1.26.6, closing the standard-library vulnerabilities reported
+  by `govulncheck` against 1.26.5.
+
 ## v0.14.0 — 2026-07-31
 
 ### Added

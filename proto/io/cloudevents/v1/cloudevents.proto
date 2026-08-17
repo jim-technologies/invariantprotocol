@@ -1,0 +1,86 @@
+/**
+ * CloudEvent Protobuf Format
+ *
+ * Stable CloudEvents v1.0.2 wire definition. The package, messages, and field
+ * numbers match the upstream schema at:
+ * https://github.com/cloudevents/spec/blob/ce%40v1.0.2/cloudevents/formats/cloudevents.proto
+ *
+ * The go_package option is local distribution metadata and does not change the
+ * protobuf wire contract.
+ */
+
+syntax = "proto3";
+
+package io.cloudevents.v1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "CloudNative.CloudEvents.V1";
+option go_package = "github.com/jim-technologies/invariantprotocol/go/gen/io/cloudevents/v1;cloudeventsv1";
+option java_multiple_files = true;
+option java_package = "io.cloudevents.v1.proto";
+option php_namespace = "Io\\CloudEvents\\V1\\Proto";
+option ruby_package = "Io::CloudEvents::V1::Proto";
+
+// CloudEvent is the transport-neutral CloudEvents 1.0 envelope.
+message CloudEvent {
+  // Unique event identifier within source.
+  string id = 1;
+
+  // URI-reference identifying the context in which the event occurred.
+  string source = 2;
+
+  // CloudEvents specification version. Version 1.0.x events use "1.0".
+  string spec_version = 3;
+
+  // Event type identifier.
+  string type = 4;
+
+  // Optional and extension context attributes.
+  map<string, CloudEventAttributeValue> attributes = 5;
+
+  oneof data {
+    // Binary event data.
+    bytes binary_data = 6;
+
+    // Text event data.
+    string text_data = 7;
+
+    // Typed protobuf event data.
+    google.protobuf.Any proto_data = 8;
+  }
+
+  // CloudEventAttributeValue carries every CloudEvents context attribute type.
+  message CloudEventAttributeValue {
+    oneof attr {
+      // Boolean attribute value.
+      bool ce_boolean = 1;
+
+      // Signed 32-bit integer attribute value.
+      int32 ce_integer = 2;
+
+      // String attribute value.
+      string ce_string = 3;
+
+      // Binary attribute value.
+      bytes ce_bytes = 4;
+
+      // Absolute URI attribute value.
+      string ce_uri = 5;
+
+      // URI-reference attribute value.
+      string ce_uri_ref = 6;
+
+      // Timestamp attribute value.
+      google.protobuf.Timestamp ce_timestamp = 7;
+    }
+  }
+}
+
+// CloudEventBatch carries independent CloudEvents without implying ordering or
+// any other relationship between them.
+message CloudEventBatch {
+  // Events in this batch.
+  repeated CloudEvent events = 1;
+}

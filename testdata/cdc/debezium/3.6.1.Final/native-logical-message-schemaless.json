@@ -1,0 +1,30 @@
+{
+  "key": {
+    "prefix": "fixture"
+  },
+  "value": {
+    "source": {
+      "version": "3.6.1.Final",
+      "connector": "postgresql",
+      "name": "example_postgres",
+      "ts_ms": 1704164649000,
+      "ts_us": 1704164649000123,
+      "ts_ns": 1704164649000123456,
+      "snapshot": "false",
+      "db": "inventory",
+      "schema": "",
+      "table": "",
+      "txId": 559,
+      "lsn": 24023400,
+      "xmin": null
+    },
+    "op": "m",
+    "ts_ms": 1704164649123,
+    "ts_us": 1704164649123456,
+    "ts_ns": 1704164649123456789,
+    "message": {
+      "prefix": "fixture",
+      "content": "aGVsbG8tY2Rj"
+    }
+  }
+}
