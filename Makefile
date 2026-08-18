@@ -62,6 +62,7 @@ integration: git-install-check connect-interop data-integration ## Exercise Git 
 
 fmt-check: node_modules/.package-lock.json ## Verify formatting without modifying files.
 	test -z "$$(gofmt -l go)" || { echo "gofmt: files need formatting:"; gofmt -l go; exit 1; }
+	test -z "$$(gofmt -l scripts/generate_cdc_v2_fixtures.go)" || { echo "gofmt: CDC v2 fixture generator needs formatting"; exit 1; }
 	cd python && ruff format --check src/ tests/ ../scripts/
 	cd rust && cargo fmt --all --check
 	cd proto && buf format --diff --exit-code
@@ -105,7 +106,7 @@ security: node_modules/.package-lock.json ## Scan secrets and verify/audit every
 	cd rust && cargo fetch --locked && cargo audit
 
 fmt: node_modules/.package-lock.json ## Format code and apply safe linter fixes.
-	gofmt -w go && golangci-lint run --fix ./...
+	gofmt -w go scripts/generate_cdc_v2_fixtures.go && golangci-lint run --fix ./...
 	cd python && ruff format src/ tests/ ../scripts/ && ruff check --fix src/ tests/ ../scripts/
 	cd rust && cargo fmt --all
 	cd proto && buf format -w
@@ -180,6 +181,7 @@ generate: node_modules/.package-lock.json ## Regenerate committed build artifact
 	GOFLAGS=-mod=readonly go run ./go/cmd/invariant-openapi import --input testdata/openapi/library.yaml --package library.v1 --go-package example.com/project/gen/library/v1 --output testdata/openapi/gen/library/v1/library.proto
 	cd testdata/openapi && buf format -w gen/library/v1/library.proto
 	cd testdata/openapi && buf build -o descriptor.binpb
+	GOFLAGS=-mod=readonly go run ./scripts/generate_cdc_v2_fixtures.go
 
 openapi-codegen-check: node_modules/.package-lock.json ## Compile the imported OpenAPI fixture through every language toolchain.
 	scripts/check_openapi_codegen.sh
@@ -198,9 +200,9 @@ breaking: ## Check proto breaking changes against BASE_REF.
 
 verify-generate: ## Verify generated build artifacts are committed.
 	$(MAKE) generate
-	@if [ -n "$$(git status --porcelain --untracked-files=all -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb testdata/openapi/descriptor.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen)" ]; then \
+	@if [ -n "$$(git status --porcelain --untracked-files=all -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/cdc/v2 testdata/data.schema.binpb testdata/openapi/descriptor.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen)" ]; then \
 		echo "Generated files are out of date. Run 'make generate' and commit the results."; \
-		git status --short -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/data.schema.binpb testdata/openapi/descriptor.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen; \
+		git status --short -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/cdc/v2 testdata/data.schema.binpb testdata/openapi/descriptor.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen; \
 		exit 1; \
 	fi
 	$(MAKE) openapi-codegen-check

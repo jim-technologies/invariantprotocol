@@ -20,6 +20,11 @@ pub mod cdc {
     pub mod v1 {
         include!(concat!(env!("OUT_DIR"), "/invariant.cdc.v1.rs"));
     }
+
+    /// Version 2 with explicit full-image and replayable-delta representations.
+    pub mod v2 {
+        include!(concat!(env!("OUT_DIR"), "/invariant.cdc.v2.rs"));
+    }
 }
 
 /// Generated messages for the stable CloudEvents protobuf envelope.

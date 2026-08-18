@@ -1,7 +1,8 @@
 # Canonical change data capture
 
 Invariant's CDC contract describes a captured change; it does not prescribe how
-the change is captured or delivered. Every canonical CDC event is an
+the change is captured or delivered. The v1 full-image and Debezium profile
+uses an
 [`io.cloudevents.v1.CloudEvent`](../proto/io/cloudevents/v1/cloudevents.proto)
 whose `proto_data` contains an
 [`invariant.cdc.v1.ChangeRecord`](../proto/invariant/cdc/v1/change.proto) packed
@@ -14,6 +15,12 @@ io.cloudevents.v1.CloudEvent
        `- invariant.cdc.v1.ChangeRecord
             operation + key/images + collection + schema + position + time
 ```
+
+The [v2 dual-representation profile](#cdc-v2-full-and-delta-representations)
+uses the same CloudEvents envelope and exact value model while making
+`FullChange` and `DeltaChange` explicit alternatives. Its distinct protobuf
+package, Any URL, `dataschema`, and CloudEvents type allow v1 consumers to
+remain correct and unchanged.
 
 The envelope is the wire-compatible protobuf representation from the latest
 stable [CloudEvents v1.0.2 release][ce-release], including its
@@ -62,6 +69,12 @@ When a transport needs a media type for the complete serialized envelope, the
 CloudEvents protobuf format uses `application/cloudevents+protobuf`. That outer
 format is distinct from the payload's required
 `datacontenttype = application/protobuf`.
+
+CloudEvents v1.0.2 also defines `CloudEventBatch` with the outer media type
+`application/cloudevents-batch+protobuf`. Each member remains an independent
+CloudEvent: the batch adds no ordering, transaction, or deduplication
+semantics. The shared v2 batch fixture is only a deterministic conformance-file
+container; its manifest and declared source stream define the test sequence.
 
 `source` identifies the logical occurrence scope, not a process attempt or a
 delivery endpoint. Producers must ensure that `source + id` is unique for each
@@ -353,6 +366,301 @@ cannot recover distinctions that were absent from a schemaless input; an
 adapter must bring schema knowledge or preserve the typed/raw representation
 rather than inventing those distinctions.
 
+## CDC v2 full and delta representations
+
+CDC v2 adds an explicit representation choice without changing the v1 payload
+or its Debezium profile. It uses
+[`invariant.cdc.v2.ChangeRecord`](../proto/invariant/cdc/v2/change.proto) in the
+same upstream `io.cloudevents.v1.CloudEvent` envelope. Every v2 event uses:
+
+| CloudEvents field | Canonical v2 value |
+| --- | --- |
+| `type` | `io.invariantprotocol.cdc.v2.change` |
+| `datacontenttype` | `application/protobuf` |
+| `dataschema` | `type.googleapis.com/invariant.cdc.v2.ChangeRecord` |
+| `proto_data.type_url` | `type.googleapis.com/invariant.cdc.v2.ChangeRecord` |
+
+The v1 requirements for `id`, `source`, `specversion`, `time`, relationship
+extensions, stable retry identity, and the separation of context from event
+data apply unchanged. The v2 package is deliberately distinct: a v1 UPDATE
+requires a top-level `after`, so making a delta-only UPDATE look like an
+additive v1 change would leave an old consumer with an incomplete event. A v2
+consumer opts in through the event type and Any URL instead.
+
+V2 retains the same operation, key, collection, schema, source-position,
+transaction, timestamp, source-extension, source-message, and exact `Value`
+domains. It reserves the former top-level `before`, `after`, and
+`changed_fields` names and field numbers. The `representation` oneof contains
+either `full` (`FullChange`) or `delta` (`DeltaChange`); it is not valid to
+populate both.
+
+### Canonical v2 value equality
+
+Patch validation, replay, and full/delta conversion compare known v2 values by
+meaning rather than serialized protobuf bytes:
+
+- the selected `Value.kind`, `type_name`, and optional-field presence are
+  exact; distinct scalar kinds never compare equal;
+- `Record` fields have unique names and compare without regard to repeated
+  field order, recursively at every nesting level;
+- `ListValue` elements compare in order;
+- `MapValue` keys are unique under this same recursive equality and entries
+  compare without regard to order. The repeated entries may retain source
+  iteration order on the wire, but that order is not semantic in v2;
+- all NaNs within the same float kind compare equal, while positive and
+  negative zero are distinct; and
+- ordinary protobuf unknown fields do not change known v2 semantics. An older
+  consumer that encounters an unknown `Value.kind`, delta effect, or field
+  state fails closed instead of treating it as unset or unchanged.
+
+Decimal equality includes exact canonical text, scale, and the presence and
+value of declared precision. Bytes, timestamps, nested records, lists, and maps
+retain their exact typed domains. These rules define v2 patch/replay semantics
+only; they do not reinterpret the unchanged v1 Debezium profile.
+
+### Operation rules
+
+`FullChange` is the self-contained image representation. Its `after` is always
+a complete resulting record, never a partial patch. Its operation rules are:
+
+| Operation | `FullChange` rule |
+| --- | --- |
+| CREATE (`c`) | `after` is required and complete; `before` and `changed_fields` are prohibited |
+| UPDATE (`u`) | `after` is required and complete; complete `before` and `changed_fields` are optional |
+| DELETE (`d`) | `before` is optional; `after` and `changed_fields` are prohibited |
+| SNAPSHOT_READ (`r`) | `after` is required and complete; `before` and `changed_fields` are prohibited |
+| TRUNCATE (`t`) | `full` and `delta` are both prohibited |
+| SOURCE_MESSAGE (`m`) | `full` and `delta` are both prohibited; top-level `source_message` is required |
+
+`DeltaChange` describes the same row outcomes with a smaller state transition:
+
+| Operation | `DeltaChange.change` rule |
+| --- | --- |
+| CREATE (`c`) | `result` is required and is the complete created record |
+| UPDATE (`u`) | `patch` is required and contains the exact changed fields; an empty patch is a known no-op |
+| DELETE (`d`) | `delete` is required and marks the record as absent |
+| SNAPSHOT_READ (`r`) | `result` is required and is a complete replay anchor |
+| TRUNCATE (`t`) | No representation; applying the operation clears the collection |
+| SOURCE_MESSAGE (`m`) | No representation; applying the operation does not change record state |
+
+The existing key and collection rules apply to both representations. A
+replay-capable row stream needs a stable key. V2 intentionally has no
+`previous_key`:
+a source key change is a DELETE of the old key followed by a CREATE of the new
+key, ordered together and transaction-linked when that context is available.
+`TRUNCATE` is still one collection-wide operation, and `SOURCE_MESSAGE` is
+still not a row mutation.
+
+### Exact field transitions
+
+An UPDATE delta is a `RecordPatch` containing `FieldChange` entries. Each
+change has a non-empty `FieldPath` plus required `before` and `after`
+`FieldState` messages. `FieldState` has exactly one of:
+
+- `value`, containing the exact typed `Value`; or
+- `absent`, containing the `Absent` marker.
+
+The four important states therefore remain distinct: unknown is not encoded
+as a change, an absent field uses `FieldState.absent`, an explicitly null field
+uses `FieldState.value.null_value`, and any other present field uses its exact
+typed value. A transition from absent to a value adds a field, value to value
+replaces it, and value to absent removes it. Absent to absent and semantically
+equal value to value are prohibited; an UPDATE with no changes uses a present,
+empty `RecordPatch`.
+
+Paths contain exact record-field name segments and traverse nested `Record`
+values only. Within one patch they must be unique and non-overlapping: no path
+may equal another or be its ancestor. Consequently patch entry order has no
+semantic effect. A missing or non-record intermediate segment is an error; a
+producer creates or replaces such a subtree by changing the nearest existing
+record field as one complete `Value`.
+
+Lists and maps are atomic at the field boundary. A change to either carries
+the complete before and after `ListValue` or `MapValue`; paths never address a
+list index or map entry. This can repeat a large collection, but it avoids
+index-shift rules, connector-specific map-key equality, and ambiguous dotted
+paths. Lists preserve exact source ordering; map entry order remains available
+on the wire but is nonsemantic for v2 equality. Both preserve nested typed
+values. MongoDB demonstrates why this boundary matters: its native update
+description can
+report a changed array index, a complete replacement array, or only a new
+truncation size depending on the source operation. An adapter using the v2
+atomic model must materialize the complete collection before emitting that
+field transition. [MongoDB documents these outcome forms explicitly][mongodb-update].
+
+A consumer applies a patch transactionally:
+
+1. Resolve every path against the current record and compare its current state
+   with the declared `before` state using canonical `Value` semantics, not
+   serialized protobuf bytes.
+2. Reject the whole event on a missing base, path/type error, duplicate or
+   overlapping path, or before-state mismatch.
+3. Only after every precondition succeeds, replace or remove each field using
+   its `after` state and commit the resulting record atomically.
+
+This fail-closed rule detects gaps and out-of-order delivery. A duplicate delta
+will normally fail its before-state check, so deduplication is mandatory before
+application to distinguish an ordinary retry from a broken stream. The
+all-or-nothing model follows useful patch precedent without adopting JSON's
+number model, JSON Pointer syntax, or command-oriented `move`, `copy`, and
+`test` operations. JSON Patch makes sequencing and failure explicit; v2 instead
+prohibits overlapping changes so entry order is immaterial. [JSON Patch][json-patch]
+The HTTP PATCH specification likewise warns about base-dependent application
+and requires atomicity. [HTTP PATCH][http-patch]
+
+JSON Merge Patch is not the v2 representation. It assigns null the meaning of
+removal and cannot patch part of an array, so it cannot preserve Invariant's
+explicit-null distinction or exact collection semantics. [JSON Merge Patch
+documents both limitations][json-merge-patch].
+
+### Replay and state at a source position
+
+For one `(source, data_collection, key)`, the normative forward state machine
+is:
+
+- CREATE or SNAPSHOT_READ establishes the complete `after` or `result` state;
+- full UPDATE replaces the state with its complete `after`;
+- delta UPDATE validates and applies its `patch`;
+- DELETE makes the record absent;
+- TRUNCATE makes every record in the collection absent; and
+- SOURCE_MESSAGE leaves row state unchanged.
+
+Full and delta events can coexist in one v2 stream. A complete full image or
+delta `result` is a new replay anchor. Starting with one anchor and applying
+the same complete, deduplicated sequence produces the same materialized state
+for either representation.
+
+Replay state is scoped by `(CloudEvent.source, data_collection, key)`, and a
+TRUNCATE clears only that source's collection. CREATE requires the key not to
+be materialized already; a distinct repeated CREATE is an error, while a retry
+is removed by `source + id` deduplication first. SNAPSHOT_READ and a full UPDATE
+are complete outcome anchors and may replace or establish state. DELETE may
+establish absence even when replay begins after the row's prior state. Only a
+delta UPDATE patch requires an existing materialized row base.
+
+That guarantee has operational preconditions. A replay-capable delta producer
+must provide a stable row key, a CREATE/SNAPSHOT/full-image/checkpoint base
+before each delta UPDATE chain, and an ordering scope that contains every
+update for that key. Consumers must deduplicate by CloudEvents `source + id`
+before state validation, stop on a
+gap or mismatch, and never apply an unknown future delta effect or field-state
+variant as though it were a no-op. Replaying TRUNCATE relative to partitioned
+row changes additionally requires a service-owned collection barrier or source
+frontier; the core contract does not invent global order.
+
+To answer “what was this record at this time?”, a service starts from the
+latest complete anchor or checkpoint no later than the requested source
+frontier and replays in declared source order. `source_time` alone is not an
+ordering key: multiple transactions can share a timestamp, capture can be
+delayed, and ordering is never global. A time-indexed service must resolve
+timestamp ties to source positions and, when it promises transactionally
+consistent results, publish only a complete transaction frontier. Source
+positions remain opaque to generic consumers; indexing and checkpoint
+retention remain service-owned.
+
+A source-position identity uses the full `(CloudEvent.source,
+source_position.stream, source_position.format, source_position.value)`
+context. Opaque value bytes alone need not be unique across sources, streams,
+or formats.
+
+Each UPDATE patch records both field states, so a consumer that has the
+resulting record can invert it by swapping `before` and `after`. CREATE and
+DELETE are inverted by changing record existence, but an empty `DeleteDelta`
+does not independently carry the deleted row. Reverse traversal across a
+delete therefore needs the prior materialized state or a checkpoint. Ordinary
+historical reconstruction is forward replay from an anchor and does not
+require every event to be a standalone database snapshot.
+
+### Full and delta conversion
+
+Conversion preserves the operation and all common event metadata. It is a
+state-semantic projection, not a promise that the two protobuf encodings carry
+the same redundant evidence:
+
+- full CREATE/SNAPSHOT `after` maps directly to delta `result`, and back;
+- full UPDATE maps to a delta patch by recursively comparing a complete prior
+  record with the complete `after` image;
+- delta UPDATE maps to full by validating the patch against the materialized
+  prior record and using the result as complete `after`;
+- DELETE maps to or from `DeleteDelta` without a base; a materialized prior
+  record is needed only to populate the optional full `before`; and
+- TRUNCATE and SOURCE_MESSAGE retain no representation in either direction.
+
+The recursive diff descends only through records. A changed list or map becomes
+one atomic field transition. Delta `before` states can validate or invert the
+diff, and `changed_fields` for a projected `FullChange` is derived from the
+patch paths. If a full UPDATE has no complete `before`, the converter uses its
+materialized prior state; without one it must fail instead of guessing removed
+fields. Likewise, converting a delta UPDATE without its required base must
+fail; delta DELETE can project to a valid full DELETE with `before` absent.
+
+The event remains the same source occurrence during an in-process full/delta
+projection, so `source + id`, source position, transaction context, and times
+do not change. A service that publishes both encodings decides how subscribers
+select one representation; it must not cause a consumer to apply both as two
+source mutations.
+
+### Debezium and delta production
+
+The pinned Debezium profile above remains the raw-lossless v1 mapping. A direct
+v2 `FullChange` projection is valid only when its semantic images are complete.
+Debezium normally provides row images; its changed-field transform adds the
+names of changed fields rather than replacing the envelope with an applicable
+delta. [Debezium documents that transform as
+header enrichment][debezium-event-changes]. PostgreSQL replica identity can
+also make `before` contain only key fields or nothing, so a connector-provided
+`before` is not necessarily a complete diff base. [Debezium documents those
+replica-identity modes][debezium-postgres-replica].
+
+Because v2 `FullChange.before`, when present, is complete, an adapter must not
+copy a connector-partial Debezium `before` into that field. It hydrates a
+complete prior image or omits semantic `before` and preserves the partial
+source evidence in `source_extension`. Producing a delta still requires the
+adapter's authoritative materialized state. An incomplete or unavailable-TOAST
+`after` cannot be used as a v2 full anchor; the adapter hydrates a complete
+outcome or fails.
+
+A Debezium-to-v2-delta adapter is therefore stateful. It keys an authoritative
+materialization by the canonical collection and key, consumes events in source
+order, verifies any source-provided prior fields, and computes exact field
+transitions from the stored record to the complete `after`. It uses CREATE and
+snapshot reads as anchors, deletes stored state on `d`, clears collection state
+on ordered `t`, and treats `m` as non-row content. If an unavailable value,
+partial collection update, missing base, or ordering gap prevents an exact
+diff, the adapter emits v2 `FullChange` when a complete image exists or fails;
+it never labels an inferred or incomplete patch lossless. Connector metadata
+continues to use `source_extension`.
+
+MongoDB provides a useful delta-native comparison: change streams return field
+deltas by default, while full-document lookup is optional and can observe a
+later majority-committed version. MongoDB states that the event delta still
+describes the original change correctly. [MongoDB change streams][mongodb-change-streams]
+That is evidence for an outcome-based delta, not a reason to copy MongoDB's
+document paths or BSON envelope into the Invariant core.
+
+### Storage and consumption tradeoffs
+
+Delta is usually smaller for wide records with sparse scalar updates. Carrying
+both states for changed fields costs more than an after-only patch but enables
+base validation and exact inversion. Atomic list and map changes can approach
+full-image size, and protobuf path/type overhead can dominate very small rows.
+Full images also benefit from transport compression when adjacent records have
+similar shapes, so no universal size ratio is promised.
+
+Full UPDATEs are self-contained and naturally support idempotent keyed upserts.
+Delta UPDATEs need ordered state, anchors, gap handling, and deduplication; a
+log cannot retain only the latest delta for each key and still reconstruct the
+record. Periodic full anchors or service-owned checkpoints bound replay cost.
+Flink makes the same broad distinction between retract/full-row changelogs and
+keyed upsert changelogs, and SQL Server CDC carries before/after rows plus a
+changed-column mask. [Flink `RowKind`][flink-row-kind]
+[Flink keyed upsert mode][flink-changelog-mode]
+[SQL Server CDC][sql-server-cdc]
+
+Invariant standardizes both wire representations and their replay semantics.
+It does not choose a storage layout, snapshot interval, compaction policy,
+materialized-state engine, or time-travel index for a service.
+
 ## Protobuf evolution and forwarding
 
 The CDC messages evolve additively. Existing field numbers and enum numbers
@@ -379,7 +687,8 @@ pass-through path instead of claiming lossless forwarding. See the official
 - Ordering is scoped only to a declared `source_position.stream` or equivalent
   source partition. There is no global ordering guarantee.
 - Generic consumers treat `source_position` as opaque.
-- Full `after` images are preferred; `changed_fields` is optional metadata.
+- V1 uses full `after` images and optional `changed_fields`; v2 producers select
+  `FullChange` or `DeltaChange` without making a partial image ambiguous.
 - Checkpoint storage, acknowledgement, retries, backoff, retention, replay,
   capture queries, outbox implementation, and delivery topology are owned by
   the producing and consuming services.
@@ -403,6 +712,13 @@ The exact fixture provenance, input classification, and expected fidelity are
 recorded beside the corpus in the
 [Debezium 3.6.1.Final fixture guide][cdc-fixtures].
 
+V2 conformance additionally covers both row representations for CREATE,
+UPDATE, DELETE, and SNAPSHOT_READ plus representation-neutral TRUNCATE and
+SOURCE_MESSAGE, exact absent/null transitions, no-op updates, nested paths,
+atomic list/map changes, invalid path overlap and before-state mismatch, stable
+retry identity, anchor requirements, ordered replay, full/delta conversion with
+state, and equal materialized results across Go, Python, Rust, and TypeScript.
+
 The CDC contract is independent of auditing. This repository does not define
 an `AuditEvent`, and this work neither introduces nor changes one. A consuming
 descriptor graph that defines an audit event may continue to use CloudEvents
@@ -417,7 +733,16 @@ independently; audit events are never wrapped in or reinterpreted as
 [debezium-cloudevents]: https://debezium.io/documentation/reference/3.6/integrations/cloudevents.html
 [debezium-event-changes]: https://debezium.io/documentation/reference/3.6/transformations/event-changes.html
 [debezium-postgres-events]: https://debezium.io/documentation/reference/3.6/connectors/postgresql.html#postgresql-events
+[debezium-postgres-replica]: https://debezium.io/documentation/reference/3.6/connectors/postgresql.html#postgresql-replica-identity
 [debezium-release]: https://debezium.io/releases/3.6/release-notes#release-3.6.1-final
 [debezium-serdes]: https://debezium.io/documentation/reference/3.6/integrations/serdes.html
+[flink-changelog-mode]: https://nightlies.apache.org/flink/flink-docs-stable/api/java/org/apache/flink/table/connector/ChangelogMode.html
+[flink-row-kind]: https://nightlies.apache.org/flink/flink-docs-stable/api/java/org/apache/flink/types/RowKind.html
+[http-patch]: https://www.rfc-editor.org/info/rfc5789/
+[json-merge-patch]: https://www.rfc-editor.org/info/rfc7396/
+[json-patch]: https://www.rfc-editor.org/info/rfc6902/
+[mongodb-change-streams]: https://www.mongodb.com/docs/manual/changeStreams/
+[mongodb-update]: https://www.mongodb.com/docs/v8.0/reference/change-events/update/
 [protobuf-unknown-fields]: https://protobuf.dev/programming-guides/proto3/#unknowns
+[sql-server-cdc]: https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/about-change-data-capture-sql-server?view=sql-server-ver17
 [trace-context]: https://www.w3.org/TR/trace-context/

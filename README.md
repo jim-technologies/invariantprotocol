@@ -52,8 +52,21 @@ The official CloudEvents protobuf schema is vendored for reproducible
 generation; its public protobuf name and wire layout are unchanged, while
 language import paths remain repository-owned distribution metadata.
 
+CDC v2 keeps that envelope and adds an explicit choice between
+`FullChange` and `DeltaChange`. Full changes carry complete row images. Delta
+changes carry typed, outcome-based field transitions that distinguish absent
+from explicitly null values and can be inverted when the prior record state is
+available, without making JSON Patch, a connector, or a storage engine part of
+the core contract.
+Creates and snapshot reads remain complete anchors; updates use exact field
+transitions; deletes, truncates, and source messages retain their operation
+semantics. Lists and maps are replaced atomically when their containing field
+changes, keeping replay deterministic and the path model small.
+
 See the [CDC contract and Debezium mapping](docs/cdc.md) and the
-[architecture decision](docs/adr/0001-cloudevents-change-record.md).
+[CloudEvents](docs/adr/0001-cloudevents-change-record.md) and
+[full/delta representation](docs/adr/0002-full-and-delta-cdc.md) architecture
+decisions.
 
 ## Build contract
 
@@ -679,14 +692,14 @@ evolution rules, the qualified LanceDB lifecycle, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.15.0`; new releases do not create language-prefixed tags. The project
+tag `v0.16.0`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.15.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.16.0
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -696,26 +709,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.15.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.0#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.15.0#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.0#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.15.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.0" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.15.0" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.0" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.15.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.16.0"
 ```
 
 For reproducible production builds, replace the tag with a full commit

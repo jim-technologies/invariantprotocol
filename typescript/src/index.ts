@@ -1,10 +1,11 @@
 export type { Interceptor, StreamRequest, StreamResponse, UnaryRequest, UnaryResponse } from "@connectrpc/connect";
-export * from "./gen/invariant/cdc/v1/change_pb.js";
-export * from "./gen/io/cloudevents/v1/cloudevents_pb.js";
 export { cliHelp, runCli } from "./cli.js";
 export * from "./data_schema.js";
 export { type MethodInfo, ParsedDescriptor, type ServiceInfo } from "./descriptor.js";
 export { type Code, InvariantError } from "./errors.js";
+export * from "./gen/invariant/cdc/v1/change_pb.js";
+export * as cdcV2 from "./gen/invariant/cdc/v2/change_pb.js";
+export * from "./gen/io/cloudevents/v1/cloudevents_pb.js";
 export { CONNECT_STREAM_JSON, CONNECT_STREAM_PROTO, httpHandler, PROTO_CONTENT_TYPE, serveHttp } from "./http.js";
 export type {
   ChannelOptions,

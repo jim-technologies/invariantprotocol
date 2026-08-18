@@ -40,6 +40,24 @@
       }
     },
     {
+      "id": "cdc_v2_full_delta_replay",
+      "kind": "core",
+      "description": "Carry invariant.cdc.v2.ChangeRecord as an explicit FullChange or DeltaChange in the stable CloudEvents envelope, with exact absent/null field transitions, deterministic replay, atomic collection values, and state-semantic full/delta conversion.",
+      "api": {
+        "go": "go/gen/invariant/cdc/v2",
+        "python": "invariant.gen.invariant.cdc.v2",
+        "rust": "invariant::cdc::v2",
+        "typescript": "cdcV2.ChangeRecordSchema"
+      },
+      "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
+      "tests": {
+        "go": ["go/cdc_v2_contract_test.go"],
+        "python": ["python/tests/test_cdc_v2_contract.py"],
+        "rust": ["rust/tests/cdc_v2_contract.rs"],
+        "typescript": ["typescript/tests/cdc_v2_contract.test.ts"]
+      }
+    },
+    {
       "id": "generated_service_registration",
       "kind": "core",
       "description": "Register an implementation through the language's generated service surface and reject descriptor drift.",

@@ -1,0 +1,63 @@
+{
+  "fixture_format_version": 1,
+  "contract": "invariant.cdc.v2.ChangeRecord",
+  "envelope": "io.cloudevents.v1.CloudEventBatch",
+  "event_type": "io.invariantprotocol.cdc.v2.change",
+  "source": "urn:invariantprotocol:fixture:cdc:v2",
+  "event_count": 8,
+  "unique_event_count": 7,
+  "operations": [
+    "SNAPSHOT_READ",
+    "UPDATE",
+    "UPDATE",
+    "UPDATE",
+    "DELETE",
+    "CREATE",
+    "TRUNCATE",
+    "SOURCE_MESSAGE"
+  ],
+  "positions": [
+    "0001",
+    "0002",
+    "0002",
+    "0003",
+    "0004",
+    "0005",
+    "0006",
+    "0007"
+  ],
+  "retry_indexes": [
+    2
+  ],
+  "state_at_position": {
+    "0001": [
+      42
+    ],
+    "0002": [
+      42
+    ],
+    "0003": [
+      42
+    ],
+    "0004": [],
+    "0005": [
+      84
+    ],
+    "0006": [],
+    "0007": []
+  },
+  "files": [
+    {
+      "path": "full.binpb",
+      "representation": "full",
+      "sha256": "15d9a0e04d2a4150a2401f57a73720165c59a8dc211ab26709cc9641cd5bc38a",
+      "size": 8209
+    },
+    {
+      "path": "delta.binpb",
+      "representation": "delta",
+      "sha256": "ab5c3b7045d149ff52c4b7d5f15d2cbade51c8c12b27db0246fa945b2b6646b1",
+      "size": 5702
+    }
+  ]
+}

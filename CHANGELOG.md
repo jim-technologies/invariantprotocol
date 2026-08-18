@@ -10,6 +10,19 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.16.0 — 2026-08-17
+
+### Added
+
+- **CDC v2 supports explicit full-image and replayable-delta changes.** The
+  unchanged CloudEvents protobuf envelope now also carries
+  `invariant.cdc.v2.ChangeRecord`, whose `FullChange` and `DeltaChange`
+  representations share one operation vocabulary and exact typed value model.
+  Complete create/snapshot anchors, atomic before/after field transitions,
+  stable retry deduplication, and state-semantic full/delta projection are
+  specified and exercised through shared Go, Python, Rust, and TypeScript
+  replay fixtures. The v1 Debezium compatibility profile remains unchanged.
+
 ## v0.15.0 — 2026-08-17
 
 ### Added
