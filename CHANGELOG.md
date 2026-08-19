@@ -12,6 +12,10 @@ but never silent wire-behavior regressions.
 
 ### Changed
 
+- **`make validate` runs the protobuf breaking check.** The `breaking` slice
+  compares the published `proto` module against `origin/main` inside the gate,
+  and CI checks out full history so the same verb passes everywhere.
+
 - **The published proto module enforces the `COMMENTS` lint category.**
   `proto/buf.yaml` lints `STANDARD` plus `COMMENTS`, and every public message,
   field, oneof, and extension in the `invariant.*` packages carries a

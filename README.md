@@ -777,7 +777,8 @@ workflow (also runnable on demand): dependency and secret audits, clean Git
 installs, official-client Connect interoperability, a local LanceDB
 lifecycle, PostgreSQL/Atlas apply-inspect-diff integration, and a real
 ClickHouse DDL/value round trip. Protobuf breaking checks against
-`origin/main` run locally with `make breaking`. Dependency upgrades are
+`origin/main` run inside `make validate`; `make breaking` runs that slice
+alone. Dependency upgrades are
 intentional and review-driven; the repository does not require a scheduled
 dependency job.
 
