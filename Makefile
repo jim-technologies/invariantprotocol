@@ -13,8 +13,8 @@ build: node_modules/.package-lock.json ## Build every language package and comma
 	cd rust && cargo build --workspace --locked
 	npm run build
 
-# The single gate (see MAKEFILE-CONTRACT.md). CI runs the same slices as
-# separate jobs so failures are easy to identify and the suites run in parallel.
+# The single gate (see MAKEFILE-CONTRACT.md). CI runs exactly
+# `flox activate -- make validate` in one job, so CI cannot drift from it.
 validate: validate-static verify-generate coverage race-go ## Run the full gate: static checks, generated-code staleness, coverage-gated tests, and the Go race detector.
 
 validate-static: version-check parity fmt-check lint typecheck proto-comments breaking public-surface go-mod-check ## Run the static slice of validate: formatting, lint, type, schema, breaking-change, and policy checks.
