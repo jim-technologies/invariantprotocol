@@ -261,6 +261,7 @@ message FieldPath {
 // SourceExtension preserves source-specific metadata without promoting a
 // connector's concepts into the canonical contract.
 message SourceExtension {
+  // The extension's typed or opaque representation.
   oneof representation {
     // Typed extension whose message contract is owned outside the CDC core.
     google.protobuf.Any proto_data = 1;
@@ -315,6 +316,7 @@ message Value {
   // Optional external logical type name or URI.
   string type_name = 1;
 
+  // The value's concrete scalar or nested representation.
   oneof kind {
     // Explicit null. Absence is represented by FieldState.absent or by omitting
     // the enclosing RecordField from a complete Record.

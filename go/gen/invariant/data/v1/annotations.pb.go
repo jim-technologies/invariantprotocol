@@ -253,6 +253,8 @@ func (x *FixedListOptions) GetLength() uint32 {
 // storage policy.
 type FieldOptions struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The logical refinement of the field's scalar or element carrier type.
+	//
 	// Types that are valid to be assigned to SemanticType:
 	//
 	//	*FieldOptions_Decimal
@@ -383,12 +385,16 @@ var file_invariant_data_v1_annotations_proto_extTypes = []protoimpl.ExtensionInf
 
 // Extension fields to descriptorpb.MessageOptions.
 var (
+	// Marks the annotated message as a durable dataset root.
+	//
 	// optional invariant.data.v1.DatasetOptions dataset = 51974;
 	E_Dataset = &file_invariant_data_v1_annotations_proto_extTypes[0]
 )
 
 // Extension fields to descriptorpb.FieldOptions.
 var (
+	// Refines the annotated field's carrier type with portable logical meaning.
+	//
 	// optional invariant.data.v1.FieldOptions field = 51974;
 	E_Field = &file_invariant_data_v1_annotations_proto_extTypes[1]
 )

@@ -299,6 +299,8 @@ export type DataType = Message<"invariant.data.v1.DataType"> & {
   protobufType: string;
 
   /**
+   * The concrete logical type category.
+   *
    * @generated from oneof invariant.data.v1.DataType.kind
    */
   kind: {

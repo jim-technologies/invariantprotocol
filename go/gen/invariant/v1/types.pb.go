@@ -23,10 +23,13 @@ const (
 
 // Parsed representation of a FileDescriptorSet with extracted comments.
 type ParsedDescriptor struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	Services      map[string]*ServiceInfo `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Messages      map[string]*MessageInfo `protobuf:"bytes,2,rep,name=messages,proto3" json:"messages,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Enums         map[string]*EnumInfo    `protobuf:"bytes,3,rep,name=enums,proto3" json:"enums,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Services keyed by fully-qualified service name.
+	Services map[string]*ServiceInfo `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Messages keyed by fully-qualified message name.
+	Messages map[string]*MessageInfo `protobuf:"bytes,2,rep,name=messages,proto3" json:"messages,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Enums keyed by fully-qualified enum name.
+	Enums         map[string]*EnumInfo `protobuf:"bytes,3,rep,name=enums,proto3" json:"enums,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -84,11 +87,15 @@ func (x *ParsedDescriptor) GetEnums() map[string]*EnumInfo {
 
 // Information about a gRPC service.
 type ServiceInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	FullName      string                 `protobuf:"bytes,2,opt,name=full_name,json=fullName,proto3" json:"full_name,omitempty"`
-	Methods       map[string]*MethodInfo `protobuf:"bytes,3,rep,name=methods,proto3" json:"methods,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Comment       string                 `protobuf:"bytes,4,opt,name=comment,proto3" json:"comment,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Service name without package qualification.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Fully-qualified service name including its package.
+	FullName string `protobuf:"bytes,2,opt,name=full_name,json=fullName,proto3" json:"full_name,omitempty"`
+	// Methods keyed by method name.
+	Methods map[string]*MethodInfo `protobuf:"bytes,3,rep,name=methods,proto3" json:"methods,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Comment extracted from the service declaration.
+	Comment       string `protobuf:"bytes,4,opt,name=comment,proto3" json:"comment,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -153,13 +160,19 @@ func (x *ServiceInfo) GetComment() string {
 
 // Information about an RPC method.
 type MethodInfo struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	InputType       string                 `protobuf:"bytes,2,opt,name=input_type,json=inputType,proto3" json:"input_type,omitempty"`
-	OutputType      string                 `protobuf:"bytes,3,opt,name=output_type,json=outputType,proto3" json:"output_type,omitempty"`
-	Comment         string                 `protobuf:"bytes,4,opt,name=comment,proto3" json:"comment,omitempty"`
-	ClientStreaming bool                   `protobuf:"varint,5,opt,name=client_streaming,json=clientStreaming,proto3" json:"client_streaming,omitempty"`
-	ServerStreaming bool                   `protobuf:"varint,6,opt,name=server_streaming,json=serverStreaming,proto3" json:"server_streaming,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Method name as declared in the service.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Fully-qualified request message name without a leading dot.
+	InputType string `protobuf:"bytes,2,opt,name=input_type,json=inputType,proto3" json:"input_type,omitempty"`
+	// Fully-qualified response message name without a leading dot.
+	OutputType string `protobuf:"bytes,3,opt,name=output_type,json=outputType,proto3" json:"output_type,omitempty"`
+	// Comment extracted from the method declaration.
+	Comment string `protobuf:"bytes,4,opt,name=comment,proto3" json:"comment,omitempty"`
+	// True when the client streams requests.
+	ClientStreaming bool `protobuf:"varint,5,opt,name=client_streaming,json=clientStreaming,proto3" json:"client_streaming,omitempty"`
+	// True when the server streams responses.
+	ServerStreaming bool `protobuf:"varint,6,opt,name=server_streaming,json=serverStreaming,proto3" json:"server_streaming,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -238,13 +251,19 @@ func (x *MethodInfo) GetServerStreaming() bool {
 
 // Information about a protobuf message.
 type MessageInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	FullName      string                 `protobuf:"bytes,2,opt,name=full_name,json=fullName,proto3" json:"full_name,omitempty"`
-	Fields        []*FieldInfo           `protobuf:"bytes,3,rep,name=fields,proto3" json:"fields,omitempty"`
-	Oneofs        []*OneofInfo           `protobuf:"bytes,4,rep,name=oneofs,proto3" json:"oneofs,omitempty"`
-	Comment       string                 `protobuf:"bytes,5,opt,name=comment,proto3" json:"comment,omitempty"`
-	IsMapEntry    bool                   `protobuf:"varint,6,opt,name=is_map_entry,json=isMapEntry,proto3" json:"is_map_entry,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Message name without package qualification.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Fully-qualified message name including its package.
+	FullName string `protobuf:"bytes,2,opt,name=full_name,json=fullName,proto3" json:"full_name,omitempty"`
+	// Fields in declaration order.
+	Fields []*FieldInfo `protobuf:"bytes,3,rep,name=fields,proto3" json:"fields,omitempty"`
+	// Oneof groups in declaration order.
+	Oneofs []*OneofInfo `protobuf:"bytes,4,rep,name=oneofs,proto3" json:"oneofs,omitempty"`
+	// Comment extracted from the message declaration.
+	Comment string `protobuf:"bytes,5,opt,name=comment,proto3" json:"comment,omitempty"`
+	// True for synthesized map-entry messages.
+	IsMapEntry    bool `protobuf:"varint,6,opt,name=is_map_entry,json=isMapEntry,proto3" json:"is_map_entry,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -323,16 +342,28 @@ func (x *MessageInfo) GetIsMapEntry() bool {
 
 // Information about a message field.
 type FieldInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Number        int32                  `protobuf:"varint,2,opt,name=number,proto3" json:"number,omitempty"`
-	Type          int32                  `protobuf:"varint,3,opt,name=type,proto3" json:"type,omitempty"`
-	TypeName      string                 `protobuf:"bytes,4,opt,name=type_name,json=typeName,proto3" json:"type_name,omitempty"`
-	Label         int32                  `protobuf:"varint,5,opt,name=label,proto3" json:"label,omitempty"`
-	Comment       string                 `protobuf:"bytes,6,opt,name=comment,proto3" json:"comment,omitempty"`
-	OneofIndex    *int32                 `protobuf:"varint,7,opt,name=oneof_index,json=oneofIndex,proto3,oneof" json:"oneof_index,omitempty"`
-	Optional      bool                   `protobuf:"varint,8,opt,name=optional,proto3" json:"optional,omitempty"`
-	JsonName      string                 `protobuf:"bytes,9,opt,name=json_name,json=jsonName,proto3" json:"json_name,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Field name as declared in the message.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Field number on the wire.
+	Number int32 `protobuf:"varint,2,opt,name=number,proto3" json:"number,omitempty"`
+	// Numeric google.protobuf.FieldDescriptorProto.Type value.
+	Type int32 `protobuf:"varint,3,opt,name=type,proto3" json:"type,omitempty"`
+	// Fully-qualified message or enum name, without a leading dot, for
+	// composite types.
+	TypeName string `protobuf:"bytes,4,opt,name=type_name,json=typeName,proto3" json:"type_name,omitempty"`
+	// Numeric google.protobuf.FieldDescriptorProto.Label value.
+	Label int32 `protobuf:"varint,5,opt,name=label,proto3" json:"label,omitempty"`
+	// Comment extracted from the field declaration.
+	Comment string `protobuf:"bytes,6,opt,name=comment,proto3" json:"comment,omitempty"`
+	// Index into the enclosing message's oneofs when the field belongs to a
+	// non-synthetic oneof group.
+	OneofIndex *int32 `protobuf:"varint,7,opt,name=oneof_index,json=oneofIndex,proto3,oneof" json:"oneof_index,omitempty"`
+	// True for explicit proto3 optional fields and proto2 optional-label
+	// fields.
+	Optional bool `protobuf:"varint,8,opt,name=optional,proto3" json:"optional,omitempty"`
+	// ProtoJSON field name.
+	JsonName      string `protobuf:"bytes,9,opt,name=json_name,json=jsonName,proto3" json:"json_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -432,10 +463,13 @@ func (x *FieldInfo) GetJsonName() string {
 
 // Information about a oneof group.
 type OneofInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Comment       string                 `protobuf:"bytes,2,opt,name=comment,proto3" json:"comment,omitempty"`
-	FieldNames    []string               `protobuf:"bytes,3,rep,name=field_names,json=fieldNames,proto3" json:"field_names,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Oneof group name as declared in the message.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Comment extracted from the oneof declaration.
+	Comment string `protobuf:"bytes,2,opt,name=comment,proto3" json:"comment,omitempty"`
+	// Member field names in declaration order.
+	FieldNames    []string `protobuf:"bytes,3,rep,name=field_names,json=fieldNames,proto3" json:"field_names,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -493,11 +527,15 @@ func (x *OneofInfo) GetFieldNames() []string {
 
 // Information about a protobuf enum.
 type EnumInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	FullName      string                 `protobuf:"bytes,2,opt,name=full_name,json=fullName,proto3" json:"full_name,omitempty"`
-	Values        []*EnumValueInfo       `protobuf:"bytes,3,rep,name=values,proto3" json:"values,omitempty"`
-	Comment       string                 `protobuf:"bytes,4,opt,name=comment,proto3" json:"comment,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Enum name without package qualification.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Fully-qualified enum name including its package.
+	FullName string `protobuf:"bytes,2,opt,name=full_name,json=fullName,proto3" json:"full_name,omitempty"`
+	// Enum values in declaration order.
+	Values []*EnumValueInfo `protobuf:"bytes,3,rep,name=values,proto3" json:"values,omitempty"`
+	// Comment extracted from the enum declaration.
+	Comment       string `protobuf:"bytes,4,opt,name=comment,proto3" json:"comment,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -562,10 +600,13 @@ func (x *EnumInfo) GetComment() string {
 
 // Information about an enum value.
 type EnumValueInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Number        int32                  `protobuf:"varint,2,opt,name=number,proto3" json:"number,omitempty"`
-	Comment       string                 `protobuf:"bytes,3,opt,name=comment,proto3" json:"comment,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Enum value name as declared.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Numeric enum value.
+	Number int32 `protobuf:"varint,2,opt,name=number,proto3" json:"number,omitempty"`
+	// Comment extracted from the enum value declaration.
+	Comment       string `protobuf:"bytes,3,opt,name=comment,proto3" json:"comment,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

@@ -6,70 +6,141 @@ option go_package = "github.com/jim-technologies/invariantprotocol/go/gen/invari
 
 // Parsed representation of a FileDescriptorSet with extracted comments.
 message ParsedDescriptor {
+  // Services keyed by fully-qualified service name.
   map<string, ServiceInfo> services = 1;
+
+  // Messages keyed by fully-qualified message name.
   map<string, MessageInfo> messages = 2;
+
+  // Enums keyed by fully-qualified enum name.
   map<string, EnumInfo> enums = 3;
 }
 
 // Information about a gRPC service.
 message ServiceInfo {
+  // Service name without package qualification.
   string name = 1;
+
+  // Fully-qualified service name including its package.
   string full_name = 2;
+
+  // Methods keyed by method name.
   map<string, MethodInfo> methods = 3;
+
+  // Comment extracted from the service declaration.
   string comment = 4;
 }
 
 // Information about an RPC method.
 message MethodInfo {
+  // Method name as declared in the service.
   string name = 1;
+
+  // Fully-qualified request message name without a leading dot.
   string input_type = 2;
+
+  // Fully-qualified response message name without a leading dot.
   string output_type = 3;
+
+  // Comment extracted from the method declaration.
   string comment = 4;
+
+  // True when the client streams requests.
   bool client_streaming = 5;
+
+  // True when the server streams responses.
   bool server_streaming = 6;
 }
 
 // Information about a protobuf message.
 message MessageInfo {
+  // Message name without package qualification.
   string name = 1;
+
+  // Fully-qualified message name including its package.
   string full_name = 2;
+
+  // Fields in declaration order.
   repeated FieldInfo fields = 3;
+
+  // Oneof groups in declaration order.
   repeated OneofInfo oneofs = 4;
+
+  // Comment extracted from the message declaration.
   string comment = 5;
+
+  // True for synthesized map-entry messages.
   bool is_map_entry = 6;
 }
 
 // Information about a message field.
 message FieldInfo {
+  // Field name as declared in the message.
   string name = 1;
+
+  // Field number on the wire.
   int32 number = 2;
+
+  // Numeric google.protobuf.FieldDescriptorProto.Type value.
   int32 type = 3;
+
+  // Fully-qualified message or enum name, without a leading dot, for
+  // composite types.
   string type_name = 4;
+
+  // Numeric google.protobuf.FieldDescriptorProto.Label value.
   int32 label = 5;
+
+  // Comment extracted from the field declaration.
   string comment = 6;
+
+  // Index into the enclosing message's oneofs when the field belongs to a
+  // non-synthetic oneof group.
   optional int32 oneof_index = 7;
+
+  // True for explicit proto3 optional fields and proto2 optional-label
+  // fields.
   bool optional = 8;
+
+  // ProtoJSON field name.
   string json_name = 9;
 }
 
 // Information about a oneof group.
 message OneofInfo {
+  // Oneof group name as declared in the message.
   string name = 1;
+
+  // Comment extracted from the oneof declaration.
   string comment = 2;
+
+  // Member field names in declaration order.
   repeated string field_names = 3;
 }
 
 // Information about a protobuf enum.
 message EnumInfo {
+  // Enum name without package qualification.
   string name = 1;
+
+  // Fully-qualified enum name including its package.
   string full_name = 2;
+
+  // Enum values in declaration order.
   repeated EnumValueInfo values = 3;
+
+  // Comment extracted from the enum declaration.
   string comment = 4;
 }
 
 // Information about an enum value.
 message EnumValueInfo {
+  // Enum value name as declared.
   string name = 1;
+
+  // Numeric enum value.
   int32 number = 2;
+
+  // Comment extracted from the enum value declaration.
   string comment = 3;
 }

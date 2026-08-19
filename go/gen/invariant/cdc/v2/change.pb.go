@@ -1107,6 +1107,8 @@ func (x *FieldPath) GetSegments() []string {
 // connector's concepts into the canonical contract.
 type SourceExtension struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The extension's typed or opaque representation.
+	//
 	// Types that are valid to be assigned to Representation:
 	//
 	//	*SourceExtension_ProtoData
@@ -1372,6 +1374,8 @@ type Value struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Optional external logical type name or URI.
 	TypeName string `protobuf:"bytes,1,opt,name=type_name,json=typeName,proto3" json:"type_name,omitempty"`
+	// The value's concrete scalar or nested representation.
+	//
 	// Types that are valid to be assigned to Kind:
 	//
 	//	*Value_NullValue

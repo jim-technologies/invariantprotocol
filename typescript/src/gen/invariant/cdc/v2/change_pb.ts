@@ -565,6 +565,8 @@ export const FieldPathSchema: GenMessage<FieldPath> = /*@__PURE__*/
  */
 export type SourceExtension = Message<"invariant.cdc.v2.SourceExtension"> & {
   /**
+   * The extension's typed or opaque representation.
+   *
    * @generated from oneof invariant.cdc.v2.SourceExtension.representation
    */
   representation: {
@@ -704,6 +706,8 @@ export type Value = Message<"invariant.cdc.v2.Value"> & {
   typeName: string;
 
   /**
+   * The value's concrete scalar or nested representation.
+   *
    * @generated from oneof invariant.cdc.v2.Value.kind
    */
   kind: {

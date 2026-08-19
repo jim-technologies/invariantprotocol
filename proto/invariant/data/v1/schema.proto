@@ -168,6 +168,7 @@ message DataType {
   // Fully-qualified protobuf message/enum name where one exists.
   string protobuf_type = 1;
 
+  // The concrete logical type category.
   oneof kind {
     // A protobuf scalar value.
     PrimitiveType primitive = 2;

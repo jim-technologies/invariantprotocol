@@ -868,6 +868,8 @@ type DataType struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Fully-qualified protobuf message/enum name where one exists.
 	ProtobufType string `protobuf:"bytes,1,opt,name=protobuf_type,json=protobufType,proto3" json:"protobuf_type,omitempty"`
+	// The concrete logical type category.
+	//
 	// Types that are valid to be assigned to Kind:
 	//
 	//	*DataType_Primitive

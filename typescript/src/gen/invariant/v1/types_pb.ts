@@ -19,16 +19,22 @@ export const file_invariant_v1_types: GenFile = /*@__PURE__*/
  */
 export type ParsedDescriptor = Message<"invariant.v1.ParsedDescriptor"> & {
   /**
+   * Services keyed by fully-qualified service name.
+   *
    * @generated from field: map<string, invariant.v1.ServiceInfo> services = 1;
    */
   services: { [key: string]: ServiceInfo };
 
   /**
+   * Messages keyed by fully-qualified message name.
+   *
    * @generated from field: map<string, invariant.v1.MessageInfo> messages = 2;
    */
   messages: { [key: string]: MessageInfo };
 
   /**
+   * Enums keyed by fully-qualified enum name.
+   *
    * @generated from field: map<string, invariant.v1.EnumInfo> enums = 3;
    */
   enums: { [key: string]: EnumInfo };
@@ -48,21 +54,29 @@ export const ParsedDescriptorSchema: GenMessage<ParsedDescriptor> = /*@__PURE__*
  */
 export type ServiceInfo = Message<"invariant.v1.ServiceInfo"> & {
   /**
+   * Service name without package qualification.
+   *
    * @generated from field: string name = 1;
    */
   name: string;
 
   /**
+   * Fully-qualified service name including its package.
+   *
    * @generated from field: string full_name = 2;
    */
   fullName: string;
 
   /**
+   * Methods keyed by method name.
+   *
    * @generated from field: map<string, invariant.v1.MethodInfo> methods = 3;
    */
   methods: { [key: string]: MethodInfo };
 
   /**
+   * Comment extracted from the service declaration.
+   *
    * @generated from field: string comment = 4;
    */
   comment: string;
@@ -82,31 +96,43 @@ export const ServiceInfoSchema: GenMessage<ServiceInfo> = /*@__PURE__*/
  */
 export type MethodInfo = Message<"invariant.v1.MethodInfo"> & {
   /**
+   * Method name as declared in the service.
+   *
    * @generated from field: string name = 1;
    */
   name: string;
 
   /**
+   * Fully-qualified request message name without a leading dot.
+   *
    * @generated from field: string input_type = 2;
    */
   inputType: string;
 
   /**
+   * Fully-qualified response message name without a leading dot.
+   *
    * @generated from field: string output_type = 3;
    */
   outputType: string;
 
   /**
+   * Comment extracted from the method declaration.
+   *
    * @generated from field: string comment = 4;
    */
   comment: string;
 
   /**
+   * True when the client streams requests.
+   *
    * @generated from field: bool client_streaming = 5;
    */
   clientStreaming: boolean;
 
   /**
+   * True when the server streams responses.
+   *
    * @generated from field: bool server_streaming = 6;
    */
   serverStreaming: boolean;
@@ -126,31 +152,43 @@ export const MethodInfoSchema: GenMessage<MethodInfo> = /*@__PURE__*/
  */
 export type MessageInfo = Message<"invariant.v1.MessageInfo"> & {
   /**
+   * Message name without package qualification.
+   *
    * @generated from field: string name = 1;
    */
   name: string;
 
   /**
+   * Fully-qualified message name including its package.
+   *
    * @generated from field: string full_name = 2;
    */
   fullName: string;
 
   /**
+   * Fields in declaration order.
+   *
    * @generated from field: repeated invariant.v1.FieldInfo fields = 3;
    */
   fields: FieldInfo[];
 
   /**
+   * Oneof groups in declaration order.
+   *
    * @generated from field: repeated invariant.v1.OneofInfo oneofs = 4;
    */
   oneofs: OneofInfo[];
 
   /**
+   * Comment extracted from the message declaration.
+   *
    * @generated from field: string comment = 5;
    */
   comment: string;
 
   /**
+   * True for synthesized map-entry messages.
+   *
    * @generated from field: bool is_map_entry = 6;
    */
   isMapEntry: boolean;
@@ -170,46 +208,67 @@ export const MessageInfoSchema: GenMessage<MessageInfo> = /*@__PURE__*/
  */
 export type FieldInfo = Message<"invariant.v1.FieldInfo"> & {
   /**
+   * Field name as declared in the message.
+   *
    * @generated from field: string name = 1;
    */
   name: string;
 
   /**
+   * Field number on the wire.
+   *
    * @generated from field: int32 number = 2;
    */
   number: number;
 
   /**
+   * Numeric google.protobuf.FieldDescriptorProto.Type value.
+   *
    * @generated from field: int32 type = 3;
    */
   type: number;
 
   /**
+   * Fully-qualified message or enum name, without a leading dot, for
+   * composite types.
+   *
    * @generated from field: string type_name = 4;
    */
   typeName: string;
 
   /**
+   * Numeric google.protobuf.FieldDescriptorProto.Label value.
+   *
    * @generated from field: int32 label = 5;
    */
   label: number;
 
   /**
+   * Comment extracted from the field declaration.
+   *
    * @generated from field: string comment = 6;
    */
   comment: string;
 
   /**
+   * Index into the enclosing message's oneofs when the field belongs to a
+   * non-synthetic oneof group.
+   *
    * @generated from field: optional int32 oneof_index = 7;
    */
   oneofIndex?: number | undefined;
 
   /**
+   * True for explicit proto3 optional fields and proto2 optional-label
+   * fields.
+   *
    * @generated from field: bool optional = 8;
    */
   optional: boolean;
 
   /**
+   * ProtoJSON field name.
+   *
    * @generated from field: string json_name = 9;
    */
   jsonName: string;
@@ -229,16 +288,22 @@ export const FieldInfoSchema: GenMessage<FieldInfo> = /*@__PURE__*/
  */
 export type OneofInfo = Message<"invariant.v1.OneofInfo"> & {
   /**
+   * Oneof group name as declared in the message.
+   *
    * @generated from field: string name = 1;
    */
   name: string;
 
   /**
+   * Comment extracted from the oneof declaration.
+   *
    * @generated from field: string comment = 2;
    */
   comment: string;
 
   /**
+   * Member field names in declaration order.
+   *
    * @generated from field: repeated string field_names = 3;
    */
   fieldNames: string[];
@@ -258,21 +323,29 @@ export const OneofInfoSchema: GenMessage<OneofInfo> = /*@__PURE__*/
  */
 export type EnumInfo = Message<"invariant.v1.EnumInfo"> & {
   /**
+   * Enum name without package qualification.
+   *
    * @generated from field: string name = 1;
    */
   name: string;
 
   /**
+   * Fully-qualified enum name including its package.
+   *
    * @generated from field: string full_name = 2;
    */
   fullName: string;
 
   /**
+   * Enum values in declaration order.
+   *
    * @generated from field: repeated invariant.v1.EnumValueInfo values = 3;
    */
   values: EnumValueInfo[];
 
   /**
+   * Comment extracted from the enum declaration.
+   *
    * @generated from field: string comment = 4;
    */
   comment: string;
@@ -292,16 +365,22 @@ export const EnumInfoSchema: GenMessage<EnumInfo> = /*@__PURE__*/
  */
 export type EnumValueInfo = Message<"invariant.v1.EnumValueInfo"> & {
   /**
+   * Enum value name as declared.
+   *
    * @generated from field: string name = 1;
    */
   name: string;
 
   /**
+   * Numeric enum value.
+   *
    * @generated from field: int32 number = 2;
    */
   number: number;
 
   /**
+   * Comment extracted from the enum value declaration.
+   *
    * @generated from field: string comment = 3;
    */
   comment: string;

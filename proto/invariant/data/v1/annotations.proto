@@ -42,6 +42,7 @@ message FixedListOptions {
 // It deliberately contains no renderer-specific type strings or physical
 // storage policy.
 message FieldOptions {
+  // The logical refinement of the field's scalar or element carrier type.
   oneof semantic_type {
     // A string containing canonical fixed-precision decimal text.
     DecimalOptions decimal = 1;
@@ -64,9 +65,11 @@ message FieldOptions {
 // extension-number space. The schema compiler rejects foreign reuse visible in
 // a supplied descriptor image.
 extend google.protobuf.MessageOptions {
+  // Marks the annotated message as a durable dataset root.
   DatasetOptions dataset = 51974;
 }
 
 extend google.protobuf.FieldOptions {
+  // Refines the annotated field's carrier type with portable logical meaning.
   FieldOptions field = 51974;
 }

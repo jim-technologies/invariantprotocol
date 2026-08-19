@@ -128,6 +128,8 @@ export const FixedListOptionsSchema: GenMessage<FixedListOptions> = /*@__PURE__*
  */
 export type FieldOptions = Message<"invariant.data.v1.FieldOptions"> & {
   /**
+   * The logical refinement of the field's scalar or element carrier type.
+   *
    * @generated from oneof invariant.data.v1.FieldOptions.semantic_type
    */
   semanticType: {
@@ -173,12 +175,16 @@ export const FieldOptionsSchema: GenMessage<FieldOptions> = /*@__PURE__*/
   messageDesc(file_invariant_data_v1_annotations, 5);
 
 /**
+ * Marks the annotated message as a durable dataset root.
+ *
  * @generated from extension: invariant.data.v1.DatasetOptions dataset = 51974;
  */
 export const dataset: GenExtension<MessageOptions, DatasetOptions> = /*@__PURE__*/
   extDesc(file_invariant_data_v1_annotations, 0);
 
 /**
+ * Refines the annotated field's carrier type with portable logical meaning.
+ *
  * @generated from extension: invariant.data.v1.FieldOptions field = 51974;
  */
 export const field: GenExtension<FieldOptions$1, FieldOptions> = /*@__PURE__*/
