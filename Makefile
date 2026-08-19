@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build validate validate-static version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
+.PHONY: help build validate validate-static release version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
@@ -30,6 +30,9 @@ parity: ## Validate and report the cross-language feature contract.
 
 parity-release: ## Reject a release while any core feature lacks four-language support.
 	python3 scripts/check_feature_parity.py --release
+
+release: ## Verify release readiness from the root VERSION; refuses a dirty or unpushed tree.
+	scripts/release.sh
 
 git-install-check: ## Install every language package from the current Git commit.
 	scripts/check_git_installs.sh
