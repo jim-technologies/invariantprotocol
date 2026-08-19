@@ -10,6 +10,14 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+### Changed
+
+- **The published proto module enforces the `COMMENTS` lint category.**
+  `proto/buf.yaml` lints `STANDARD` plus `COMMENTS`, and every public message,
+  field, oneof, and extension in the `invariant.*` packages carries a
+  documentation comment. The vendored CloudEvents file keeps its byte-for-byte
+  upstream form under a scoped oneof-comment exception.
+
 ## v0.16.1 — 2026-08-18
 
 ### Changed
