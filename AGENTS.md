@@ -486,7 +486,7 @@ and runtime projections are derived from the exact same compiled graph.
 flox activate
 make generate        # regenerate proto stubs and descriptor artifacts
 make build           # build every language package and command
-make validate        # the full gate: static checks, generated-code staleness, and maintained coverage floors
+make validate        # the full gate: static checks, generated-code staleness, coverage floors, Go race detector
 make security        # secrets, integrity, and vulnerability checks
 make integration     # Local LanceDB plus Git/Connect and Docker-backed PostgreSQL/ClickHouse
 make parity-release  # strict portable-feature gate before one root tag
@@ -498,9 +498,9 @@ The root `VERSION` is the release version for every language package. CI checks
 that package metadata and runtime version constants stay synchronized.
 Releases use one repository tag, `vX.Y.Z`; do not create new language-prefixed
 tags.
-Push the release commit to `main`, wait for its CI workflow, then create the
-annotated tag. Tag CI repeats the full release gates and verifies clean Git
-installs from that exact tag.
+Push the release commit to `main`, wait for its CI gate, then create the
+annotated tag. Tag pushes rerun the same gate; the scheduled audit workflow
+verifies clean Git installs and can be dispatched on demand.
 
 Invariant-owned packages are distributed only from Git. Do not publish them to,
 or document installation from, PyPI, the npm registry, crates.io, or another
@@ -510,7 +510,7 @@ registry guards enabled where the ecosystem supports them (`private: true` for
 npm and `publish = false` for Cargo, plus the `Private :: Do Not Upload`
 Python classifier). Repository policy and the absence of publication
 automation remain additional guardrails. Keep the clean Git-install check for
-all four language packages in CI.
+all four language packages in the scheduled audit workflow.
 
 Dependency roots and lockfiles:
 

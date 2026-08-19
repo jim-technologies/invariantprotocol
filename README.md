@@ -745,7 +745,7 @@ dependency, or a `protoc -I` path) so
 flox activate
 make generate
 make build
-make validate     # the full gate: static checks, generated-code staleness, and coverage-gated suites
+make validate     # the full gate: static checks, generated-code staleness, coverage-gated suites, Go race detector
 make security
 make integration  # Includes local LanceDB plus Docker-backed PostgreSQL/Atlas and ClickHouse
 make parity-release
@@ -759,22 +759,25 @@ Build tools and language-specific ecosystem bridges are classified separately
 instead of being duplicated for artificial symmetry. See
 [feature parity](docs/feature-parity.md) and [runtime stack policy](docs/runtime-stacks.md).
 
-Release commits are pushed to `main` and must complete the full CI workflow
-before their single annotated `vX.Y.Z` tag is created. Tag pushes repeat the
-complete release gates and verify clean Git installs from that exact tag.
+Release commits are pushed to `main` and must complete the CI gate before
+their single annotated `vX.Y.Z` tag is created. Tag pushes rerun the same
+gate; the audit workflow verifies clean Git installs and can be dispatched
+on demand.
 
 The verb grammar follows [MAKEFILE-CONTRACT.md](MAKEFILE-CONTRACT.md):
-`make validate` is the single gate, and CI runs its slices — static checks,
-the coverage-gated suites, and generated-code staleness — as parallel jobs.
+`make validate` is the single gate, and CI runs exactly
+`flox activate -- make validate` — every toolchain comes from the Flox
+manifest, so CI cannot drift from the local gate.
 `make release` checks release readiness from the root `VERSION` and refuses a
 dirty or unpushed tree; it never publishes to language registries, because
 Invariant packages are deliberately Git-distributed only.
 
-Beyond the gate, CI also runs dependency and secret
-audits, a Go race-detector pass, clean Git installs, official-client Connect
-interoperability, a local LanceDB lifecycle, PostgreSQL/Atlas
-apply-inspect-diff integration, and a real ClickHouse DDL/value round trip.
-Pull requests also run protobuf breaking checks. Dependency upgrades are
+Network-dependent verification lives in the secretless weekly `audit`
+workflow (also runnable on demand): dependency and secret audits, clean Git
+installs, official-client Connect interoperability, a local LanceDB
+lifecycle, PostgreSQL/Atlas apply-inspect-diff integration, and a real
+ClickHouse DDL/value round trip. Protobuf breaking checks against
+`origin/main` run locally with `make breaking`. Dependency upgrades are
 intentional and review-driven; the repository does not require a scheduled
 dependency job.
 
