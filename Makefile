@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build check quality version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
+.PHONY: help build validate validate-static version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
@@ -13,11 +13,11 @@ build: node_modules/.package-lock.json ## Build every language package and comma
 	cd rust && cargo build --workspace --locked
 	npm run build
 
-# Single local entry point. CI runs quality and language coverage as separate
-# jobs so failures are easy to identify and the four suites execute in parallel.
-check: quality coverage ## Run deterministic quality checks, tests, and coverage gates.
+# The single gate (see MAKEFILE-CONTRACT.md). CI runs the same slices as
+# separate jobs so failures are easy to identify and the suites run in parallel.
+validate: validate-static verify-generate coverage ## Run the full gate: static checks, generated-code staleness, and coverage-gated tests.
 
-quality: version-check parity fmt-check lint typecheck proto-comments public-surface go-mod-check ## Run formatting, lint, type, schema, and policy checks.
+validate-static: version-check parity fmt-check lint typecheck proto-comments public-surface go-mod-check ## Run the static slice of validate: formatting, lint, type, schema, and policy checks.
 
 node_modules/.package-lock.json: package-lock.json package.json
 	npm ci --ignore-scripts

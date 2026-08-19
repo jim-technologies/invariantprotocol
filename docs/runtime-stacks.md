@@ -102,7 +102,7 @@ encoding, covering unary success, server streaming, and a canonical error.
    ecosystem checksums are validated where the package manager supports them.
 5. Run secret scanning and vulnerability audits independently from unit tests.
 6. Upgrade intentionally with `make deps`, review generated lockfile changes,
-   then run `make check`, `make security`, and `make integration`.
+   then run `make validate`, `make security`, and `make integration`.
 
 The cross-language semantic release gate is documented in
 [feature parity](feature-parity.md).

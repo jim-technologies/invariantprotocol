@@ -745,7 +745,7 @@ dependency, or a `protoc -I` path) so
 flox activate
 make generate
 make build
-make check        # quality checks and coverage-gated suites for all four languages
+make validate     # the full gate: static checks, generated-code staleness, and coverage-gated suites
 make security
 make integration  # Includes local LanceDB plus Docker-backed PostgreSQL/Atlas and ClickHouse
 make parity-release
@@ -763,8 +763,15 @@ Release commits are pushed to `main` and must complete the full CI workflow
 before their single annotated `vX.Y.Z` tag is created. Tag pushes repeat the
 complete release gates and verify clean Git installs from that exact tag.
 
-CI runs quality checks, four coverage-gated suites, dependency and secret
-audits, generated-code checks, clean Git installs, official-client Connect
+The verb grammar follows [MAKEFILE-CONTRACT.md](MAKEFILE-CONTRACT.md):
+`make validate` is the single gate, and CI runs its slices — static checks,
+the coverage-gated suites, and generated-code staleness — as parallel jobs.
+`make release` checks release readiness from the root `VERSION` and refuses a
+dirty or unpushed tree; it never publishes to language registries, because
+Invariant packages are deliberately Git-distributed only.
+
+Beyond the gate, CI also runs dependency and secret
+audits, a Go race-detector pass, clean Git installs, official-client Connect
 interoperability, a local LanceDB lifecycle, PostgreSQL/Atlas
 apply-inspect-diff integration, and a real ClickHouse DDL/value round trip.
 Pull requests also run protobuf breaking checks. Dependency upgrades are

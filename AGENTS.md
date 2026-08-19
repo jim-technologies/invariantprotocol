@@ -486,7 +486,7 @@ and runtime projections are derived from the exact same compiled graph.
 flox activate
 make generate        # regenerate proto stubs and descriptor artifacts
 make build           # build every language package and command
-make check           # quality checks and maintained coverage floors for all four languages
+make validate        # the full gate: static checks, generated-code staleness, and maintained coverage floors
 make security        # secrets, integrity, and vulnerability checks
 make integration     # Local LanceDB plus Git/Connect and Docker-backed PostgreSQL/ClickHouse
 make parity-release  # strict portable-feature gate before one root tag

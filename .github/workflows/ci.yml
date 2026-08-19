@@ -15,8 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  quality:
-    name: Quality (format, lint, types, policy)
+  static-checks:
+    name: Static checks (format, lint, types, policy)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -24,7 +24,7 @@ jobs:
       - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
       - uses: flox/activate-action@7065dcbe5583b7b015f07a8ebd49d7266e3053e8 # v1
         with:
-          command: make quality
+          command: make validate-static
 
   test:
     name: Test and coverage (${{ matrix.language }})
