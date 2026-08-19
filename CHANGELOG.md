@@ -10,6 +10,20 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.16.1 — 2026-08-18
+
+### Changed
+
+- **The build and CI grammar follows the open-source Makefile contract.**
+  `MAKEFILE-CONTRACT.md` defines the required verbs. The gate verb `check` is
+  renamed `validate` with no alias, and the gate now also verifies
+  generated-code staleness and runs the Go race detector. CI is one secretless
+  job running exactly `flox activate -- make validate`; dependency and secret
+  audits plus the external integration boundaries moved to a weekly,
+  on-demand-dispatchable `audit` workflow, and protobuf breaking checks run
+  locally with `make breaking`. `make release` is a new fail-closed local
+  release-readiness guard; packages remain Git-distributed only.
+
 ## v0.16.0 — 2026-08-17
 
 ### Added
