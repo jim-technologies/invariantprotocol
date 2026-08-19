@@ -104,6 +104,8 @@ PUBLIC_PACKAGE_PATTERNS = (
     ),
 )
 
+PUBLIC_ORG_PHRASES = ("jim-technologies open-source repositories",)
+
 PRIVATE_TERMS = (
     "med" + "allion",
     "temporal" + "ess",
@@ -132,6 +134,8 @@ def allowed(label: str, line: str) -> bool:
     if label != "jim-technologies":
         return False
     lower = line.lower()
+    if any(phrase in lower for phrase in PUBLIC_ORG_PHRASES):
+        return True
     return any(pattern.search(lower) for pattern in PUBLIC_PACKAGE_PATTERNS)
 
 
