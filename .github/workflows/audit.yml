@@ -1,0 +1,46 @@
+name: audit
+
+"on":
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # gitleaks scans the full git history.
+          fetch-depth: 0
+      - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
+        with:
+          disable-metrics: "true"
+      - name: Run the security audit
+        env:
+          FLOX_DISABLE_METRICS: "true"
+        run: flox activate -- make security
+
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # git-install-check refuses shallow clones and installs from history.
+          fetch-depth: 0
+      - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
+        with:
+          disable-metrics: "true"
+      - name: Run the integration boundaries
+        env:
+          FLOX_DISABLE_METRICS: "true"
+        run: flox activate -- make integration
