@@ -10,3 +10,6 @@ lint:
       # Vendored byte-for-byte from the upstream CloudEvents v1.0.2 schema,
       # whose two oneofs carry no comments; the file stays unmodified.
       - io/cloudevents/v1/cloudevents.proto
+breaking:
+  use:
+    - FILE
