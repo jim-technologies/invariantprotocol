@@ -520,7 +520,9 @@ Dependency roots and lockfiles:
   Atlas). Flox
   may provide a bootstrap Go command while `GOTOOLCHAIN` selects the exact
   checksum-verified patch release required by `go.mod` when the Flox catalog
-  lags a security release.
+  lags a security release. The manifest carries no `buf` version constraint;
+  the Flox lockfile (`.flox/env/manifest.lock`, currently buf 1.71.0) is the
+  pin.
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev
   dep, including pytest-cov. `uv run` resolves against this. PyArrow belongs in
   the optional `data` extra and the dev test group; importing the core RPC
