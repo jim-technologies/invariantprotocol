@@ -149,6 +149,8 @@ r_ibfk='ibfk'"rich"
 r_deep='ai-deep-'"research"
 r_care='pj-senior-'"care-centre"
 r_gha='gh'"actions"
+r_ghd='gh'"drive"
+r_vps='jing'"hong-vps"
 
 i_otel="${mdl}"'-otel-agent'
 i_nodeobs="${mdl}"'-node-observability'
@@ -201,12 +203,12 @@ ne='($|[^0-9.])'
 PSC_NCAT=7
 
 PSC_C1_NAME='private-repo'
-PSC_C1_CI="${b}(${mdl}-(cloud|iam|${onl}|storage|compute|os|connect|terminal|machine)|${r_vault}|${r_orgrepo}|${r_scrape}|${r_ida}|${r_field}|${r_tick}|${r_auto}|${r_back}|${r_ibfk}|${r_deep}|${r_care}|${r_gha})${e}"
+PSC_C1_CI="${b}(${mdl}-(cloud|iam|${onl}|storage|compute|os|connect|terminal|machine)|${r_vault}|${r_orgrepo}|${r_scrape}|${r_ida}|${r_field}|${r_tick}|${r_auto}|${r_back}|${r_ibfk}|${r_deep}|${r_care}|${r_gha}|${r_ghd}|${r_vps})${e}"
 PSC_C1_CI="${PSC_C1_CI}|${hb}[a-z0-9][a-z0-9-]*\\.${jtc}\\.(xyz|io|com|dev)${he}"
 PSC_C1_CI="${PSC_C1_CI}|github\\.com[:/]jim-technologies/[a-z0-9._-]+"
 PSC_C1_CI="${PSC_C1_CI}|\\.\\./(${mdl}-[a-z0-9-]+|${jtc}[a-z0-9-]*)"
 PSC_C1_CS=''
-PSC_C1_PROBE="clone ${mdl}-cloud today${US}vendored from ../${mdl}-iam${US}host www.${jtc}.xyz${US}repo git""hub.com/jim-technologies/not-public-yet${US}the ${r_ida} exporter${US}${r_care} rota${US}${r_vault} mirror"
+PSC_C1_PROBE="clone ${mdl}-cloud today${US}vendored from ../${mdl}-iam${US}host www.${jtc}.xyz${US}repo git""hub.com/jim-technologies/not-public-yet${US}the ${r_ida} exporter${US}${r_care} rota${US}${r_vault} mirror${US}bundles land in ${r_ghd}${US}deployed on the ${r_vps} box"
 PSC_C1_FIX='Name no private repository, no private host, and no organisation repository that is not public. Describe the capability instead, or add a justified rule to .public-surface-allow.'
 
 PSC_C2_NAME='internal-infra'
