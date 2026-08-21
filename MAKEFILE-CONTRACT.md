@@ -40,7 +40,7 @@ to.
 
 | Verb | Where | Meaning |
 |---|---|---|
-| `make validate` | always | The gate, above: the public-surface guard and its self-test, format and lint checks, type checks, generated-output staleness, and `test`. A repository adds its own checks to this list; it never subtracts. |
+| `make validate` | always | The gate, above. At minimum it runs the public-surface guard, the guard's self-test, and `test`. Everything else a repository can check offline — formatting, lint, types, generated-output staleness, its own policy checks — belongs in the gate and nowhere else: a repository adds checks to it, and never keeps one out of it. |
 | `make test` | always | The full suite for everything the repository ships. What the gate runs is offline and hermetic — no network, no credential, no service started by hand; anything needing those is a separate opt-in tier the gate never runs. Polyglot repositories may add `test-<lang>` sub-verbs, and `test` runs them all. |
 | `make fmt` | where the repository formats code | Rewrite formatting in place, every language in the repository. `validate` checks formatting and never rewrites it. |
 | `make build` | where the repository produces artifacts | Produce them locally, from the tree as committed. |
