@@ -21,6 +21,15 @@ router: targets delegate to native tooling or guard; logic lives in scripts.
 infrastructure names, or references to private repositories appear anywhere
 in code, docs, examples, or the Makefile itself.
 
+The guard is `scripts/public-surface-check`, one shared implementation across
+every public repository. It scans three streams: the content of every tracked
+file, every tracked path, and the commit messages a push would publish. It
+self-validates before every scan, so it cannot pass by having stopped
+checking, and `scripts/public-surface-check-test` proves that from the same
+verb. Exceptions are one justified line each in `.public-surface-allow`;
+denials this repository adds beyond the fleet baseline live in
+`.public-surface-deny`. Neither is made by editing the shared guard.
+
 ## Explicitly FORBIDDEN
 
 - `make deploy` — libraries deploy nowhere

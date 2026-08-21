@@ -22,6 +22,19 @@ but never silent wire-behavior regressions.
   documentation comment. The vendored CloudEvents file keeps its byte-for-byte
   upstream form under a scoped oneof-comment exception.
 
+- **The public-surface guard is now the shared fleet implementation.**
+  `scripts/public-surface-check` replaces `scripts/check_public_surface.py`.
+  It scans the content of every tracked file, every tracked path, and the
+  commit messages a push would publish, and it self-validates before each scan
+  so it cannot pass by having stopped checking.
+  `scripts/public-surface-check-test` runs from the same `public-surface` verb.
+  Exceptions are justified one-liners in `.public-surface-allow`; the terms
+  this repository denies on top of the fleet baseline are in
+  `.public-surface-deny`.
+
+- **The npm `repository.url` is the HTTPS remote**, which is the form every
+  reader of a public repository can clone.
+
 ## v0.16.1 — 2026-08-18
 
 ### Changed

@@ -1,0 +1,376 @@
+#!/bin/sh
+# public-surface-check-test - proof that the guard catches what it claims to.
+#
+# A guard that checks nothing is green forever, which is exactly how a codename
+# lived in public documentation for four months. This test plants one violation
+# of every deny category in a throwaway fixture repository, asserts the guard
+# catches each one, asserts it stays quiet on a clean fixture that carries every
+# false positive earlier audits reported, and asserts the guard scans itself and
+# the commit messages a push would publish.
+#
+# Run it as `scripts/public-surface-check-test`, from the same `validate` verb
+# that runs the guard. It needs no network and nothing beyond POSIX sh, git,
+# awk and tr.
+#
+# Every planted term is assembled from fragments, for the same reason the guard
+# assembles its deny list from fragments: this file lives in a public repository
+# and is scanned by the guard it tests.
+
+set -eu
+LC_ALL=C
+export LC_ALL
+
+here=$(cd "$(dirname "$0")" && pwd)
+guard="$here/public-surface-check"
+[ -f "$guard" ] || {
+	printf 'public-surface-check-test: guard not found next to this test: %s\n' "$guard" >&2
+	exit 2
+}
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/psc-test.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+passed=0
+failed=0
+out="$tmp/out"
+
+pass() {
+	passed=$((passed + 1))
+	printf 'ok   %s\n' "$1"
+}
+
+fail() {
+	failed=$((failed + 1))
+	printf 'FAIL %s\n' "$1"
+	[ -s "$out" ] && sed 's/^/       | /' "$out" || true
+}
+
+# ---------------------------------------------------------------------------
+# Fragments: nothing planted below is a contiguous literal in this file.
+# ---------------------------------------------------------------------------
+mdl='med'"allion"
+jtc='jim'"tech"
+onlc='Onto'"logy"
+cmp='com'"pass"
+priv_repo="${mdl}"'-cloud'
+priv_repo2="${mdl}"'-iam'
+priv_infra="${mdl}"'db'
+priv_host='data.'"${jtc}"'.xyz'
+own_pkg="${mdl}"'.connect.v1'
+cluster_dns='api.gateway.svc.clus'"ter.local"
+priv_ip='10.'"41.7.9"
+doc_ip='192.'"168.5.21"
+tok='gh'"p_0123456789abcdefghijklmnopqrstuvwxyz"
+entropy_assign='api_key = "'"kQ7bZ2mR9tX4vL8nP1sW6yD3jF5hG0cA"'"'
+placeholder_assign='api_key = "'"your-api-key-goes-here-example"'"'
+integrity_line='  key: sha'"512-Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZmdo"
+sops_path='.so'"ps.yaml"
+ssh_remote='git@'"github.com:someone/private-thing.git"
+deny_term='blue'"widget"
+
+# ---------------------------------------------------------------------------
+# The clean fixture. It carries the guard, this test, an allowlist with
+# justified rules, and every false positive earlier audits reported.
+# ---------------------------------------------------------------------------
+clean="$tmp/clean"
+mkdir -p "$clean/scripts" "$clean/docs" "$clean/proto"
+cp "$guard" "$clean/scripts/public-surface-check"
+cp "$0" "$clean/scripts/public-surface-check-test"
+chmod +x "$clean/scripts/public-surface-check" "$clean/scripts/public-surface-check-test"
+
+cat >"$clean/README.md" <<EOF
+# example package
+
+Published by the jim-technologies organisation as
+github.com/jim-technologies/${mdl}-sdk. Docs live at https://${jtc}.xyz and the
+hosted API is https://${mdl}.${jtc}.io.
+
+Point the client at https://api.example.com, or at 127.0.0.1 and localhost
+during development. Reserved names such as example.org, example.test,
+example.invalid and acme.com are fine in documentation, and so is the
+documentation range 192.0.2.1 and the public address 172.15.0.1.
+EOF
+
+cat >"$clean/docs/notes.md" <<EOF
+The ontology of the domain model is described here in the generic sense of the
+word. Clients connect to the terminal and press enter. A gRPC handler returns
+codes.Internal on failure. The storage-key is rotated quarterly, run id r2-14
+belongs to logisticsOps, and generated python imports read
+"from google.protobuf.internal import builder as _builder".
+
+Palantir ${cmp} is a third-party product, named here for comparison, and the
+allowlist says so.
+EOF
+
+cat >"$clean/docs/vendored-validate.md" <<EOF
+IPv4 addresses are expected in dotted decimal format, for example "${doc_ip}"
+(vendored upstream text, kept byte for byte).
+EOF
+
+cat >"$clean/proto/api.proto" <<EOF
+syntax = "proto3";
+package ${own_pkg};
+EOF
+
+cat >"$clean/pkg.py" <<'EOF'
+def put(self, namespace: str, key: str) -> None:
+    """A type annotation, not a cluster namespace."""
+EOF
+
+cat >"$clean/lock.yaml" <<EOF
+$integrity_line
+$placeholder_assign
+EOF
+
+cat >"$clean/.public-surface-allow" <<EOF
+# category | path-glob | reason | pattern
+codename | proto/* | this package namespace is the public API this repository exists to publish | ${mdl}\\.connect\\.v1
+codename | docs/notes.md | Palantir ships a product of this name; this is the third-party one, not ours | palantir com%70ass
+cluster-shape | docs/vendored-validate.md | vendored upstream documentation ships this example address | 192\\.168\\.[0-9]{1,3}\\.[0-9]{1,3}
+EOF
+
+(
+	cd "$clean"
+	git init -q .
+	git add -A
+	git -c user.email=test@example.com -c user.name=test commit -qm "initial import"
+	git update-ref refs/remotes/origin/main HEAD
+)
+
+# ---------------------------------------------------------------------------
+# Helpers. Test 1 proves the fixture is clean, so in every later case any
+# finding at all comes from what that case planted.
+# ---------------------------------------------------------------------------
+fixture() { # fixture <name> -> path to a fresh copy of the clean fixture
+	rm -rf "${tmp:?}/$1"
+	cp -R "$clean" "$tmp/$1"
+	printf '%s' "$tmp/$1"
+}
+
+run() { # run <dir> [VAR=value...] -> status in $status, output in $out
+	dir=$1
+	shift
+	status=0
+	(cd "$dir" && env "$@" sh scripts/public-surface-check >"$out" 2>&1) || status=$?
+	return 0
+}
+
+plant() { # plant <dir> <path> <text> - tracked, because the guard scans tracked files
+	mkdir -p "$(dirname "$1/$2")"
+	printf '%s\n' "$3" >>"$1/$2"
+	(cd "$1" && git add -A)
+}
+
+commit_in() { # commit_in <dir> <subject> <body>
+	(
+		cd "$1"
+		git add -A
+		git -c user.email=test@example.com -c user.name=test commit -q --allow-empty -m "$2" -m "$3"
+	)
+}
+
+expect_clean() { # expect_clean <dir> <label>
+	run "$1"
+	if [ "$status" -eq 0 ]; then pass "$2"; else fail "$2 (expected exit 0, got $status)"; fi
+}
+
+expect_finding() { # expect_finding <dir> <category> <location fragment> <label>
+	run "$1"
+	if [ "$status" -eq 1 ] && grep -q "$3" "$out" && grep -q " $2 " "$out"; then
+		pass "$4"
+	else
+		fail "$4 (expected exit 1 with category $2 at $3, got $status)"
+	fi
+}
+
+expect_cannot_run() { # expect_cannot_run <dir> <label>
+	run "$1"
+	if [ "$status" -eq 2 ] && grep -q 'cannot run' "$out"; then
+		pass "$2"
+	else
+		fail "$2 (expected exit 2, got $status)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# 1. the clean fixture, which doubles as the false-positive corpus
+# ---------------------------------------------------------------------------
+expect_clean "$clean" "clean fixture passes, with the guard and this test tracked inside it"
+
+# ---------------------------------------------------------------------------
+# 2..11 one violation per deny category, in tracked file content
+# ---------------------------------------------------------------------------
+d=$(fixture c-private-repo)
+plant "$d" docs/topology.md "The importer reads from $priv_repo nightly."
+expect_finding "$d" private-repo docs/topology.md "private repository name in file content is caught"
+
+d=$(fixture c-host)
+plant "$d" docs/topology.md "Metrics ship to $priv_host every minute."
+expect_finding "$d" private-repo docs/topology.md "private hostname under the brand domain is caught"
+
+d=$(fixture c-infra)
+plant "$d" docs/topology.md "Rows land in $priv_infra before rollup."
+expect_finding "$d" internal-infra docs/topology.md "internal infrastructure name in file content is caught"
+
+d=$(fixture c-codename)
+plant "$d" docs/topology.md "The $cmp rollout starts in March."
+expect_finding "$d" codename docs/topology.md "first-party codename in file content is caught"
+
+d=$(fixture c-codename-caps)
+plant "$d" docs/topology.md "$onlc objects and links are versioned."
+expect_finding "$d" codename docs/topology.md "capitalised codename is caught where the generic lower-case word is not"
+
+d=$(fixture c-cluster-ip)
+plant "$d" docs/topology.md "The collector listens on $priv_ip:9090."
+expect_finding "$d" cluster-shape docs/topology.md "private address range is caught"
+
+d=$(fixture c-cluster-dns)
+plant "$d" docs/topology.md "Dial $cluster_dns from inside the cluster."
+expect_finding "$d" cluster-shape docs/topology.md "cluster DNS name is caught"
+
+d=$(fixture c-credential)
+plant "$d" docs/topology.md "Use token $tok for the release job."
+expect_finding "$d" credential-shape docs/topology.md "provider token shape is caught"
+
+d=$(fixture c-entropy)
+plant "$d" config.yaml "$entropy_assign"
+expect_finding "$d" credential-shape config.yaml "high-entropy assignment to a secret-like name is caught"
+
+d=$(fixture c-remote)
+plant "$d" docs/topology.md "Clone with $ssh_remote first."
+expect_finding "$d" private-remote docs/topology.md "ssh git remote is caught"
+
+# ---------------------------------------------------------------------------
+# 12..13 tracked paths, not only content
+# ---------------------------------------------------------------------------
+d=$(fixture c-path)
+plant "$d" "docs/$priv_repo2-migration.md" "Nothing private in the body."
+expect_finding "$d" private-repo "path " "private repository name in a tracked path is caught"
+
+d=$(fixture c-secret-store)
+plant "$d" "$sops_path" "not really encrypted"
+expect_finding "$d" secret-store "path " "encrypted secret store path is caught"
+
+# ---------------------------------------------------------------------------
+# 14..17 commit messages: the hole none of the four implementations covered
+# ---------------------------------------------------------------------------
+d=$(fixture c-commit)
+commit_in "$d" "docs: describe the importer" "Mirrors the layout used in $priv_repo."
+expect_finding "$d" private-repo "commit " "private name in an unpushed commit message body is caught"
+
+d=$(fixture c-commit-subject)
+commit_in "$d" "chore: sync from $priv_repo" ""
+expect_finding "$d" private-repo "commit " "private name in an unpushed commit subject is caught"
+
+d=$(fixture c-commit-published)
+commit_in "$d" "docs: describe the importer" "Mirrors the layout used in $priv_repo."
+(cd "$d" && git update-ref refs/remotes/origin/main HEAD)
+expect_clean "$d" "commit messages already on the upstream branch are outside the default range"
+
+run "$d" PUBLIC_SURFACE_FULL_HISTORY=1
+if [ "$status" -eq 1 ] && grep -q 'commit ' "$out"; then
+	pass "the full-history audit override reaches commits that are already published"
+else
+	fail "the full-history audit override reaches commits that are already published (got $status)"
+fi
+
+# ---------------------------------------------------------------------------
+# 18..19 the guard and its test are inside their own scan
+# ---------------------------------------------------------------------------
+d=$(fixture c-self-guard)
+plant "$d" scripts/public-surface-check "# note: mirrors the $priv_repo layout"
+expect_finding "$d" private-repo "scripts/public-surface-check:" "the guard scans itself and does not exclude its own file"
+
+d=$(fixture c-self-test)
+plant "$d" scripts/public-surface-check-test "# note: mirrors the $priv_repo layout"
+expect_finding "$d" private-repo "scripts/public-surface-check-test:" "the guard scans its own test file too"
+
+# ---------------------------------------------------------------------------
+# 20..25 the allowlist mechanism
+# ---------------------------------------------------------------------------
+d=$(fixture c-allow-scope)
+plant "$d" docs/other.md "package $own_pkg is referenced here"
+expect_finding "$d" codename docs/other.md "an allow rule scoped to a path does not excuse the same text elsewhere"
+
+d=$(fixture c-allow-narrow)
+plant "$d" docs/notes.md "Palantir $cmp and, separately, the $cmp programme"
+expect_finding "$d" codename docs/notes.md "an allow rule masks only the text it names, not the rest of the line"
+
+d=$(fixture c-allow-noreason)
+printf '%s\n' 'codename | * |  | somepattern' >>"$d/.public-surface-allow"
+expect_cannot_run "$d" "an allow rule without a reason stops the guard rather than weakening it"
+
+d=$(fixture c-allow-unknown)
+printf '%s\n' 'not-a-category | * | reason enough for review | somepattern' >>"$d/.public-surface-allow"
+expect_cannot_run "$d" "an allow rule naming an unknown category is rejected"
+
+d=$(fixture c-allow-broad)
+printf '%s\n' '* | * | this reason is long enough | .*' >>"$d/.public-surface-allow"
+expect_cannot_run "$d" "an allow rule broad enough to disable a category is rejected"
+
+d=$(fixture c-allow-malformed)
+printf '%s\n' 'codename | * | missing the pattern field' >>"$d/.public-surface-allow"
+expect_cannot_run "$d" "a malformed rule line is rejected"
+
+# ---------------------------------------------------------------------------
+# 26..27 the per-repository deny file
+# ---------------------------------------------------------------------------
+d=$(fixture c-deny)
+printf '%s\n' "brand-isolation | * | this product must not name the platform brand | %62luewidget" >>"$d/.public-surface-deny"
+plant "$d" docs/topology.md "Built on $deny_term for now."
+expect_finding "$d" brand-isolation docs/topology.md "a repository deny rule fires, and its hex escape decodes"
+
+d=$(fixture c-deny-noreason)
+printf '%s\n' 'brand-isolation | * | short | %62luewidget' >>"$d/.public-surface-deny"
+expect_cannot_run "$d" "a deny rule without a real reason stops the guard"
+
+# ---------------------------------------------------------------------------
+# 28..29 known false positives stay quiet, placeholders are not credentials
+# ---------------------------------------------------------------------------
+d=$(fixture c-fp-placeholder)
+plant "$d" config.yaml "$placeholder_assign"
+plant "$d" config.yaml "$integrity_line"
+expect_clean "$d" "obvious placeholders and lockfile digests are not reported as credentials"
+
+d=$(fixture c-fp-generic)
+plant "$d" docs/generic.md "codes.Internal, storage-key, logisticsOps, run r2-14, google.protobuf.internal"
+plant "$d" docs/generic.md "the ontology of a domain, connect to the terminal, package version 10.2.3"
+expect_clean "$d" "third-party and generic collisions are not reported"
+
+# ---------------------------------------------------------------------------
+# 30..33 the output contract
+# ---------------------------------------------------------------------------
+d=$(fixture c-redact)
+plant "$d" docs/topology.md "The importer reads from $priv_repo nightly."
+run "$d"
+if grep -q "$priv_repo" "$out"; then
+	fail "findings are redacted by default so a public log does not republish them"
+else
+	pass "findings are redacted by default so a public log does not republish them"
+fi
+
+run "$d" PUBLIC_SURFACE_SHOW_MATCH=1
+if grep -q "$priv_repo" "$out"; then
+	pass "PUBLIC_SURFACE_SHOW_MATCH=1 prints the match in full for local triage"
+else
+	fail "PUBLIC_SURFACE_SHOW_MATCH=1 prints the match in full for local triage"
+fi
+
+run "$d"
+if grep -q 'docs/topology.md:1' "$out" && grep -q 'what to do' "$out"; then
+	pass "output names the file and line and says what to do"
+else
+	fail "output names the file and line and says what to do"
+fi
+
+status=0
+(cd "$clean" && sh scripts/public-surface-check --help >"$out" 2>&1) || status=$?
+if [ "$status" -eq 0 ] && grep -q 'Deny categories:' "$out"; then
+	pass "--help documents the categories and the allowlist format"
+else
+	fail "--help documents the categories and the allowlist format"
+fi
+
+# ---------------------------------------------------------------------------
+printf '\n%d passed, %d failed\n' "$passed" "$failed"
+[ "$failed" -eq 0 ] || exit 1

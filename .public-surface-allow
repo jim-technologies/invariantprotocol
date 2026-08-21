@@ -1,0 +1,54 @@
+# .public-surface-allow - justified exceptions to scripts/public-surface-check.
+#
+# One rule per line, four fields:
+#
+#     category | path-glob | reason | pattern
+#
+#   category    a deny category (private-repo, internal-infra, codename,
+#               cluster-shape, credential-shape, secret-store, private-remote,
+#               or a category this repository adds in .public-surface-deny)
+#               or `*` for every category
+#   path-glob   `*` for the whole repository, or a glob over the
+#               repository-relative path. Use `COMMIT` for commit messages.
+#   reason      required, at least 8 characters: why the text is legitimately
+#               public, not what the pattern does.
+#   pattern     POSIX extended regular expression. `%HH` is a hex escape.
+#
+# A rule masks exactly the text its pattern matches, only under the paths its
+# glob matches, only for its category. Everything else on the same line is
+# still checked. A rule broad enough to disable a category is rejected.
+
+# ---------------------------------------------------------------------------
+# Vendored upstream sources, kept byte for byte from protovalidate, whose own
+# doc comments carry RFC 1918 example addresses. Scoped to the vendored tree.
+# ---------------------------------------------------------------------------
+cluster-shape | */gen/buf/validate/* | vendored protovalidate sources ship these upstream example addresses verbatim and are regenerated, not edited | 192\.168\.[0-9]{1,3}\.[0-9]{1,3}
+
+# ---------------------------------------------------------------------------
+# The shared guard's own text. Its fleet baseline has to name the public brand
+# hostnames it excuses, and it writes them as a regular expression, so the
+# escaped form is not covered by the baseline rule that masks the plain form.
+# Scoped to that one file and that one span.
+# ---------------------------------------------------------------------------
+brand-isolation | scripts/public-surface-check | the shared guard's baseline must name the public brand hostnames it allows fleet-wide; this is guard configuration, not repository prose | %6aimtech\\\.xyz\|%6dedallion\\\.%6aimtech\\\.io
+
+# ---------------------------------------------------------------------------
+# Considered and deliberately NOT given a rule. The guard already distinguishes
+# these from the things it denies, and every one of them is in the known-good
+# corpus the guard re-validates on every run, so masking them here would only
+# create a hole:
+#
+#   codes.Internal / StatusCode.INTERNAL   the non-public-hostname pattern is
+#       lower-case only, so a capitalised gRPC status code is not a hostname.
+#       Both appear throughout go/errors.go and python/src/invariant/errors.py
+#       and neither is reported.
+#   storage-key                            the key-file pattern is anchored to
+#       a word boundary, so the tail of a longer identifier does not match.
+#   logisticsOps                           likewise for the secret-store term.
+#   run ids such as r2                     no category matches a bare run id.
+#   example.com / example.org / .test /    RFC 2606 and RFC 6761 reserved names
+#       .invalid / localhost               are allowed fleet-wide already, which
+#       covers the example.com/project Go package in the OpenAPI fixtures.
+#   127.0.0.1 / 0.0.0.0                    loopback and unspecified addresses
+#       are allowed fleet-wide already.
+# ---------------------------------------------------------------------------

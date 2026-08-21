@@ -93,8 +93,9 @@ typecheck: node_modules/.package-lock.json ## Run Python and TypeScript static t
 proto-comments: ## Verify projected proto comments are complete.
 	cd python && uv run invariant-check-proto-comments tests/proto/descriptor.binpb
 
-public-surface: ## Scan OSS-facing files for private/product-specific references.
-	python3 scripts/check_public_surface.py
+public-surface: ## Guard the public surface: tracked content, paths, and unpushed commit messages.
+	scripts/public-surface-check
+	scripts/public-surface-check-test
 
 go-mod-check: ## Verify Go dependency metadata is canonical and complete.
 	go mod tidy -diff
