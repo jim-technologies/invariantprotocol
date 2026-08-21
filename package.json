@@ -40,7 +40,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/jim-technologies/invariantprotocol.git"
+    "url": "git+https://github.com/jim-technologies/invariantprotocol.git"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.13.0",
