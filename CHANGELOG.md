@@ -10,14 +10,12 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
-## 0.16.2 - 2026-08-29
+## v0.16.2 — 2026-08-29
 
 ### Changed
 
 - Dependency currency round across all four language packages (latest
   supported versions; no API or wire-behavior changes).
-
-### Changed
 
 - **`make validate` runs the protobuf breaking check.** The `breaking` slice
   compares the published `proto` module against `origin/main` inside the gate,
