@@ -1,6 +1,6 @@
 [package]
 name = "invariant-protocol"
-version = "0.16.1"
+version = "0.16.2"
 edition = "2024"
 rust-version = "1.96"
 description = "Project gRPC services into Connect/gRPC/MCP/CLI interfaces from proto descriptors"
