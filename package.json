@@ -43,7 +43,7 @@
     "url": "git+https://github.com/jim-technologies/invariantprotocol.git"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.13.0",
+    "@bufbuild/protobuf": "^2.14.0",
     "@bufbuild/protovalidate": "1.2.0",
     "@connectrpc/connect": "^2.1.2",
     "@connectrpc/connect-node": "^2.1.2",
@@ -52,7 +52,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.5",
-    "@bufbuild/protoc-gen-es": "^2.13.0",
+    "@bufbuild/protoc-gen-es": "^2.14.0",
     "@grpc/proto-loader": "^0.8.1",
     "@types/node": "^24.0.0",
     "@vitest/coverage-v8": "4.1.11",

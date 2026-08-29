@@ -34,7 +34,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "mypy>=2.3.0",
     "pip-audit>=2.10.1",
-    "types-grpcio>=1.82.1.20260711",
+    "types-grpcio>=1.83.0.20260730",
     "types-grpcio-reflection>=1.0.0.20260508",
     "types-protobuf>=7.34.1.20260518",
 ]

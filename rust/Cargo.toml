@@ -44,7 +44,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-uti
 tokio-util = { version = "0.7", features = ["rt"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "macros", "tokio"] }
 http-body-util = "0.1"
-base64 = "0.22"
+base64 = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
