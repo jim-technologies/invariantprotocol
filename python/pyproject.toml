@@ -27,7 +27,7 @@ Repository = "https://github.com/jim-technologies/invariantprotocol"
 [dependency-groups]
 dev = [
     "grpcio-tools>=1.82.1",
-    "lancedb==0.36.0",
+    "lancedb==0.37.1",
     "pyarrow>=25.0.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",

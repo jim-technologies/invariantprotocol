@@ -55,8 +55,8 @@
     "@bufbuild/protoc-gen-es": "^2.13.0",
     "@grpc/proto-loader": "^0.8.1",
     "@types/node": "^24.0.0",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.11",
     "typescript": "^7.0.2",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   }
 }
