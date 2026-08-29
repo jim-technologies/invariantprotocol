@@ -10,6 +10,18 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.16.3 — 2026-08-29
+
+### Fixed
+
+- **`ProjectionContext` implements `abort_with_status`.** grpcio 1.83 enforces
+  `grpc.aio.ServicerContext.abort_with_status` as abstract, which made
+  `ProjectionContext` unconstructable under grpcio >= 1.83. The method now
+  mirrors `abort()` semantics from one `grpc.Status`, including rich
+  `grpc-status-details-bin` extraction, with regression tests and the gate run
+  against grpcio 1.83.x. Downstream consumers carrying a temporary
+  `grpcio<1.83` cap for this issue can lift it.
+
 ## v0.16.2 — 2026-08-29
 
 ### Changed

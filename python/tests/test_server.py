@@ -562,3 +562,52 @@ async def test_projection_context_metadata_is_typed_cached_and_isolated():
     assert tuple(second.invocation_metadata()) == ()
     assert tuple(second.initial_metadata()) == ()
     assert tuple(second.trailing_metadata()) == ()
+
+
+async def test_projection_context_implements_the_full_servicer_abc():
+    # grpcio 1.83 made grpc.aio.ServicerContext.abort_with_status abstract;
+    # instantiation is the regression: an unimplemented abstract method makes
+    # this constructor raise TypeError.
+    from invariant.projection_context import ProjectionContext
+
+    context = ProjectionContext(peer="invariant:abc")
+    assert context.peer() == "invariant:abc"
+
+
+async def test_projection_context_abort_with_status_mirrors_abort():
+    from collections import namedtuple
+
+    from google.rpc import status_pb2
+
+    from invariant import InvariantError
+    from invariant.projection_context import ProjectionContext
+
+    Status = namedtuple("Status", ("code", "details", "trailing_metadata"))
+
+    context = ProjectionContext(peer="invariant:status")
+    with pytest.raises(InvariantError) as caught:
+        await context.abort_with_status(
+            Status(grpc.StatusCode.FAILED_PRECONDITION, "not ready", (("x-hint", "warm-up"),))
+        )
+    assert caught.value.code == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.code() == grpc.StatusCode.FAILED_PRECONDITION
+    assert context.details() == "not ready"
+    assert tuple(context.trailing_metadata()) == (("x-hint", "warm-up"),)
+
+    # A rich status (grpc_status shape) carries grpc-status-details-bin in its
+    # trailing metadata; the raised error surfaces the embedded message.
+    rich = status_pb2.Status(code=9, message="rich precondition detail")
+    rich_context = ProjectionContext(peer="invariant:rich")
+    with pytest.raises(InvariantError) as rich_caught:
+        await rich_context.abort_with_status(
+            Status(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "outer detail",
+                (("grpc-status-details-bin", rich.SerializeToString()),),
+            )
+        )
+    assert "rich precondition detail" in str(rich_caught.value)
+
+    ok_context = ProjectionContext(peer="invariant:ok")
+    with pytest.raises(ValueError, match="non-OK status code"):
+        await ok_context.abort_with_status(Status(grpc.StatusCode.OK, "", ()))

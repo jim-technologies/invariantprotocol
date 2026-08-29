@@ -94,6 +94,18 @@ class ProjectionContext(grpc.aio.ServicerContext[Any, Any]):
         self._trailing_metadata = _normalize_metadata(trailing_metadata)
         raise self.status_error()
 
+    async def abort_with_status(self, status: grpc.Status) -> NoReturn:
+        # grpc.aio.ServicerContext enforces this as abstract from grpcio 1.83.
+        # Same semantics as abort(), sourced from one grpc.Status: a rich
+        # status built by grpc_status carries grpc-status-details-bin in its
+        # trailing metadata, which status_error() already surfaces.
+        if status.code == grpc.StatusCode.OK:
+            raise ValueError("grpc: abort_with_status requires a non-OK status code")
+        self._code = status.code
+        self._details = status.details or ""
+        self._trailing_metadata = _normalize_metadata(status.trailing_metadata or ())
+        raise self.status_error()
+
     def set_trailing_metadata(self, trailing_metadata: MetadataInput) -> None:
         self._trailing_metadata = _normalize_metadata(trailing_metadata)
 
