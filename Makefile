@@ -1,11 +1,21 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build validate validate-static release version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
+.PHONY: help help-all build validate validate-static release version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
 
 BASE_REF ?= origin/main
 
-help: ## Show available make targets.
-	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+help: ## One-screen help (make help-all for every target)
+	@echo "Daily:"
+	@echo "  make fmt        format code, apply safe linter fixes"
+	@echo "  make generate   regenerate committed build artifacts"
+	@echo "  make test       run all language test suites"
+	@echo "  make validate   the full offline gate"
+	@echo "  make release    verify release readiness"
+	@echo ""
+	@echo "Everything else: make help-all"
+
+help-all: ## Every target with its description
+	@grep -hE '^[a-zA-Z0-9_-]+:.*##' $(MAKEFILE_LIST) | sed -E 's/:.*## /\t/'
 
 build: node_modules/.package-lock.json ## Build every language package and command.
 	GOFLAGS=-mod=readonly go build ./...
