@@ -5,7 +5,7 @@ import warnings
 
 from invariantprotocol.conformance.v1 import native_cardinality_pb2 as invariantprotocol_dot_conformance_dot_v1_dot_native__cardinality__pb2
 
-GRPC_GENERATED_VERSION = '1.82.1'
+GRPC_GENERATED_VERSION = '1.83.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 

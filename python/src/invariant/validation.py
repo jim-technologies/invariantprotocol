@@ -108,7 +108,11 @@ def _to_invariant_error(err: protovalidate.ValidationError) -> InvariantError:
     field_violations = []
     for v in err.violations:
         proto_v = v.proto
-        field = ".".join(el.field_name for el in proto_v.field.elements if el.field_name)
+        # `field` is an optional path: message-level rules violate no single
+        # field and leave it unset, which reads back as None.
+        path = proto_v.field
+        elements = path.elements if path is not None else ()
+        field = ".".join(el.field_name for el in elements if el.field_name)
         field_violations.append({"field": field, "description": proto_v.message})
 
     if not field_violations:

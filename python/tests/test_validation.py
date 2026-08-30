@@ -212,3 +212,17 @@ async def test_validation_checks_each_native_client_streaming_and_bidi_request()
         assert bidi_seen == ["valid"]
     finally:
         await server.stop(grace=0)
+
+
+async def test_message_level_violation_reports_an_empty_field_path():
+    """A message-level rule violates no single field, so `field` is unset and reads back empty."""
+    import protovalidate
+
+    from invariant.validation import _to_invariant_error
+
+    violation = protovalidate.Violation(rule_id="greet.request", message="request is not addressable")
+    error = _to_invariant_error(protovalidate.ValidationError("request is not addressable", [violation]))
+
+    assert error.code == grpc.StatusCode.INVALID_ARGUMENT
+    payload = error.to_payload()
+    assert payload["details"][0]["fieldViolations"] == [{"field": "", "description": "request is not addressable"}]

@@ -25,6 +25,10 @@ require (
 	github.com/buger/jsonparser v1.6.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
+	// Held at the last release published under this module path. CEL-Go v0.32.0
+	// renamed the module to cel.dev/cel-go, so requiring it here fails to
+	// resolve, and buf.build/go/protovalidate still imports the old path.
+	// Upgrade once protovalidate moves to cel.dev/cel-go.
 	github.com/google/cel-go v0.31.0 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -35,6 +39,10 @@ require (
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.29 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
+	// Held at v1.7.2. Avro v1.8.0 changes Schema.Root() to return
+	// *avro.SchemaNode, which does not compile against the current
+	// github.com/apache/iceberg-go release. Upgrade once Iceberg-Go ships a
+	// release built against Avro v1.8.
 	github.com/twmb/avro v1.7.2 // indirect
 	github.com/twmb/murmur3 v1.1.8 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
