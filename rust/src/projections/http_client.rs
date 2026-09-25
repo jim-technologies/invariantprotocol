@@ -66,10 +66,14 @@ async fn call_remote_http(
         .get::<ProjectionContext>()
         .and_then(ProjectionContext::remaining)
         .or_else(|| metadata.get("grpc-timeout").and_then(parse_grpc_timeout));
+    // An empty message is an empty body, but still a declared one: hyper sends
+    // no Content-Length for an empty POST body, and some HTTP front ends
+    // answer 411 Length Required to a POST without one.
     let mut outbound = client
         .post(url)
         .header(header::CONTENT_TYPE, "application/proto")
         .header(header::ACCEPT, "application/proto")
+        .header(header::CONTENT_LENGTH, body.len())
         .headers(outbound_headers(&metadata))
         .body(body);
     if let Some(timeout) = timeout {

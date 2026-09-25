@@ -31,6 +31,7 @@ type OutboundHTTPRequest struct {
 
 // HTTPHeaderProvider returns extra outbound HTTP headers for ConnectHTTP requests.
 // Typical use: API signatures, short-lived tokens, per-request timestamps.
+// Accept and Content-Type belong to the JSON codec and are ignored here.
 type HTTPHeaderProvider func(ctx context.Context, req *OutboundHTTPRequest) (map[string]string, error)
 
 // Tool represents a single registered RPC method projected as a tool.

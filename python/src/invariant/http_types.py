@@ -40,7 +40,11 @@ HTTPResponseObserver = Callable[[OutboundHTTPResponse], None]
 
 @dataclass(slots=True)
 class HTTPAuth:
-    """Per-connection outbound HTTP credentials."""
+    """Per-connection outbound HTTP credentials.
+
+    A header provider may add any header except ``Accept`` and
+    ``Content-Type``, which belong to the JSON codec and are ignored.
+    """
 
     header_provider: HTTPHeaderProvider | None = None
     query_provider: HTTPQueryProvider | None = None

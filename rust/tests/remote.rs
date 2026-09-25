@@ -12,8 +12,8 @@ use prost_types::{
     DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet,
     MethodDescriptorProto, ServiceDescriptorProto, field_descriptor_proto,
 };
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tonic::Request;
 use tonic_types::{ErrorDetails, StatusExt};
@@ -133,6 +133,68 @@ async fn fully_qualified_tool_ids_allow_equal_short_service_names() {
         ["alpha.v1.EchoService.Call", "beta.v1.EchoService.Call"]
     );
     upstream.abort();
+}
+
+#[tokio::test]
+async fn remote_http_sends_an_empty_message_with_its_codec_content_type() {
+    // The upstream is Invariant's own Connect projection, which answers 415
+    // to a unary request that does not name its codec in Content-Type.
+    let backend = common::registered_server(TestGreetService::default());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorded = seen.clone();
+    let app = invariant::projections::http::http_router(backend).layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| {
+            let header = |name| {
+                request
+                    .headers()
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_owned)
+            };
+            recorded.lock().unwrap().push((
+                header(axum::http::header::CONTENT_TYPE),
+                header(axum::http::header::CONTENT_LENGTH),
+            ));
+            next.run(request)
+        },
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let base_url = reqwest::Url::parse(&format!("http://{address}")).unwrap();
+    let client = reqwest::Client::new();
+
+    let bare = client
+        .post(base_url.join("greet.v1.GreetService/Greet").unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bare.status(), 415);
+
+    let proxy = Server::from_descriptor(DESCRIPTOR_PATH).unwrap();
+    proxy.connect_http(&client, base_url).unwrap();
+    let input = proxy
+        .parsed()
+        .pool
+        .get_message_by_name("greet.v1.GreetRequest")
+        .unwrap();
+    let response = proxy
+        .invoke(
+            "greet.v1.GreetService.Greet",
+            Request::new(prost_reflect::DynamicMessage::new(input)),
+        )
+        .await
+        .unwrap()
+        .into_inner();
+    let output = greet::GreetResponse::decode(response.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(output.message, "Hi ");
+    assert_eq!(
+        seen.lock().unwrap().last().unwrap(),
+        &(Some("application/proto".to_owned()), Some("0".to_owned()))
+    );
+    task.abort();
 }
 
 #[derive(Clone, PartialEq, prost::Message)]

@@ -504,7 +504,10 @@ and timeout policies; they are not general gRPC metadata, header, or trailer
 tunnels. Remote streaming is intentionally not projected. Go, Python, and
 TypeScript also understand the primary `google.api.http` binding for HTTP
 transcoding; the portable remote-HTTP contract is the canonical Connect method
-path.
+path. On that path every unary request names its codec in `Content-Type` and
+carries a body, even for an empty message: `{}` from the JSON clients (Go,
+Python, TypeScript) and zero protobuf bytes with `Content-Length: 0` from Rust.
+Header providers add headers but cannot replace `Accept` or `Content-Type`.
 
 ## Protobuf-derived data schemas
 

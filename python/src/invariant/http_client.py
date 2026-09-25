@@ -180,15 +180,28 @@ class HTTPClientBinding:
     body: str
     response_body: str
     template: _PathTemplate
+    # The canonical Connect route used when a method has no google.api.http
+    # rule. A Connect unary request always carries a body and the Content-Type
+    # naming its codec, even for an empty message.
+    connect: bool = False
 
     @classmethod
-    def new(cls, method: str, pattern: str, body: str, response_body: str = "") -> HTTPClientBinding:
+    def new(
+        cls,
+        method: str,
+        pattern: str,
+        body: str,
+        response_body: str = "",
+        *,
+        connect: bool = False,
+    ) -> HTTPClientBinding:
         return cls(
             method=method.upper(),
             pattern=pattern,
             body=body,
             response_body=response_body,
             template=_PathTemplate.parse(pattern),
+            connect=connect,
         )
 
     def resolve_fields(self, descriptor: Any) -> None:
@@ -260,7 +273,10 @@ class HTTPClientBinding:
             return None, None
 
         if self.body == "*":
-            if not args:
+            # An empty message on the Connect route is still the JSON object
+            # "{}": Connect servers answer 415 to a unary call with no
+            # Content-Type, so the body is never dropped there.
+            if not args and not self.connect:
                 return None, "*"
             return json.dumps(args).encode(), "*"
 
@@ -547,6 +563,7 @@ class HTTPDynamicHandler:
             if not name or not value:
                 continue
             lowered = name.lower()
+            # The codec owns Accept and Content-Type.
             if lowered in ("accept", "content-type"):
                 continue
             headers[name] = value
@@ -794,7 +811,7 @@ def http_rules_by_method_path(fds) -> dict[str, Any]:
 
 def client_binding_for_method(rule, service_full_name: str, method_name: str) -> HTTPClientBinding:
     if rule is None:
-        return HTTPClientBinding.new("POST", f"/{service_full_name}/{method_name}", "*")
+        return HTTPClientBinding.new("POST", f"/{service_full_name}/{method_name}", "*", connect=True)
 
     method, pattern = _method_and_pattern(rule)
     return HTTPClientBinding.new(method, pattern, rule.body, rule.response_body)

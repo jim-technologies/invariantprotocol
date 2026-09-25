@@ -48,6 +48,10 @@ type httpClientBinding struct {
 	body         string
 	responseBody string
 	template     *pathTemplate
+	// connect marks the canonical Connect route used when a method has no
+	// google.api.http rule. A Connect unary request always carries a body and
+	// the Content-Type naming its codec, even for an empty message.
+	connect bool
 }
 
 const (
@@ -376,7 +380,7 @@ func pickHTTPClientBinding(
 ) (*httpClientBinding, error) {
 	if rule == nil {
 		pattern := fmt.Sprintf("/%s/%s", svcFullName, methodName)
-		return newHTTPClientBinding(
+		binding, err := newHTTPClientBinding(
 			http.MethodPost,
 			pattern,
 			"*",
@@ -384,6 +388,11 @@ func pickHTTPClientBinding(
 			requestDescriptor,
 			responseDescriptor,
 		)
+		if err != nil {
+			return nil, err
+		}
+		binding.connect = true
+		return binding, nil
 	}
 
 	method, pattern, err := httpMethodAndPattern(rule)
@@ -552,7 +561,10 @@ func (b *httpClientBinding) encodeBody(args map[string]any) ([]byte, string, err
 	case "":
 		return nil, "", nil
 	case "*":
-		if len(args) == 0 {
+		// An empty message on the Connect route is still the JSON object
+		// "{}": Connect servers answer 415 to a unary call with no
+		// Content-Type, so the body is never dropped there.
+		if len(args) == 0 && !b.connect {
 			return nil, "*", nil
 		}
 		body, err := json.Marshal(args)

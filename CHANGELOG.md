@@ -12,6 +12,23 @@ but never silent wire-behavior regressions.
 
 ### Fixed
 
+- **Remote HTTP clients send empty unary messages that Connect servers
+  accept.** On the canonical Connect route (a method with no
+  `google.api.http` rule), the Go and Python remote HTTP clients sent a
+  request whose message serialises to zero bytes, such as an empty
+  capabilities request, with no body and no `Content-Type`. Connect servers,
+  Invariant's own HTTP projection included, answer that with HTTP 415. Both
+  clients now send `{}` with `Content-Type: application/json`. The Rust client
+  already sent `Content-Type: application/proto`, but hyper dropped
+  `Content-Length` from the empty body; the client now declares
+  `Content-Length: 0`. The TypeScript client already sent `{}`, but a header
+  provider could replace its `Content-Type`, and a differently cased name
+  produced a combined value that the server rejected. A TypeScript header
+  provider can no longer replace `Accept` or `Content-Type`, which matches Go
+  and Python. Each SDK has a regression test against Invariant's strict
+  Connect projection. `google.api.http` REST bindings keep their existing
+  body rules.
+
 - **The protobuf breaking check compares against the previous release, so it
   can fail on `main` again.** `make breaking` (part of `make validate`)
   compared the `proto` module with `origin/main`; on `main` after a push that

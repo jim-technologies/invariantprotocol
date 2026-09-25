@@ -537,6 +537,79 @@ async def test_connect_http_httpbody_request_without_content_type_sends_no_json_
         httpd.shutdown()
 
 
+def _descriptor_with_connect_route() -> bytes:
+    """Add connectroute.v1.GreetService: the greet messages, no google.api.http rule."""
+    with open(DESCRIPTOR_PATH, "rb") as descriptor_file:
+        fds = descriptor_pb2.FileDescriptorSet.FromString(descriptor_file.read())
+    route = fds.file.add(
+        name="connect_route.proto",
+        package="connectroute.v1",
+        syntax="proto3",
+        dependency=["greet.proto"],
+    )
+    route.service.add(name="GreetService").method.add(
+        name="Greet",
+        input_type=".greet.v1.GreetRequest",
+        output_type=".greet.v1.GreetResponse",
+    )
+    return fds.SerializeToString()
+
+
+async def test_connect_http_sends_empty_unary_message_to_strict_connect_server():
+    import asyncio
+
+    import httpx
+    import uvicorn
+    from conftest import GreetServicer, register_greet
+
+    # The upstream is Invariant's own Connect projection, which answers 415 to
+    # a unary request that does not name its codec in Content-Type.
+    upstream = Server.from_descriptor(DESCRIPTOR_PATH)
+    register_greet(upstream, GreetServicer())
+    strict = upstream.asgi_app()
+    seen: list[dict] = []
+
+    async def recording(scope, receive, send):
+        if scope["type"] != "http":
+            await strict(scope, receive, send)
+            return
+        request = {"content_type": dict(scope["headers"]).get(b"content-type"), "body": b""}
+        seen.append(request)
+
+        async def recorded_receive():
+            message = await receive()
+            request["body"] += message.get("body", b"")
+            return message
+
+        path = "/greet.v1.GreetService/Greet"
+        await strict({**scope, "path": path, "raw_path": path.encode()}, recorded_receive, send)
+
+    backend = uvicorn.Server(uvicorn.Config(recording, host="127.0.0.1", port=0, log_level="warning"))
+    task = asyncio.create_task(backend.serve())
+    client = Server.from_bytes(_descriptor_with_connect_route())
+    try:
+        for _ in range(200):
+            if backend.started and backend.servers:
+                break
+            await asyncio.sleep(0.01)
+        base_url = f"http://127.0.0.1:{backend.servers[0].sockets[0].getsockname()[1]}"
+
+        async with httpx.AsyncClient() as bare:
+            response = await bare.post(f"{base_url}/greet.v1.GreetService/Greet")
+        assert response.status_code == 415
+
+        # The codec owns Content-Type; a provider cannot replace it.
+        client.connect_http(base_url, "connectroute.v1.GreetService", auth=lambda _req: {"Content-Type": "text/plain"})
+        result = await client.invoke("connectroute.v1.GreetService.Greet", greet_pb2.GreetRequest())
+        assert result.message == "Hi "
+        assert seen[-1] == {"content_type": b"application/json", "body": b"{}"}
+    finally:
+        await client.stop()
+        backend.should_exit = True
+        await task
+        await upstream.stop()
+
+
 async def test_connect_http_registers_tools():
     httpd, port = _start_annotated_http_backend()
     try:

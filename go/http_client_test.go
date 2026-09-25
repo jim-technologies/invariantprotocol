@@ -437,6 +437,78 @@ func TestConnectHTTPUsesCanonicalJSONNamesAndPreservesTrailingSlash(t *testing.T
 	assert.Equal(t, map[string]any{"resultText": "ok"}, responseJSON)
 }
 
+// descriptorWithConnectRoute adds connectroute.v1.GreetService, which reuses
+// the greet messages but has no google.api.http rule, so ConnectHTTP projects
+// it over the canonical Connect route.
+func descriptorWithConnectRoute(t *testing.T) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(descriptorPath())
+	require.NoError(t, err)
+	var files descriptorpb.FileDescriptorSet
+	require.NoError(t, proto.Unmarshal(raw, &files))
+	files.File = append(files.File, &descriptorpb.FileDescriptorProto{
+		Name:       new("connect_route.proto"),
+		Package:    new("connectroute.v1"),
+		Syntax:     new("proto3"),
+		Dependency: []string{"greet.proto"},
+		Service: []*descriptorpb.ServiceDescriptorProto{{
+			Name: new("GreetService"),
+			Method: []*descriptorpb.MethodDescriptorProto{{
+				Name:       new("Greet"),
+				InputType:  new(".greet.v1.GreetRequest"),
+				OutputType: new(".greet.v1.GreetResponse"),
+			}},
+		}},
+	})
+	out, err := proto.Marshal(&files)
+	require.NoError(t, err)
+	return out
+}
+
+func TestConnectHTTPSendsEmptyUnaryMessageToStrictConnectServer(t *testing.T) {
+	// The upstream is Invariant's own Connect projection, which answers 415
+	// to a unary request that does not name its codec in Content-Type.
+	upstream, err := ServerFromDescriptor(descriptorPath())
+	require.NoError(t, err)
+	greetpb.RegisterGreetServiceServer(upstream, &grpcServerServicer{})
+	strict := upstream.HTTPHandler()
+	type seenRequest struct {
+		contentType string
+		body        string
+	}
+	seen := make(chan seenRequest, 2)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, readErr := io.ReadAll(r.Body)
+		assert.NoError(t, readErr)
+		seen <- seenRequest{contentType: r.Header.Get("Content-Type"), body: string(body)}
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		r.URL.Path = "/greet.v1.GreetService/Greet"
+		strict.ServeHTTP(w, r)
+	}))
+	defer backend.Close()
+
+	bare, err := http.NewRequestWithContext(t.Context(), http.MethodPost, backend.URL+"/greet.v1.GreetService/Greet", http.NoBody)
+	require.NoError(t, err)
+	bareResp, err := http.DefaultClient.Do(bare)
+	require.NoError(t, err)
+	_ = bareResp.Body.Close()
+	assert.Equal(t, http.StatusUnsupportedMediaType, bareResp.StatusCode)
+	<-seen
+
+	client, err := ServerFromBytes(descriptorWithConnectRoute(t))
+	require.NoError(t, err)
+	// The codec owns Content-Type; a provider cannot replace it.
+	client.UseHTTPHeaderProvider(func(context.Context, *OutboundHTTPRequest) (map[string]string, error) {
+		return map[string]string{"Content-Type": "text/plain"}, nil
+	})
+	require.NoError(t, client.ConnectHTTP(backend.URL, "connectroute.v1.GreetService"))
+
+	result, err := client.Invoke(t.Context(), "connectroute.v1.GreetService.Greet", &greetpb.GreetRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, "Hello, ", result.(*greetpb.GreetResponse).GetMessage())
+	assert.Equal(t, seenRequest{contentType: "application/json", body: "{}"}, <-seen)
+}
+
 func TestPathTemplatePreservesRootAndTrailingSlash(t *testing.T) {
 	for _, test := range []struct {
 		name     string

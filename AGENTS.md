@@ -389,7 +389,10 @@ The HTTP projection serves only the canonical Connect route:
 `application/proto`; streaming uses the Connect streaming content types. There
 is no server-side `google.api.http` REST routing. Go, Python, and TypeScript
 remote HTTP clients may consume the primary annotation; the portable remote
-HTTP contract is the canonical Connect method path.
+HTTP contract is the canonical Connect method path. A remote client on that
+path always sends its codec `Content-Type` and a body (`{}`, or zero protobuf
+bytes with `Content-Length: 0`), even for an empty message: Connect servers,
+Invariant's own included, answer 415 to a unary request without one.
 
 HTTP request headers are untrusted. The default mapper forwards only tracing and
 correlation values; a custom `HTTPMetadataMapper` still cannot assert authorization,

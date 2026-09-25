@@ -150,8 +150,12 @@ export class HTTPConnection {
       "user-agent": "invariant-protocol/typescript",
     };
     const extra = await this.auth.headerProvider?.(request);
-    if (extra) {
-      Object.assign(headers, extra);
+    for (const [name, value] of Object.entries(extra ?? {})) {
+      // The codec owns Accept and Content-Type.
+      const lowered = name.toLowerCase();
+      if (lowered !== "accept" && lowered !== "content-type") {
+        headers[name] = value;
+      }
     }
     return headers;
   }

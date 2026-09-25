@@ -1696,6 +1696,59 @@ describe("projections", () => {
     client.close();
   });
 
+  test("sends an empty unary message to a strict Connect server with its codec Content-Type", async () => {
+    // The upstream is Invariant's own Connect projection, which answers 415 to
+    // a unary request that does not name its codec in Content-Type.
+    const strict = httpHandler(registeredServer());
+    const seen: Array<{ contentType?: string; contentLength?: string }> = [];
+    const backend = createServer((req, res) => {
+      seen.push({ contentType: req.headers["content-type"], contentLength: req.headers["content-length"] });
+      req.url = "/greet.v1.GreetService/Greet";
+      void strict(req, res);
+    });
+    servers.push(backend);
+    await new Promise<void>((resolveListen) => backend.listen(0, "127.0.0.1", resolveListen));
+    const address = backend.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing test server address");
+    }
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const bare = await fetch(`${base}/greet.v1.GreetService/Greet`, { method: "POST" });
+    expect(bare.status).toBe(415);
+
+    const fds = fromBinary(FileDescriptorSetSchema, readFileSync(descriptorPath));
+    fds.file.push(
+      create(FileDescriptorProtoSchema, {
+        name: "connect_route.proto",
+        package: "connectroute.v1",
+        syntax: "proto3",
+        dependency: ["greet.proto"],
+        service: [
+          create(ServiceDescriptorProtoSchema, {
+            name: "GreetService",
+            method: [
+              create(MethodDescriptorProtoSchema, {
+                name: "Greet",
+                inputType: ".greet.v1.GreetRequest",
+                outputType: ".greet.v1.GreetResponse",
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    const client = Server.fromBytes(toBinary(FileDescriptorSetSchema, fds));
+    // The codec owns Content-Type; a provider cannot replace it.
+    client.connectHttp(base, {
+      serviceName: "connectroute.v1.GreetService",
+      auth: () => ({ "Content-Type": "text/plain" }),
+    });
+    const response = await client.invoke("connectroute.v1.GreetService.Greet", {});
+    expect(client.toJson("connectroute.v1.GreetService.Greet", response)).toEqual({ message: "Hi " });
+    expect(seen.at(-1)).toEqual({ contentType: "application/json", contentLength: "2" });
+  });
+
   test("proxies HTTP calls with google.api.http annotations, auth, and observer", async () => {
     const observed: any[] = [];
     const remote = createServer((req, res) => {
