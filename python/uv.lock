@@ -500,7 +500,7 @@ wheels = [
 
 [[package]]
 name = "invariant-protocol"
-version = "0.16.3"
+version = "0.16.4"
 source = { editable = "." }
 dependencies = [
     { name = "googleapis-common-protos" },

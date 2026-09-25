@@ -10,6 +10,54 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+## v0.16.4 — 2026-09-25
+
+### Fixed
+
+- **Python validation adapter no longer raises on message-level Protovalidate
+  violations.** protovalidate-py 2.0 leaves `field` unset when a message-level
+  rule fails; the adapter read it as a field path and raised. The violation is
+  now reported with an empty field path, with a regression test.
+
+- **`make security` passes end to end.** A tracked `.gitleaks.toml` extends
+  the default rules with one allowlist for the synthetic high-entropy fixture
+  in `scripts/public-surface-check-test` (exact rule, exact assignment, exact
+  file), so the gitleaks step no longer reports the guard's own self-test as a
+  leak.
+
+### Changed
+
+- Dependency currency rounds 2 and 3 across all four language packages (no API
+  or wire-behavior changes). Notable moves: Rust rustls 0.23.45 (fixes
+  RUSTSEC-2026-0285), reqwest 0.13.5, and the crate's own base64 dependency on
+  0.23; Go protovalidate 1.4.0 (which moves CEL from
+  `github.com/google/cel-go` to `cel.dev/cel-go`), libopenapi 0.40.0, and the
+  2026-09-21 genproto, while grpc-go stays held at 1.83.2 pending a
+  GO-2026-6443 fix and arrow-go at 18.7.0 until iceberg-go builds against Avro
+  1.8; Python grpcio 1.84, protobuf 7.36.2, uvicorn 0.54, and protovalidate 2.0
+  (floors raised to `grpcio>=1.84.0` and `protovalidate>=2.0.0`), with the docs
+  corrected to the actual LanceDB 0.37.1 / PyArrow 25.0.1 qualification pins;
+  TypeScript `@bufbuild/protobuf` and `protoc-gen-es` 2.15,
+  `@connectrpc/connect` 2.2, `@bufbuild/protovalidate` 1.3.0, `@grpc/grpc-js`
+  1.14.5, and Biome 2.5.14.
+
+- Toolchain: the Flox manifest pins Buf 1.72.0 and Node.js 24.20.0 (each in
+  its own package group so the other exact toolchain pins stay put), and
+  `package.json` `engines.node` now states the `>=24.18.0` floor the Flox
+  manifest already required. Buf 1.72's formatter reflows the message-literal
+  field options in the `testdata/schema` fixture; its descriptor artifacts are
+  regenerated from that layout. Generated bindings are unchanged.
+
+- CI pins `actions/checkout` v7.0.1 and `flox/install-flox-action` v2.6.0 by
+  commit and caches `~/.cache/flox` keyed on the Flox lockfile, in both the
+  gate and the scheduled audit workflows.
+
+- `AGENTS.md` states the async handler contract the Python server enforces:
+  registration requires `async def` unary handlers and async-generator
+  server-streaming handlers, dispatch re-checks the terminal's return shape on
+  every call and fails a mismatch with `INTERNAL`, and the Flox manifest
+  inventory lists every tool the manifest installs.
+
 ## v0.16.3 — 2026-08-29
 
 ### Fixed
