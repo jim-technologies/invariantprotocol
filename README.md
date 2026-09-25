@@ -78,7 +78,7 @@ buf build -o descriptor.binpb
 buf generate descriptor.binpb
 ```
 
-Buf 1.71 includes source information by default. Do not pass
+Buf 1.72 includes source information by default. Do not pass
 `--exclude-source-info`: Invariant needs those comments for discovery and tool
 descriptions.
 

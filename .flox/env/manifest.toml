@@ -4,6 +4,11 @@ schema-version = "1.12.0"
 python3.pkg-path = "python314"
 python3.version = "python3-3.14.6"
 buf.pkg-path = "buf"
+buf.version = "1.72.0"
+# buf and nodejs are pinned newer than the toplevel catalog page can
+# satisfy alongside the exact toolchain pins below, so each resolves in
+# its own group. Both are standalone CLIs with no shared ABI to keep.
+buf.pkg-group = "buf"
 uv.pkg-path = "uv"
 uv.version = ">=0.11.26"
 go.pkg-path = "go"
@@ -11,7 +16,8 @@ go.pkg-path = "go"
 # exact patched Go release through Go's checksum-verified toolchain mechanism.
 go.version = "1.26.4"
 nodejs.pkg-path = "nodejs_24"
-nodejs.version = ">=24.18.0"
+nodejs.version = "24.20.0"
+nodejs.pkg-group = "nodejs"
 # Native Python wheels such as grpcio link libstdc++ on Linux. GCC supplies the
 # runtime library and also covers source-build fallbacks for native extensions.
 gcc.pkg-path = "gcc16"

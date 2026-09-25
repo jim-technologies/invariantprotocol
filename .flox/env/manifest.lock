@@ -11,7 +11,9 @@
         "version": "1.2.3"
       },
       "buf": {
-        "pkg-path": "buf"
+        "pkg-path": "buf",
+        "pkg-group": "buf",
+        "version": "1.72.0"
       },
       "cargo": {
         "pkg-path": "cargo",
@@ -52,7 +54,8 @@
       },
       "nodejs": {
         "pkg-path": "nodejs_24",
-        "version": ">=24.18.0"
+        "pkg-group": "nodejs",
+        "version": "24.20.0"
       },
       "protoc": {
         "pkg-path": "protobuf",
@@ -111,6 +114,183 @@
     }
   },
   "packages": [
+    {
+      "attr_path": "buf",
+      "broken": false,
+      "derivation": "/nix/store/wqd1i949wb88wv9rifz1jfdjvqwgz9b5-buf-1.72.0.drv",
+      "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
+      "install_id": "buf",
+      "license": "Apache-2.0",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=4975466d324710c576dc11ad614684e6bd8cad8e",
+      "name": "buf-1.72.0",
+      "pname": "buf",
+      "rev": "4975466d324710c576dc11ad614684e6bd8cad8e",
+      "rev_count": 1078696,
+      "rev_date": "2026-09-23T17:48:10Z",
+      "scrape_date": "2026-09-25T04:58:28.138404Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "1.72.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/4hb0kxvyaxnz8agf26vv25j7f9kg9wjw-buf-1.72.0"
+      },
+      "system": "aarch64-darwin",
+      "group": "buf",
+      "priority": 5
+    },
+    {
+      "attr_path": "buf",
+      "broken": false,
+      "derivation": "/nix/store/cfs0slg3g15f2pq9fkijb6p5m3708y17-buf-1.72.0.drv",
+      "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
+      "install_id": "buf",
+      "license": "Apache-2.0",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=4975466d324710c576dc11ad614684e6bd8cad8e",
+      "name": "buf-1.72.0",
+      "pname": "buf",
+      "rev": "4975466d324710c576dc11ad614684e6bd8cad8e",
+      "rev_count": 1078696,
+      "rev_date": "2026-09-23T17:48:10Z",
+      "scrape_date": "2026-09-25T05:30:00.998832Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "1.72.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/rnj28cal3w4g3w1n05479rqyhdq54p2g-buf-1.72.0"
+      },
+      "system": "aarch64-linux",
+      "group": "buf",
+      "priority": 5
+    },
+    {
+      "attr_path": "buf",
+      "broken": false,
+      "derivation": "/nix/store/prxldl2wq6yg00h2zvn7rw6kklvj8hdw-buf-1.72.0.drv",
+      "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
+      "install_id": "buf",
+      "license": "Apache-2.0",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=4975466d324710c576dc11ad614684e6bd8cad8e",
+      "name": "buf-1.72.0",
+      "pname": "buf",
+      "rev": "4975466d324710c576dc11ad614684e6bd8cad8e",
+      "rev_count": 1078696,
+      "rev_date": "2026-09-23T17:48:10Z",
+      "scrape_date": "2026-09-25T06:06:24.672298Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "1.72.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/0d21d3022nnzpyy58qpdfqdh16f21yz4-buf-1.72.0"
+      },
+      "system": "x86_64-linux",
+      "group": "buf",
+      "priority": 5
+    },
+    {
+      "attr_path": "nodejs_24",
+      "broken": false,
+      "derivation": "/nix/store/j062ph4sqspapzz4bz4knx0icy2kfgjy-nodejs-24.20.0.drv",
+      "description": "Event-driven I/O framework for the V8 JavaScript engine",
+      "install_id": "nodejs",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=4975466d324710c576dc11ad614684e6bd8cad8e",
+      "name": "nodejs-24.20.0",
+      "pname": "nodejs_24",
+      "rev": "4975466d324710c576dc11ad614684e6bd8cad8e",
+      "rev_count": 1078696,
+      "rev_date": "2026-09-23T17:48:10Z",
+      "scrape_date": "2026-09-25T04:58:53.085554Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "24.20.0",
+      "outputs_to_install": [
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/7pn7zw2sciv3fih9l4xpyvx0q8hlrr0w-nodejs-24.20.0"
+      },
+      "system": "aarch64-darwin",
+      "group": "nodejs",
+      "priority": 5
+    },
+    {
+      "attr_path": "nodejs_24",
+      "broken": false,
+      "derivation": "/nix/store/z4ixg7wqqz4wvlvb3ava11m1khid3a1g-nodejs-24.20.0.drv",
+      "description": "Event-driven I/O framework for the V8 JavaScript engine",
+      "install_id": "nodejs",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=4975466d324710c576dc11ad614684e6bd8cad8e",
+      "name": "nodejs-24.20.0",
+      "pname": "nodejs_24",
+      "rev": "4975466d324710c576dc11ad614684e6bd8cad8e",
+      "rev_count": 1078696,
+      "rev_date": "2026-09-23T17:48:10Z",
+      "scrape_date": "2026-09-25T05:30:39.985174Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "24.20.0",
+      "outputs_to_install": [
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/hnizp3p9k7gix8iqlip1pai9fy417ygy-nodejs-24.20.0"
+      },
+      "system": "aarch64-linux",
+      "group": "nodejs",
+      "priority": 5
+    },
+    {
+      "attr_path": "nodejs_24",
+      "broken": false,
+      "derivation": "/nix/store/0z73lh3jfj7hpng8kiinipj94wrwa0j9-nodejs-24.20.0.drv",
+      "description": "Event-driven I/O framework for the V8 JavaScript engine",
+      "install_id": "nodejs",
+      "license": "MIT",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=4975466d324710c576dc11ad614684e6bd8cad8e",
+      "name": "nodejs-24.20.0",
+      "pname": "nodejs_24",
+      "rev": "4975466d324710c576dc11ad614684e6bd8cad8e",
+      "rev_count": 1078696,
+      "rev_date": "2026-09-23T17:48:10Z",
+      "scrape_date": "2026-09-25T06:07:06.259502Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "24.20.0",
+      "outputs_to_install": [
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/v6wsd9nyglmwh32yn7w8z11dq9cksg4m-nodejs-24.20.0"
+      },
+      "system": "x86_64-linux",
+      "group": "nodejs",
+      "priority": 5
+    },
     {
       "attr_path": "cargo",
       "broken": false,
@@ -639,93 +819,6 @@
       ],
       "outputs": {
         "out": "/nix/store/s3zspsn0w4yrp78yq1s883jmmzdwxh1k-atlas-1.2.3"
-      },
-      "system": "x86_64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "buf",
-      "broken": false,
-      "derivation": "/nix/store/vr42691ck8mlpvqbb4hws6jxdhbzc5kh-buf-1.71.0.drv",
-      "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
-      "install_id": "buf",
-      "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "buf-1.71.0",
-      "pname": "buf",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T04:52:32.412884Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.71.0",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/fw5ncc25cx51aizphr3nab4xp5452sxi-buf-1.71.0"
-      },
-      "system": "aarch64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "buf",
-      "broken": false,
-      "derivation": "/nix/store/8wxm922zrxiap48c20hazss5x6sw534m-buf-1.71.0.drv",
-      "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
-      "install_id": "buf",
-      "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "buf-1.71.0",
-      "pname": "buf",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T05:21:45.910557Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.71.0",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/86shvci7b7l1n5s94nvig3n7lanp35i3-buf-1.71.0"
-      },
-      "system": "aarch64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "buf",
-      "broken": false,
-      "derivation": "/nix/store/ady9vpa42x7mz459jffxg87ciwz48w20-buf-1.71.0.drv",
-      "description": "Create consistent Protobuf APIs that preserve compatibility and comply with design best-practices",
-      "install_id": "buf",
-      "license": "Apache-2.0",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "buf-1.71.0",
-      "pname": "buf",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T05:54:55.167333Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.71.0",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/indyqx7fddvaag25gy3bldlp5z93qy1k-buf-1.71.0"
       },
       "system": "x86_64-linux",
       "group": "toplevel",
@@ -1440,96 +1533,6 @@
         "lib": "/nix/store/kcmpd1h0097k50v3hjpvd1acyj46j3p5-llvm-21.1.8-lib",
         "out": "/nix/store/l25n688gmqircnpypip13wy99ndycwbj-llvm-21.1.8",
         "python": "/nix/store/54zsmkm9ad3ghnfikx25mkg4zm923qlc-llvm-21.1.8-python"
-      },
-      "system": "x86_64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "nodejs_24",
-      "broken": false,
-      "derivation": "/nix/store/cr8w869qmg1yb021mnpzgrfsy6hj2lxk-nodejs-24.18.0.drv",
-      "description": "Event-driven I/O framework for the V8 JavaScript engine",
-      "install_id": "nodejs",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "nodejs-24.18.0",
-      "pname": "nodejs_24",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T04:52:57.881642Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "24.18.0",
-      "outputs_to_install": [
-        "out",
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/a89rnfd3px0fxmjwd8km471ypxirs1am-nodejs-24.18.0"
-      },
-      "system": "aarch64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "nodejs_24",
-      "broken": false,
-      "derivation": "/nix/store/fqq1k1l9v4w2cfwprchlxpgl8wgj4ns5-nodejs-24.18.0.drv",
-      "description": "Event-driven I/O framework for the V8 JavaScript engine",
-      "install_id": "nodejs",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "nodejs-24.18.0",
-      "pname": "nodejs_24",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T05:22:25.106841Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "24.18.0",
-      "outputs_to_install": [
-        "out",
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/hm4961d6ch378n458i7iph6d4mbfsm7w-nodejs-24.18.0"
-      },
-      "system": "aarch64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "nodejs_24",
-      "broken": false,
-      "derivation": "/nix/store/54kmx1vzkr1g3j3xg4ja2wljihygqbba-nodejs-24.18.0.drv",
-      "description": "Event-driven I/O framework for the V8 JavaScript engine",
-      "install_id": "nodejs",
-      "license": "MIT",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "nodejs-24.18.0",
-      "pname": "nodejs_24",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T05:55:37.216292Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "24.18.0",
-      "outputs_to_install": [
-        "out",
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/lnfxdsvvm1srsa9kk94s7jqw06yq1h2d-nodejs-24.18.0"
       },
       "system": "x86_64-linux",
       "group": "toplevel",

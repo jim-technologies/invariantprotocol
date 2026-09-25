@@ -475,7 +475,7 @@ request path must not rebuild descriptor registries or discover handler types
 per call. Never call `protodesc.NewFiles` on a request path.
 
 ### Proto descriptor requirement
-`buf build -o descriptor.binpb` — Buf 1.71 includes source info by default. Do
+`buf build -o descriptor.binpb` — Buf 1.72 includes source info by default. Do
 not pass `--exclude-source-info`, or comments won't be available for tool
 descriptions. Then run `buf generate descriptor.binpb` so generated bindings
 and runtime projections are derived from the exact same compiled graph.
@@ -520,9 +520,8 @@ Dependency roots and lockfiles:
   Atlas). Flox
   may provide a bootstrap Go command while `GOTOOLCHAIN` selects the exact
   checksum-verified patch release required by `go.mod` when the Flox catalog
-  lags a security release. The manifest carries no `buf` version constraint;
-  the Flox lockfile (`.flox/env/manifest.lock`, currently buf 1.71.0) is the
-  pin.
+  lags a security release. The manifest pins `buf` at 1.72.0 and `nodejs` at
+  24.20.0; `.flox/env/manifest.lock` records the resolved build of every tool.
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev
   dep, including pytest-cov. `uv run` resolves against this. PyArrow belongs in
   the optional `data` extra and the dev test group; importing the core RPC
