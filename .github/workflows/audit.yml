@@ -17,13 +17,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # gitleaks scans the full git history.
           fetch-depth: 0
-      - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
+      - uses: flox/install-flox-action@1128abd73431089ab9d871c893b4e72a729354e1 # v2.6.0
         with:
           disable-metrics: "true"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/flox
+          key: flox-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
       - name: Run the security audit
         env:
           FLOX_DISABLE_METRICS: "true"
@@ -33,13 +37,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # git-install-check refuses shallow clones and installs from history.
           fetch-depth: 0
-      - uses: flox/install-flox-action@3b80351ae97bbe063f264dc88fbd505507054963 # v2
+      - uses: flox/install-flox-action@1128abd73431089ab9d871c893b4e72a729354e1 # v2.6.0
         with:
           disable-metrics: "true"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/flox
+          key: flox-${{ runner.os }}-${{ hashFiles('.flox/env/manifest.lock') }}
       - name: Run the integration boundaries
         env:
           FLOX_DISABLE_METRICS: "true"
