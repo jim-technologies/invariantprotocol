@@ -782,7 +782,12 @@ lifecycle, PostgreSQL/Atlas apply-inspect-diff integration, and a real
 ClickHouse DDL/value round trip. Protobuf breaking checks run inside
 `make validate` and `make release` against the newest reachable release tag
 (the preceding release on the release commit itself, a pull request's base
-branch in pull request CI); `make breaking` runs that slice alone. Dependency
+branch in pull request CI); `make breaking` runs that slice alone, after a
+fixture test that pins the baseline choice. A deliberate 0.x protobuf break
+passes only with `INVARIANT_ALLOW_PROTO_BREAK=1` (in CI, the repository
+variable of that name) and a `### Breaking` entry in the unreleased
+`CHANGELOG.md` section; the check refuses the flag otherwise, including once
+the release that documents the break has shipped. Dependency
 upgrades are intentional and review-driven; the repository does not require a
 scheduled dependency job.
 

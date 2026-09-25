@@ -513,6 +513,11 @@ tags.
 Push the release commit to `main`, wait for its CI gate, then create the
 annotated tag. Tag pushes rerun the same gate; the scheduled audit workflow
 verifies clean Git installs and can be dispatched on demand.
+A deliberate 0.x protobuf break needs both a `### Breaking` entry in the
+unreleased `CHANGELOG.md` section and `INVARIANT_ALLOW_PROTO_BREAK=1` (the
+repository variable in CI) until its release is tagged; remove the variable
+afterwards, or the next gate refuses it. Never weaken
+`scripts/check_breaking.sh` to let a break through.
 
 Invariant-owned packages are distributed only from Git. Do not publish them to,
 or document installation from, PyPI, the npm registry, crates.io, or another

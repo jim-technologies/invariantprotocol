@@ -208,6 +208,7 @@ deps: ## Tidy/update language dependency lockfiles.
 	cd testdata/openapi && buf dep update
 
 breaking: ## Check proto breaking changes against the previous release tag (a pull request's base branch in CI).
+	scripts/check_breaking_test.sh
 	scripts/check_breaking.sh
 
 verify-generate: ## Verify generated build artifacts are committed.

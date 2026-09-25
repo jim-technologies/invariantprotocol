@@ -32,4 +32,7 @@ jobs:
       - name: Run the gate
         env:
           FLOX_DISABLE_METRICS: "true"
+          # Set only while a documented 0.x protobuf break awaits its release
+          # (see scripts/check_breaking.sh); unset, it is an empty string.
+          INVARIANT_ALLOW_PROTO_BREAK: ${{ vars.INVARIANT_ALLOW_PROTO_BREAK }}
         run: flox activate -- make validate

@@ -10,6 +10,24 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+### Added
+
+- **An explicit escape hatch for a deliberate 0.x protobuf break.** With
+  `INVARIANT_ALLOW_PROTO_BREAK=1`, `make breaking` accepts the breaks that
+  `buf breaking` reports, and buf still prints each one. The flag works only
+  while `VERSION` is 0.x and the newest `CHANGELOG.md` section is unreleased
+  (`## Unreleased`, or the `## vX.Y.Z` release being cut until its tag ships)
+  with at least one `### Breaking` entry. Any other use of the flag is
+  refused, and a buf failure that is not a break still fails. CI passes the
+  repository variable of the same name to the gate.
+
+- `scripts/check_breaking_test.sh` pins the breaking check's baseline choice:
+  a release commit compares against the previous tag, any other commit
+  against the newest reachable tag, and a pull request against its base
+  branch, while a clone with no release tag skips loudly. It also pins the
+  escape-hatch rules. The test uses throwaway Git fixtures and a stub `buf`,
+  and `make breaking` runs it before the check.
+
 ### Fixed
 
 - **Remote HTTP clients send empty unary messages that Connect servers
