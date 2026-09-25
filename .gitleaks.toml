@@ -1,0 +1,19 @@
+title = "Invariant Protocol secret scanning"
+
+[extend]
+useDefault = true
+
+# The fleet public-surface guard ships a self-test whose fixtures are synthetic
+# secrets: they exist so the guard is proven to catch each shape. Keep the
+# exception narrow: the exact rule, the exact fixture assignment, and the exact
+# self-test file must all match. gitleaks hands a `line` allowlist the line
+# with its leading newline attached, so the anchor needs the multiline flag.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Synthetic high-entropy fixture in the public-surface self-test"
+condition = "AND"
+regexTarget = "line"
+regexes = ['''(?m)^entropy_assign='api_key = "''']
+paths = ['''^scripts/public-surface-check-test$''']
