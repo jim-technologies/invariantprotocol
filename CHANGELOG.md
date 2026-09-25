@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x minor releases may include deliberate API changes,
 but never silent wire-behavior regressions.
 
-## Unreleased
+## v0.16.5 — 2026-09-25
 
 ### Added
 

@@ -885,7 +885,7 @@ dependencies = [
 
 [[package]]
 name = "invariant-protocol"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "async-stream",
  "axum",
@@ -915,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "invariant-protocol-codegen"
-version = "0.16.4"
+version = "0.16.5"
 dependencies = [
  "heck",
  "prost",
