@@ -110,7 +110,8 @@ handler, is rejected with `TypeError`. Dispatch checks the shape again on
 every call, which also covers a terminal substituted by a shared interceptor:
 the unary terminal must return an awaitable, and the stream terminal may
 return an async iterator directly or an awaitable that resolves to one;
-anything else raises `TypeError`. Interceptors must be standard async
+anything else fails that call with an `INTERNAL` `InvariantError` whose cause
+is the `TypeError`. Interceptors must be standard async
 `grpc.aio.ServerInterceptor` instances. All projections (HTTP/MCP/gRPC/CLI)
 and remote clients (`connect_grpc`, `connect_http`) are async.
 
