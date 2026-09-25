@@ -2,8 +2,6 @@
 
 .PHONY: help help-all build validate validate-static release version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
 
-BASE_REF ?= origin/main
-
 help: ## One-screen help (make help-all for every target)
 	@echo "Daily:"
 	@echo "  make fmt        format code, apply safe linter fixes"
@@ -209,8 +207,8 @@ deps: ## Tidy/update language dependency lockfiles.
 	cd python/tests/proto && buf dep update
 	cd testdata/openapi && buf dep update
 
-breaking: ## Check proto breaking changes against BASE_REF.
-	cd proto && buf breaking --against "../.git#ref=$(BASE_REF),subdir=proto"
+breaking: ## Check proto breaking changes against the previous release tag (a pull request's base branch in CI).
+	scripts/check_breaking.sh
 
 verify-generate: ## Verify generated build artifacts are committed.
 	$(MAKE) generate

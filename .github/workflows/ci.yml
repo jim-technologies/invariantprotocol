@@ -19,7 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Full history so the breaking slice can diff proto against origin/main.
+          # Full history and tags so the breaking slice can diff proto against
+          # the previous release tag (a pull request's base branch on PRs).
           fetch-depth: 0
       - uses: flox/install-flox-action@1128abd73431089ab9d871c893b4e72a729354e1 # v2.6.0
         with:

@@ -10,6 +10,24 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+### Fixed
+
+- **The protobuf breaking check compares against the previous release, so it
+  can fail on `main` again.** `make breaking` (part of `make validate`)
+  compared the `proto` module with `origin/main`; on `main` after a push that
+  compared HEAD with itself and could never fail. `scripts/check_breaking.sh`
+  now compares against the newest plain-SemVer `v*` tag reachable from HEAD,
+  or the preceding release when the release tag already points at HEAD; pull
+  request CI runs compare against the pull request's base branch. With no
+  reachable release tag the check is skipped with a message instead of passing
+  silently. `make release` runs the same check before it reports a version
+  ready to tag.
+
+### Removed
+
+- The `BASE_REF` make variable. The breaking check chooses its own baseline;
+  run `buf breaking` from `proto/` directly to compare against another ref.
+
 ## v0.16.4 — 2026-09-25
 
 ### Fixed

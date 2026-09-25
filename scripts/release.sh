@@ -40,6 +40,7 @@ fi
 
 python3 scripts/check_versions.py
 python3 scripts/check_feature_parity.py --release
+scripts/check_breaking.sh
 
 cat <<EOF
 release: ready to publish ${tag}.
