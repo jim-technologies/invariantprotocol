@@ -253,7 +253,7 @@ or one insert per Arrow batch. The Lance SDK owns
 Lance manifests, fragments, data files, indexes, primary keys, MemWAL/LSM
 policy, compaction, object-store credentials, and namespace/catalog behavior.
 Do not add any of those to SchemaBundle or implement a Lance file writer.
-Repository qualification pins LanceDB 0.36.0 and PyArrow 25.0.0. That LanceDB
+Repository qualification pins LanceDB 0.37.1 and PyArrow 25.0.1. That LanceDB
 release documents MemWAL spec, inspection, and writer-drain methods, but still
 documents constructing `LsmWriteSpec` through its private `_lancedb` extension
 module. Do not import that private symbol or claim a supported public MemWAL

@@ -448,7 +448,7 @@ reason about total size for write parallelism. A streaming reader instead
 prioritizes bounded conversion; explicit Lance write parallelism and its
 in-flight memory/fragment tradeoff remain application policy.
 
-Repository qualification locks LanceDB 0.36.0 and PyArrow 25.0.0 in
+Repository qualification locks LanceDB 0.37.1 and PyArrow 25.0.1 in
 `python/uv.lock`. Its deterministic local lifecycle creates an empty table
 from the Invariant-generated schema, adds the complete record-batch reader,
 appends with another reader, closes and reopens, creates an HNSW-SQ vector
@@ -472,7 +472,7 @@ Lance SDK/table policy. Invariant neither writes the Lance format nor models
 those settings. Lance Namespace REST likewise remains an SDK boundary; its
 Arrow IPC request bodies can be produced from the same canonical Arrow table.
 
-LanceDB 0.36.0 preserves the `FixedSizeList` element type and dimension,
+LanceDB 0.37.1 preserves the `FixedSizeList` element type and dimension,
 top-level field nullability, and top-level field metadata after persistence.
 It widens the synthetic Arrow value field from non-null to nullable and
 normalizes away that child's custom metadata. The reopened physical schema can
@@ -504,7 +504,7 @@ rejects NaN values. Keep the fail-closed `on_bad_vectors="error"` behavior when
 protobuf fidelity matters; LanceDB's `drop`, `fill`, and `null` modes alter data
 and must be an explicit application decision.
 
-The locked LanceDB 0.36.0 Python API documents MemWAL spec, inspection, and
+The locked LanceDB 0.37.1 Python API documents MemWAL spec, inspection, and
 writer-drain methods, but its documented `LsmWriteSpec` constructor still lives
 in the private `_lancedb` extension module. Private extension-module symbols
 are not a production contract, so the qualification deliberately does not

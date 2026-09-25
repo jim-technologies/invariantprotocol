@@ -145,7 +145,7 @@ async def test_lancedb_lifecycle_uses_only_invariant_generated_arrow(tmp_path: P
     assert persisted_schema.field("vector").nullable == initial.schema.field("vector").nullable
     assert persisted_schema.field("vector64").nullable == initial.schema.field("vector64").nullable
     assert persisted_schema.field("vector").metadata[b"invariant.stable_id"] == b"3"
-    # LanceDB preserves the fixed-size shape and top-level identity, but 0.36.0
+    # LanceDB preserves the fixed-size shape and top-level identity, but 0.37.1
     # widens child nullability and drops the synthetic child's custom metadata.
     assert not persisted_vector.value_field.metadata
     assert not persisted_vector64.value_field.metadata
