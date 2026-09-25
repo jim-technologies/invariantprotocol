@@ -532,8 +532,10 @@ Dependency roots and lockfiles:
   audit tools `gitleaks`, `cargo-audit`, and `govulncheck`, and `atlas`. Flox
   may provide a bootstrap Go command while `GOTOOLCHAIN` selects the exact
   checksum-verified patch release required by `go.mod` when the Flox catalog
-  lags a security release. The manifest pins `buf` at 1.72.0 and `nodejs` at
-  24.20.0; `.flox/env/manifest.lock` records the resolved build of every tool.
+  lags a security release. The manifest pins `buf` at 1.72.0, `nodejs` at
+  24.20.0, `uv` at 0.11.28, and the Rust toolchain group at 1.97.1 (the crates
+  declare `rust-version = "1.97"`); `.flox/env/manifest.lock` records the
+  resolved build of every tool.
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev
   dep, including pytest-cov. `uv run` resolves against this. PyArrow belongs in
   the optional `data` extra and the dev test group; importing the core RPC

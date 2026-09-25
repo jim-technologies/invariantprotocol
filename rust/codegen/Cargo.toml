@@ -2,7 +2,7 @@
 name = "invariant-protocol-codegen"
 version = "0.16.4"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97"
 description = "Generate Invariant registration bridges beside standard Tonic services"
 license = "Apache-2.0"
 repository = "https://github.com/jim-technologies/invariantprotocol"

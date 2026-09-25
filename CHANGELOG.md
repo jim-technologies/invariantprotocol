@@ -23,6 +23,14 @@ but never silent wire-behavior regressions.
   silently. `make release` runs the same check before it reports a version
   ready to tag.
 
+### Changed
+
+- Toolchain: the Flox manifest pins the Rust toolchain group (`rustc`,
+  `cargo`, `clippy`, `rustfmt`) at 1.97.1, whose embedded LLVM 21.1.8 still
+  matches the `llvm` pin used for coverage, and both crates declare
+  `rust-version = "1.97"`. `uv` is pinned at 0.11.28 in its own package group
+  so the exact toplevel pins stay put.
+
 ### Removed
 
 - The `BASE_REF` make variable. The breaking check chooses its own baseline;
