@@ -100,11 +100,19 @@ types.
 
 ### Async-native Python (load-bearing)
 
-Python is async-only. Generated service registration rejects sync handlers via
-`inspect.iscoroutinefunction`. Interceptors must be standard async
+Python is async-only; there is no sync-compat layer. Generated service
+registration (`add_<Service>Servicer_to_server`) enforces the handler shape at
+startup: a unary handler must be `async def` (or a callable whose `__call__`
+is), checked with `inspect.iscoroutinefunction`; a server-streaming handler
+must be an async generator function (`async def` with `yield`), checked with
+`inspect.isasyncgenfunction`. A sync handler, or a coroutine-shaped streaming
+handler, is rejected with `TypeError`. Dispatch checks the shape again on
+every call, which also covers a terminal substituted by a shared interceptor:
+the unary terminal must return an awaitable, and the stream terminal may
+return an async iterator directly or an awaitable that resolves to one;
+anything else raises `TypeError`. Interceptors must be standard async
 `grpc.aio.ServerInterceptor` instances. All projections (HTTP/MCP/gRPC/CLI)
 and remote clients (`connect_grpc`, `connect_http`) are async.
-There is no sync-compat layer and no detect-and-await.
 
 - HTTP projection is an ASGI app served by uvicorn. Users mount it on their own ASGI app via `Server.asgi_app()`.
 - gRPC projection uses `grpc.aio.server`.
@@ -514,10 +522,13 @@ all four language packages in the scheduled audit workflow.
 
 Dependency roots and lockfiles:
 
-- **`.flox/env/manifest.toml`** — language toolchains and CLI tools (`python3`,
-  `uv`, `go`, `buf`, `golangci-lint`, `ruff`, `protoc`, `protoc-gen-go`,
-  `protoc-gen-go-grpc`, `cargo-llvm-cov`, matching LLVM tools, ShellCheck, and
-  Atlas). Flox
+- **`.flox/env/manifest.toml`** — language toolchains and CLI tools:
+  `python3`, `uv`, `go`, `nodejs`, `buf`, `protoc`, `protoc-gen-go`,
+  `protoc-gen-go-grpc`, the Rust toolchain group (`rustc`, `cargo`, `clippy`,
+  `rustfmt`) with `cargo-llvm-cov`, `llvm` (matching rustc's LLVM for
+  coverage), and `rust-analyzer`, `gcc` (libstdc++ for native Python wheels),
+  the linters `golangci-lint`, `ruff`, `actionlint`, and `shellcheck`, the
+  audit tools `gitleaks`, `cargo-audit`, and `govulncheck`, and `atlas`. Flox
   may provide a bootstrap Go command while `GOTOOLCHAIN` selects the exact
   checksum-verified patch release required by `go.mod` when the Flox catalog
   lags a security release. The manifest pins `buf` at 1.72.0 and `nodejs` at
@@ -567,7 +578,8 @@ proxy projection catalogs.
 - **Handler shape (Python)**: `async def Method(self, request, context)` declared
   as an async generator (`yield response`). Implement the complete generated
   servicer and register it with `add_<Service>Servicer_to_server`. Registration
-  rejects coroutines with a clear error so the mismatch is caught at startup.
+  rejects a coroutine function (`async def` without `yield`) and any sync
+  handler with a `TypeError` so the mismatch is caught at startup.
 - **Wire formats**:
   - gRPC: native server-streaming (`grpc.StreamDesc`).
   - HTTP: Connect streaming envelopes (`application/connect+json` for
