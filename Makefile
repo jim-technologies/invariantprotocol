@@ -49,17 +49,7 @@ git-install-check: ## Install every language package from the current Git commit
 	scripts/check_git_installs.sh
 
 connect-interop: node_modules/.package-lock.json ## Exercise Go, Python, and Rust HTTP projections with Connect-ES.
-	@set -eu; \
-	tmp="$$(mktemp -d)"; \
-	trap 'rm -rf "$$tmp"' EXIT; \
-	rust_target="$${CARGO_TARGET_DIR:-rust/target}"; \
-	case "$$rust_target" in /*) ;; *) rust_target="$(CURDIR)/$$rust_target" ;; esac; \
-	GOFLAGS=-mod=readonly go build -o "$$tmp/go-connect-interop" ./go/tests/connectinterop; \
-	uv sync --locked --project python; \
-	cargo build --manifest-path rust/Cargo.toml --locked --target-dir "$$rust_target" --example connect_interop_server; \
-	INVARIANT_CONNECT_INTEROP_GO="$$tmp/go-connect-interop" \
-	INVARIANT_CONNECT_INTEROP_RUST="$$rust_target/debug/examples/connect_interop_server" \
-	node typescript/tests/connect_interop.ts
+	scripts/connect_interop.sh
 
 postgres-integration: ## Apply and round-trip generated PostgreSQL through Atlas.
 	scripts/check_postgres_atlas.sh
@@ -150,14 +140,7 @@ test-typescript: node_modules/.package-lock.json ## Run TypeScript unit and tran
 coverage: coverage-go coverage-python coverage-rust coverage-typescript ## Run tests with maintained coverage floors.
 
 coverage-go: ## Run Go tests and enforce authored-code statement coverage.
-	@set -eu; \
-	all_packages="$$(GOFLAGS=-mod=readonly go list ./go/...)"; \
-	packages="$$(printf '%s\n' "$$all_packages" | grep -Ev '/go/(gen/|tests/(connectinterop|gen|manual)$$)')"; \
-	profile="$$(mktemp)"; \
-	trap 'rm -f "$$profile"' EXIT; \
-	GOFLAGS=-mod=readonly go test -count=1 -covermode=atomic -coverprofile="$$profile" $$packages; \
-	total="$$(go tool cover -func="$$profile" | awk '/^total:/ {gsub("%", "", $$3); print $$3}')"; \
-	awk -v total="$$total" 'BEGIN { printf "Go authored statement coverage: %.1f%% (required: 80.0%%)\n", total; exit !(total >= 80.0) }'
+	scripts/coverage_go.sh
 
 coverage-python: ## Run Python tests with branch coverage.
 	cd python && uv run --locked python -m pytest --cov=invariant --cov-branch --cov-report=term-missing tests/
@@ -174,29 +157,7 @@ bench: ## Run Go, Python, and Rust benchmarks.
 	cd rust && cargo bench --locked --bench bench -- --warm-up-time 1 --measurement-time 2
 
 generate: node_modules/.package-lock.json ## Regenerate committed build artifacts.
-	# Remove only configured generator outputs. Keep Python package markers and
-	# hand-written files; this makes deleted/renamed protos delete stale bindings.
-	find go/gen go/tests/gen -type f -name '*.pb.go' -delete
-	find python/src/invariant/gen python/src/buf python/tests/proto/gen -type f \( -name '*_pb2.py' -o -name '*_pb2.pyi' -o -name '*_pb2_grpc.py' \) -delete
-	find typescript/src/gen typescript/tests/gen -type f -name '*_pb.ts' -delete
-	cd proto && buf build -o descriptor.binpb
-	cd proto && NODE_NO_WARNINGS=1 buf generate descriptor.binpb
-	cd proto && NODE_NO_WARNINGS=1 buf generate --template buf.googleapis.gen.yaml
-	cd python/tests/proto && buf build -o descriptor.binpb
-	cd python/tests/proto && buf generate descriptor.binpb
-	cd python/tests/proto && buf generate --template buf.validate.gen.yaml
-	cd python/tests/proto && uv run --locked --project ../.. python -m grpc_tools.protoc --descriptor_set_in=descriptor.binpb --grpc_python_out=gen greet.proto
-	cd conformance/proto && buf build -o descriptor.binpb
-	cd conformance/proto && buf generate descriptor.binpb
-	cd conformance/proto && uv run --locked --project ../../python python -m grpc_tools.protoc --descriptor_set_in=descriptor.binpb --grpc_python_out=../../python/tests/proto/gen invariantprotocol/conformance/v1/native_cardinality.proto
-	buf build --config buf.data.yaml --path testdata/schema/test/v1/annotated.proto -o testdata/schema/descriptor.binpb
-	GOFLAGS=-mod=readonly go run ./go/cmd/invariant-schema compile --descriptor testdata/schema/descriptor.binpb --output testdata/schema/schema.binpb
-	GOFLAGS=-mod=readonly go run ./go/cmd/invariant-schema compile --descriptor python/tests/proto/descriptor.binpb --message data.v1.CanonicalRecord --message data.v1.Proto2Record --output testdata/data.schema.binpb
-	mkdir -p testdata/openapi/gen/library/v1
-	GOFLAGS=-mod=readonly go run ./go/cmd/invariant-openapi import --input testdata/openapi/library.yaml --package library.v1 --go-package example.com/project/gen/library/v1 --output testdata/openapi/gen/library/v1/library.proto
-	cd testdata/openapi && buf format -w gen/library/v1/library.proto
-	cd testdata/openapi && buf build -o descriptor.binpb
-	GOFLAGS=-mod=readonly go run ./scripts/generate_cdc_v2_fixtures.go
+	scripts/generate.sh
 
 openapi-codegen-check: node_modules/.package-lock.json ## Compile the imported OpenAPI fixture through every language toolchain.
 	scripts/check_openapi_codegen.sh
@@ -214,11 +175,6 @@ breaking: ## Check proto breaking changes against the previous release tag (a pu
 	scripts/check_breaking_test.sh
 	scripts/check_breaking.sh
 
-verify-generate: ## Verify generated build artifacts are committed.
-	$(MAKE) generate
-	@if [ -n "$$(git status --porcelain --untracked-files=all -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/cdc/v2 testdata/data.schema.binpb testdata/openapi/descriptor.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen)" ]; then \
-		echo "Generated files are out of date. Run 'make generate' and commit the results."; \
-		git status --short -- proto/descriptor.binpb conformance/proto/descriptor.binpb go/gen go/tests/gen python/src/buf python/src/invariant/gen python/tests/proto/descriptor.binpb python/tests/proto/gen testdata/cdc/v2 testdata/data.schema.binpb testdata/openapi/descriptor.binpb testdata/openapi/gen/library/v1/library.proto testdata/schema/descriptor.binpb testdata/schema/schema.binpb typescript/src/gen typescript/tests/gen; \
-		exit 1; \
-	fi
-	$(MAKE) openapi-codegen-check
+verify-generate: node_modules/.package-lock.json ## Verify generated build artifacts are committed, then compile the imported OpenAPI fixture.
+	scripts/verify_generate.sh
+	scripts/check_openapi_codegen.sh

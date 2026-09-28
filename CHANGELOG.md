@@ -36,6 +36,14 @@ but never silent wire-behavior regressions.
   `python/pyproject.toml` now fails `make validate` instead of being silently
   re-locked by it.
 
+- The Makefile is a router again (`MAKEFILE-CONTRACT.md`): the four targets
+  that carried shell pipelines call scripts instead, with unchanged behaviour.
+  `make generate` runs `scripts/generate.sh`, `make verify-generate` runs
+  `scripts/verify_generate.sh` (regenerate, then fail on any difference in the
+  generated paths) and `scripts/check_openapi_codegen.sh`, `make coverage-go`
+  runs `scripts/coverage_go.sh`, and `make connect-interop` runs
+  `scripts/connect_interop.sh`; shellcheck covers all four in `make lint`.
+
 ### Removed
 
 - The manual release step: creating and pushing the annotated tag by hand
