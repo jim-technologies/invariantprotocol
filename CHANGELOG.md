@@ -30,6 +30,12 @@ but never silent wire-behavior regressions.
   pins every guard and the tag push in throwaway Git fixtures, and
   `make validate` runs it (`make release-test`).
 
+- Every `uv run` in the Makefile passes `--locked`: type checking, the proto
+  comment check, the Python suites and coverage, the LanceDB integration,
+  `pip-audit`, and the benchmarks. A `python/uv.lock` that no longer matches
+  `python/pyproject.toml` now fails `make validate` instead of being silently
+  re-locked by it.
+
 ### Removed
 
 - The manual release step: creating and pushing the annotated tag by hand

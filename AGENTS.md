@@ -550,10 +550,12 @@ Dependency roots and lockfiles:
   declare `rust-version = "1.97"`); `.flox/env/manifest.lock` records the
   resolved build of every tool.
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev
-  dep, including pytest-cov. `uv run` resolves against this. PyArrow belongs in
-  the optional `data` extra and the dev test group; importing the core RPC
-  package must not import PyArrow. LanceDB is a pinned development
-  qualification dependency, not an Invariant runtime dependency.
+  dep, including pytest-cov. `uv run` resolves against this, and every `uv run`
+  in the Makefile and `scripts/` passes `--locked`, so a lock that no longer
+  matches `pyproject.toml` fails the gate instead of being rewritten by it.
+  PyArrow belongs in the optional `data` extra and the dev test group;
+  importing the core RPC package must not import PyArrow. LanceDB is a pinned
+  development qualification dependency, not an Invariant runtime dependency.
 - **`go.mod` + `go.sum`** — every Go dep. The root module keeps Go packages in
   `go/` while allowing one repository-wide `vX.Y.Z` release tag. Consumers run
   `go get github.com/jim-technologies/invariantprotocol/go@vX.Y.Z` and import

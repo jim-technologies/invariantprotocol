@@ -68,7 +68,7 @@ clickhouse-integration: ## Apply generated declarations and round-trip values th
 	scripts/check_clickhouse.sh
 
 lance-integration: ## Exercise invariant-generated Arrow data through a local LanceDB lifecycle.
-	cd python && uv run python -m pytest tests/test_data_lance.py
+	cd python && uv run --locked python -m pytest tests/test_data_lance.py
 
 data-integration: postgres-integration clickhouse-integration lance-integration ## Exercise every external data-schema boundary.
 
@@ -98,11 +98,11 @@ lint: node_modules/.package-lock.json ## Run Go, Python, Rust, and proto linters
 	npm run lint
 
 typecheck: node_modules/.package-lock.json ## Run Python and TypeScript static type checks.
-	cd python && uv run mypy
+	cd python && uv run --locked mypy
 	npm run typecheck
 
 proto-comments: ## Verify projected proto comments are complete.
-	cd python && uv run invariant-check-proto-comments tests/proto/descriptor.binpb
+	cd python && uv run --locked invariant-check-proto-comments tests/proto/descriptor.binpb
 
 public-surface: ## Guard the public surface: tracked content, paths, and unpushed commit messages.
 	scripts/public-surface-check
@@ -115,7 +115,7 @@ security: node_modules/.package-lock.json ## Scan secrets and verify/audit every
 	gitleaks git --no-banner --redact .
 	go mod verify
 	GOFLAGS=-mod=readonly govulncheck -test ./...
-	cd python && uv lock --check && uv run pip-audit
+	cd python && uv lock --check && uv run --locked pip-audit
 	npm audit signatures
 	npm audit --audit-level=moderate
 	cd rust && cargo fetch --locked && cargo audit
@@ -139,7 +139,7 @@ race-go: ## Run the concurrent Go runtime under the race detector.
 	GOFLAGS=-mod=readonly go test -count=1 -race ./...
 
 test-python: ## Run Python unit and transport-integration tests.
-	cd python && uv run python -m pytest tests/
+	cd python && uv run --locked python -m pytest tests/
 
 test-rust: ## Run Rust unit and transport-integration tests.
 	cd rust && cargo test --workspace --all-targets --locked
@@ -160,7 +160,7 @@ coverage-go: ## Run Go tests and enforce authored-code statement coverage.
 	awk -v total="$$total" 'BEGIN { printf "Go authored statement coverage: %.1f%% (required: 80.0%%)\n", total; exit !(total >= 80.0) }'
 
 coverage-python: ## Run Python tests with branch coverage.
-	cd python && uv run python -m pytest --cov=invariant --cov-branch --cov-report=term-missing tests/
+	cd python && uv run --locked python -m pytest --cov=invariant --cov-branch --cov-report=term-missing tests/
 
 coverage-rust: ## Run Rust tests with LLVM source coverage.
 	cd rust && LLVM_COV="$$(command -v llvm-cov)" LLVM_PROFDATA="$$(command -v llvm-profdata)" cargo llvm-cov --workspace --locked --ignore-filename-regex '/target/' --fail-under-lines 80
@@ -170,7 +170,7 @@ coverage-typescript: node_modules/.package-lock.json ## Run TypeScript tests wit
 
 bench: ## Run Go, Python, and Rust benchmarks.
 	GOFLAGS=-mod=readonly go test -bench=. -benchtime=2s -run=^$$ ./...
-	cd python && uv run python bench/bench.py
+	cd python && uv run --locked python bench/bench.py
 	cd rust && cargo bench --locked --bench bench -- --warm-up-time 1 --measurement-time 2
 
 generate: node_modules/.package-lock.json ## Regenerate committed build artifacts.
