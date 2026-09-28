@@ -502,6 +502,7 @@ make validate        # the full gate: static checks, generated-code staleness, c
 make security        # secrets, integrity, and vulnerability checks
 make integration     # Local LanceDB plus Git/Connect and Docker-backed PostgreSQL/ClickHouse
 make parity-release  # strict portable-feature gate before one root tag
+make release         # maintainers: create and push the vX.Y.Z tag after CI passes on main
 ```
 
 ## Dependency boundaries
@@ -510,9 +511,13 @@ The root `VERSION` is the release version for every language package. CI checks
 that package metadata and runtime version constants stay synchronized.
 Releases use one repository tag, `vX.Y.Z`; do not create new language-prefixed
 tags.
-Push the release commit to `main`, wait for its CI gate, then create the
-annotated tag. Tag pushes rerun the same gate; the scheduled audit workflow
-verifies clean Git installs and can be dispatched on demand.
+The release commit sets `VERSION` and renames the unreleased `CHANGELOG.md`
+section to `## vX.Y.Z`. Push it to `main`, wait for its CI gate, then run
+`make release`: after its guards (clean tree, `HEAD` on `origin/main`, the
+first changelog heading equal to `VERSION`, tag absent) and the release-only
+checks it creates the annotated tag and pushes it. Do not tag by hand. Tag
+pushes rerun the same gate; the scheduled audit workflow verifies clean Git
+installs and can be dispatched on demand.
 A deliberate 0.x protobuf break needs both a `### Breaking` entry in the
 unreleased `CHANGELOG.md` section and `INVARIANT_ALLOW_PROTO_BREAK=1` (the
 repository variable in CI) until its release is tagged; remove the variable

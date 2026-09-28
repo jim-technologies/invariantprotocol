@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help help-all build validate validate-static release version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
+.PHONY: help help-all build validate validate-static release release-test version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
 
 help: ## One-screen help (make help-all for every target)
 	@echo "Daily:"
@@ -8,7 +8,7 @@ help: ## One-screen help (make help-all for every target)
 	@echo "  make generate   regenerate committed build artifacts"
 	@echo "  make test       run all language test suites"
 	@echo "  make validate   the full offline gate"
-	@echo "  make release    verify release readiness"
+	@echo "  make release    tag and push v<VERSION> (maintainers, after CI passes on main)"
 	@echo ""
 	@echo "Everything else: make help-all"
 
@@ -25,7 +25,7 @@ build: node_modules/.package-lock.json ## Build every language package and comma
 # `flox activate -- make validate` in one job, so CI cannot drift from it.
 validate: validate-static verify-generate coverage race-go ## Run the full gate: static checks, generated-code staleness, coverage-gated tests, and the Go race detector.
 
-validate-static: version-check parity fmt-check lint typecheck proto-comments breaking public-surface go-mod-check ## Run the static slice of validate: formatting, lint, type, schema, breaking-change, and policy checks.
+validate-static: version-check parity fmt-check lint typecheck proto-comments breaking release-test public-surface go-mod-check ## Run the static slice of validate: formatting, lint, type, schema, breaking-change, release-guard, and policy checks.
 
 node_modules/.package-lock.json: package-lock.json package.json
 	npm ci --ignore-scripts
@@ -39,8 +39,11 @@ parity: ## Validate and report the cross-language feature contract.
 parity-release: ## Reject a release while any core feature lacks four-language support.
 	python3 scripts/check_feature_parity.py --release
 
-release: ## Verify release readiness from the root VERSION; refuses a dirty or unpushed tree.
+release: ## Create and push the annotated v<VERSION> tag after the release guards (maintainers only).
 	scripts/release.sh
+
+release-test: ## Pin the release guards and the tag push in throwaway Git fixtures.
+	scripts/release_test.sh
 
 git-install-check: ## Install every language package from the current Git commit.
 	scripts/check_git_installs.sh

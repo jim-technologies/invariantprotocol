@@ -1,60 +1,58 @@
 #!/usr/bin/env bash
-# Fail-closed release guard (MAKEFILE-CONTRACT.md `make release`).
-# Verifies release readiness, states what a release publishes, and refuses to
-# create the tag itself: the annotated tag is created manually after the
-# release commit's CI workflow passes on main (see AGENTS.md). Runs from a
-# maintainer's machine; CI never publishes.
+# Publish one Invariant release (MAKEFILE-CONTRACT.md `make release`).
+#
+# Distribution is Git-only: every language SDK installs from the single
+# annotated root tag vVERSION, so publishing is creating and pushing that tag.
+# Packages are deliberately never published to npm, PyPI, or crates.io.
+#
+# Run it from a maintainer's machine once the release commit is on main and
+# its CI gate has passed; CI never publishes, it only reruns the gate on the
+# pushed tag. The guards come first and fail closed: a clean tree including
+# untracked files, HEAD pushed to origin/main, VERSION equal to the first
+# CHANGELOG.md heading, and tag vVERSION absent locally and on origin. Then the
+# release-only checks run (version alignment, strict feature parity, protobuf
+# compatibility), and only then is the tag created and pushed.
+#
+# scripts/release_test.sh pins this behaviour.
 
 set -euo pipefail
+shopt -s inherit_errexit
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$root"
 
+refuse() {
+  echo "release: refusing: $*" >&2
+  exit 1
+}
+
 version="$(tr -d '[:space:]' < VERSION)"
 tag="v${version}"
 
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "release: VERSION must be MAJOR.MINOR.PATCH, got ${version}" >&2
-  exit 1
-fi
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  refuse "VERSION must be MAJOR.MINOR.PATCH, got ${version}"
 
-if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
-  echo "release: refusing a dirty tree; commit or stash everything first." >&2
-  exit 1
-fi
+dirty="$(git status --porcelain --untracked-files=all)"
+[[ -z "$dirty" ]] || refuse "the tree is dirty; commit or stash everything first"
 
 git fetch --quiet origin main
-if ! git merge-base --is-ancestor HEAD origin/main; then
-  echo "release: refusing an unpushed tree; HEAD must be on origin/main." >&2
-  exit 1
-fi
+git merge-base --is-ancestor HEAD origin/main ||
+  refuse "HEAD is not pushed to origin/main"
+
+heading="$(grep -m 1 '^## ' CHANGELOG.md || true)"
+[[ "$heading" == "## ${tag}" || "$heading" == "## ${tag} "* ]] ||
+  refuse "the first CHANGELOG.md heading must be '## ${tag}', not '${heading}'"
 
 if git rev-parse --quiet --verify "refs/tags/${tag}" >/dev/null; then
-  echo "release: tag ${tag} already exists locally; bump VERSION first." >&2
-  exit 1
+  refuse "tag ${tag} already exists locally; bump VERSION first"
 fi
-if [[ -n "$(git ls-remote --tags origin "refs/tags/${tag}")" ]]; then
-  echo "release: tag ${tag} already exists on origin; bump VERSION first." >&2
-  exit 1
-fi
+remote_tag="$(git ls-remote --tags origin "refs/tags/${tag}")"
+[[ -z "$remote_tag" ]] || refuse "tag ${tag} already exists on origin; bump VERSION first"
 
 python3 scripts/check_versions.py
 python3 scripts/check_feature_parity.py --release
 scripts/check_breaking.sh
 
-cat <<EOF
-release: ready to publish ${tag}.
-
-Publishing is one annotated repository tag; every language SDK installs from
-Git at that tag with the shared root VERSION (Go modules resolve
-github.com/jim-technologies/invariantprotocol directly; npm, uv/pip, and
-cargo use their Git-dependency syntax). Packages are deliberately never
-published to npm, PyPI, or crates.io.
-
-release: refusing to create the tag automatically. After this release
-commit's CI workflow passes on main, publish with:
-
-  git tag -a ${tag} -m "${tag}"
-  git push origin ${tag}
-EOF
-exit 1
+git tag -a "$tag" -m "$tag"
+git push origin "refs/tags/${tag}"
+echo "release: published ${tag}; Go, Python, Rust, and TypeScript install from this one Git tag."

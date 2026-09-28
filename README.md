@@ -762,18 +762,25 @@ Build tools and language-specific ecosystem bridges are classified separately
 instead of being duplicated for artificial symmetry. See
 [feature parity](docs/feature-parity.md) and [runtime stack policy](docs/runtime-stacks.md).
 
-Release commits are pushed to `main` and must complete the CI gate before
-their single annotated `vX.Y.Z` tag is created. Tag pushes rerun the same
-gate; the audit workflow verifies clean Git installs and can be dispatched
-on demand.
+A release commit sets `VERSION` and renames the unreleased `CHANGELOG.md`
+section to `## vX.Y.Z`, is pushed to `main`, and must complete the CI gate
+before a maintainer runs `make release`, which creates and pushes its single
+annotated `vX.Y.Z` tag. Tag pushes rerun the same gate; the audit workflow
+verifies clean Git installs and can be dispatched on demand.
 
 The verb grammar follows [MAKEFILE-CONTRACT.md](MAKEFILE-CONTRACT.md):
 `make validate` is the single gate, and CI runs exactly
 `flox activate -- make validate` — every toolchain comes from the Flox
 manifest, so CI cannot drift from the local gate.
-`make release` checks release readiness from the root `VERSION` and refuses a
-dirty or unpushed tree; it never publishes to language registries, because
-Invariant packages are deliberately Git-distributed only.
+`make release` is the one publishing verb. It refuses a dirty tree (untracked
+files included), a `HEAD` that is not on `origin/main`, a first `CHANGELOG.md`
+heading other than `## vVERSION`, or a `vVERSION` tag that already exists
+locally or on `origin`; runs the version, strict feature-parity, and protobuf
+breaking checks; and only then creates the annotated tag and pushes it. It
+never publishes to language registries, because Invariant packages are
+deliberately Git-distributed only. `make validate` runs
+`scripts/release_test.sh`, which pins those guards and the tag push in
+throwaway Git fixtures.
 
 Network-dependent verification lives in the secretless weekly `audit`
 workflow (also runnable on demand): dependency and secret audits, clean Git

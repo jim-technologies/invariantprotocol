@@ -20,6 +20,22 @@ but never silent wire-behavior regressions.
   the distribution. The contract also states that `run` and `deploy` are not
   framework verbs.
 
+- **`make release` publishes the release.** After its guards it creates the
+  annotated `vVERSION` tag and pushes it to `origin`, and exits 0; it used to
+  verify readiness, print the `git tag` and `git push` commands for a
+  maintainer to run, and exit 1. It now also refuses unless the first
+  `CHANGELOG.md` heading is `## vVERSION`, and a failure to query `origin` for
+  the tag fails the release instead of reading as "tag absent". Run it once the
+  release commit's CI gate has passed on `main`. `scripts/release_test.sh`
+  pins every guard and the tag push in throwaway Git fixtures, and
+  `make validate` runs it (`make release-test`).
+
+### Removed
+
+- The manual release step: creating and pushing the annotated tag by hand
+  after `make release` printed the commands. `make release` is the one way to
+  publish a tag.
+
 ## v0.16.5 — 2026-09-25
 
 ### Added
