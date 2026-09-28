@@ -45,11 +45,13 @@ to.
 | `make fmt` | where the repository formats code | Rewrite formatting in place, every language in the repository. `validate` checks formatting and never rewrites it. |
 | `make build` | where the repository produces artifacts | Produce them locally, from the tree as committed. |
 | `make generate` | where code is generated from a schema | Regenerate the committed output. `validate` fails when what is committed differs from what `generate` produces. |
-| `make release` | where the repository publishes packages | Publish to public ecosystems only, from a maintainer's machine, refusing a dirty or unpushed tree. CI never publishes. |
+| `make release` | where the repository is distributed | From a maintainer's machine, after the same guards everywhere — clean tree, `HEAD` pushed to `origin/main`, `VERSION` equal to the first changelog heading, tag `v<VERSION>` absent — create the annotated tag `v<VERSION>`, push it, and exit 0. The tag is the distribution (Git-tag installs); no package ecosystem is published to unless the repository documents one. CI never publishes; the one workflow allowed to write anywhere is a docs-publishing job authenticated only by its own OIDC token. |
 | `make help` | recommended | List the verbs, from the `## ` comments on the targets. |
 
 A repository may add verbs. It may not give these words a second meaning, and
 it may not reach one of these jobs under a different word.
+
+`run` and `deploy` are not part of this contract: a framework has no local server loop to offer and owns no deployment surface, so neither word appears in its Makefile.
 
 ## The public-surface guard
 

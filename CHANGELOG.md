@@ -8,6 +8,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x minor releases may include deliberate API changes,
 but never silent wire-behavior regressions.
 
+## Unreleased
+
+### Changed
+
+- `MAKEFILE-CONTRACT.md` takes the organisation-wide `make release` row:
+  from a maintainer's machine, after the same guards in every public
+  repository (clean tree, `HEAD` pushed to `origin/main`, `VERSION` equal to
+  the first changelog heading, tag `v<VERSION>` absent), `make release`
+  creates the annotated tag `v<VERSION>`, pushes it, and exits 0. The tag is
+  the distribution. The contract also states that `run` and `deploy` are not
+  framework verbs.
+
 ## v0.16.5 — 2026-09-25
 
 ### Added
