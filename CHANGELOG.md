@@ -8,6 +8,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x minor releases may include deliberate API changes,
 but never silent wire-behavior regressions.
 
+## v0.16.7 — 2026-09-28
+
+### Added
+
+- `invariant-schema sqlite` renders SQLite desired-state DDL from the existing
+  canonical bundle, including exact integer, decimal, UUID, fixed-byte and
+  top-level fixed-list checks, presence/defaults and oneof constraints. Actual
+  SQLite round trips verify boundary values and rejected writes; diagnostics
+  state temporal, floating-point and nested JSON limitations. This additive
+  build tool does not change logical bundles or deployed databases.
+
 ## v0.16.6 — 2026-09-28
 
 ### Added

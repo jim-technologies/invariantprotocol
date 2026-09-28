@@ -19,6 +19,7 @@ import (
 	"github.com/jim-technologies/invariantprotocol/go/data/iceberg"
 	"github.com/jim-technologies/invariantprotocol/go/data/parquet"
 	"github.com/jim-technologies/invariantprotocol/go/data/postgres"
+	"github.com/jim-technologies/invariantprotocol/go/data/sqlite"
 	datav1 "github.com/jim-technologies/invariantprotocol/go/gen/invariant/data/v1"
 )
 
@@ -34,7 +35,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("command required: compile, migrate, arrow, parquet, iceberg, clickhouse, clickhouse-iceberg, or postgres")
+		return errors.New("command required: compile, migrate, arrow, parquet, iceberg, clickhouse, clickhouse-iceberg, postgres, or sqlite")
 	}
 
 	switch args[0] {
@@ -42,14 +43,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runCompile(args[1:], stderr)
 	case "migrate":
 		return runMigrate(args[1:], stderr)
-	case "arrow", "parquet", "iceberg", "clickhouse", "clickhouse-iceberg", "postgres":
+	case "arrow", "parquet", "iceberg", "clickhouse", "clickhouse-iceberg", "postgres", "sqlite":
 		return runRender(args[0], args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		writeUsage(stdout)
 		return nil
 	default:
 		return fmt.Errorf(
-			"unknown command %q; expected compile, migrate, arrow, parquet, iceberg, clickhouse, clickhouse-iceberg, or postgres",
+			"unknown command %q; expected compile, migrate, arrow, parquet, iceberg, clickhouse, clickhouse-iceberg, postgres, or sqlite",
 			args[0],
 		)
 	}
@@ -61,8 +62,8 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "    Without --message, messages marked (invariant.data.v1.dataset) are compiled.")
 	fmt.Fprintln(w, "  invariant-schema migrate --bundle FILE --output FILE")
 	fmt.Fprintln(w, "    Upgrade the supported historical SchemaBundle while retaining identities and tombstones.")
-	fmt.Fprintln(w, "  invariant-schema arrow|parquet|iceberg|clickhouse|clickhouse-iceberg|postgres --bundle FILE [--message FULL_NAME] [--output FILE|-]")
-	fmt.Fprintln(w, "    PostgreSQL renders every dataset when --message is omitted; other targets require one dataset.")
+	fmt.Fprintln(w, "  invariant-schema arrow|parquet|iceberg|clickhouse|clickhouse-iceberg|postgres|sqlite --bundle FILE [--message FULL_NAME] [--output FILE|-]")
+	fmt.Fprintln(w, "    PostgreSQL and SQLite render every dataset when --message is omitted; other targets require one dataset.")
 	fmt.Fprintln(w, "    Arrow emits schema-only IPC; Lance/LanceDB consume that schema and Python arrow_table()/arrow_record_batch_reader() through their SDK.")
 }
 
@@ -209,8 +210,8 @@ func runRender(target string, args []string, stdout, stderr io.Writer) error {
 	}
 
 	var artifact []byte
-	if target == "postgres" && messageName == "" {
-		artifact, err = renderPostgresBundle(bundle, stderr)
+	if (target == "postgres" || target == "sqlite") && messageName == "" {
+		artifact, err = renderSQLBundle(target, bundle, stderr)
 		if err != nil {
 			return err
 		}
@@ -238,10 +239,10 @@ func runRender(target string, args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func renderPostgresBundle(bundle *datav1.SchemaBundle, stderr io.Writer) ([]byte, error) {
+func renderSQLBundle(target string, bundle *datav1.SchemaBundle, stderr io.Writer) ([]byte, error) {
 	datasets := slices.Clone(bundle.GetDatasets())
 	if len(datasets) == 0 {
-		return nil, errors.New("postgres: bundle contains no datasets")
+		return nil, fmt.Errorf("%s: bundle contains no datasets", target)
 	}
 	slices.SortFunc(datasets, func(left, right *datav1.DatasetSchema) int {
 		if bySource := strings.Compare(left.GetSourceMessage(), right.GetSourceMessage()); bySource != 0 {
@@ -251,9 +252,22 @@ func renderPostgresBundle(bundle *datav1.SchemaBundle, stderr io.Writer) ([]byte
 	})
 
 	var output bytes.Buffer
+	seen := map[string]bool{}
 	for index, dataset := range datasets {
-		artifact, diagnostics, err := render("postgres", dataset)
-		writeDiagnostics(stderr, "postgres", diagnostics)
+		if target == "sqlite" {
+			name := strings.Map(func(r rune) rune {
+				if r >= 'A' && r <= 'Z' {
+					return r + ('a' - 'A')
+				}
+				return r
+			}, dataset.GetName())
+			if seen[name] {
+				return nil, fmt.Errorf("sqlite: case-insensitive table collision %q", dataset.GetName())
+			}
+			seen[name] = true
+		}
+		artifact, diagnostics, err := render(target, dataset)
+		writeDiagnostics(stderr, target, diagnostics)
 		if err != nil {
 			return nil, err
 		}
@@ -353,6 +367,12 @@ func render(target string, dataset *datav1.DatasetSchema) ([]byte, []*datav1.Map
 		ddl, diagnostics, err := postgres.DDL(dataset)
 		if err != nil {
 			return nil, diagnostics, fmt.Errorf("postgres: render message %q: %w", dataset.GetSourceMessage(), err)
+		}
+		return withFinalNewline([]byte(ddl)), diagnostics, nil
+	case "sqlite":
+		ddl, diagnostics, err := sqlite.DDL(dataset)
+		if err != nil {
+			return nil, diagnostics, fmt.Errorf("sqlite: render message %q: %w", dataset.GetSourceMessage(), err)
 		}
 		return withFinalNewline([]byte(ddl)), diagnostics, nil
 	default:

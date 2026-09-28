@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help help-all build validate validate-static release release-test version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
+.PHONY: help help-all build validate validate-static release release-test version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration sqlite-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
 
 help: ## One-screen help (make help-all for every target)
 	@echo "Daily:"
@@ -60,7 +60,10 @@ clickhouse-integration: ## Apply generated declarations and round-trip values th
 lance-integration: ## Exercise invariant-generated Arrow data through a local LanceDB lifecycle.
 	cd python && uv run --locked python -m pytest tests/test_data_lance.py
 
-data-integration: postgres-integration clickhouse-integration lance-integration ## Exercise every external data-schema boundary.
+sqlite-integration: ## Apply compiled bundles and round-trip exact domains through SQLite.
+	scripts/check_sqlite.sh
+
+data-integration: postgres-integration clickhouse-integration lance-integration sqlite-integration ## Exercise every external data-schema boundary.
 
 integration: git-install-check connect-interop data-integration ## Exercise Git installs and external protocol/data boundaries.
 

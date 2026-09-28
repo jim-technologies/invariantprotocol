@@ -14,7 +14,7 @@ runtimes. Language-specific ecosystem adapters remain explicit rather than
 being mistaken for portable runtime features.
 
 Annotated protobuf dataset messages can also compile into one versioned data
-schema for Arrow, Parquet, Iceberg, PostgreSQL, and ClickHouse. Lance and
+schema for Arrow, Parquet, Iceberg, PostgreSQL, SQLite, and ClickHouse. Lance and
 LanceDB consume the same canonical Arrow schema and table; Invariant does not
 implement a competing Lance file writer. Explicit `--message` selection
 remains available for controlled builds.
@@ -28,7 +28,7 @@ remains available for controlled builds.
        │    └─ native gRPC / HTTP-Connect / MCP / CLI
        └─ invariant-schema → SchemaBundle
                               ├─ Arrow ──→ Lance/LanceDB SDK
-                              └─ Parquet / Iceberg / PostgreSQL / ClickHouse
+                              └─ Parquet / Iceberg / PostgreSQL / SQLite / ClickHouse
 ```
 
 Proto comments become MCP tool descriptions, CLI help, JSON Schema field
@@ -592,7 +592,7 @@ go run ./go/cmd/invariant-schema migrate \
   --output ledger.schema.binpb
 ```
 
-When a bundle contains multiple datasets, `postgres` emits every table in
+When a bundle contains multiple datasets, `postgres` and `sqlite` emit every table in
 deterministic source-message order so the result is one complete Atlas desired
 state. Pass `--message` to render one table as a controlled override. Arrow,
 Parquet, Iceberg, and ClickHouse artifacts each describe one dataset and
@@ -609,6 +609,12 @@ an omitted or empty vector, before constructing a native
 `pyarrow.FixedSizeListArray`. Other writers must perform the same boundary
 validation. The options do not encode keys, indexes, partitions, placement,
 or migration policy.
+
+The SQLite renderer emits desired-state SQL from the same bundle with checked
+INTEGER/REAL/TEXT/BLOB representations. It preserves full uint64 values as
+canonical decimal text and reports temporal precision/range and nested JSON
+validation limits. See [SQLite projection](docs/sqlite-schema.md) before adopting
+it. `make sqlite-integration` proves CLI rendering and actual database reopen.
 
 The PostgreSQL renderer emits desired-state DDL directly for Atlas; HCL is not
 another source format. Atlas consumes the generated `file://` SQL desired state
@@ -706,14 +712,14 @@ evolution rules, the qualified LanceDB lifecycle, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.16.6`; new releases do not create language-prefixed tags. The project
+tag `v0.16.7`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.16.6
+go get github.com/jim-technologies/invariantprotocol/go@v0.16.7
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -723,26 +729,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.6#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.7#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.6#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.7#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.6" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.7" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.6" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.7" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.16.6"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.16.7"
 ```
 
 For reproducible production builds, replace the tag with a full commit

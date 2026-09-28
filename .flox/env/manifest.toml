@@ -63,6 +63,9 @@ shellcheck.version = "0.11.0"
 # real migration boundary documented by this project.
 atlas.pkg-path = "atlas"
 atlas.version = "1.2.3"
+sqlite.pkg-path = "sqlite"
+sqlite.version = "3.53.3"
+sqlite.pkg-group = "sqlite"
 
 [vars]
 # Keep uv on the same Python 3.14 interpreter as the reproducible Flox

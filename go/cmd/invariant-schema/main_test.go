@@ -208,20 +208,22 @@ func TestRenderersEmitOfficialArtifactsAndSelectMessage(t *testing.T) {
 		})
 	}
 
-	t.Run("postgres renders the complete bundle deterministically", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		require.NoError(t, run([]string{"postgres", "--bundle", bundlePath}, &stdout, &stderr))
-		ddl := stdout.String()
-		require.Equal(t, 2, strings.Count(ddl, "CREATE TABLE"))
-		first := strings.Index(ddl, `CREATE TABLE "example_v1_first"`)
-		second := strings.Index(ddl, `CREATE TABLE "example_v1_second"`)
-		require.NotEqual(t, -1, first)
-		require.NotEqual(t, -1, second)
-		assert.Less(t, first, second, "bundle SQL must be independent of input dataset order")
-		assert.Contains(t, ddl, ");\n\nCREATE TABLE", "dataset statements must have one readable separator")
-		assert.Equal(t, 2, strings.Count(stderr.String(), "postgres: MAPPING_COMPATIBILITY_LOSSLESS: id:"))
-		assert.NotContains(t, ddl, "MAPPING_COMPATIBILITY")
-	})
+	for _, target := range []string{"postgres", "sqlite"} {
+		t.Run(target+" renders the complete bundle deterministically", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			require.NoError(t, run([]string{target, "--bundle", bundlePath}, &stdout, &stderr))
+			ddl := stdout.String()
+			require.Equal(t, 2, strings.Count(ddl, "CREATE TABLE"))
+			first := strings.Index(ddl, `CREATE TABLE "example_v1_first"`)
+			second := strings.Index(ddl, `CREATE TABLE "example_v1_second"`)
+			require.NotEqual(t, -1, first)
+			require.NotEqual(t, -1, second)
+			assert.Less(t, first, second, "bundle SQL must be independent of input dataset order")
+			assert.Contains(t, ddl, ");\n\nCREATE TABLE", "dataset statements must have one readable separator")
+			assert.Equal(t, 2, strings.Count(stderr.String(), target+": MAPPING_COMPATIBILITY_LOSSLESS: id:"))
+			assert.NotContains(t, ddl, "MAPPING_COMPATIBILITY")
+		})
+	}
 
 	t.Run("clickhouse requires selection and emits only a table body", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
@@ -250,6 +252,7 @@ func TestRenderersEmitOfficialArtifactsAndSelectMessage(t *testing.T) {
 		{target: "iceberg", contains: `"type":"struct"`},
 		{target: "clickhouse-iceberg", contains: fmt.Sprintf(`"version":%d`, clickhouse.ProjectionVersion)},
 		{target: "postgres", contains: `CREATE TABLE "example_v1_second"`},
+		{target: "sqlite", contains: `CREATE TABLE "example_v1_second"`},
 	} {
 		t.Run(test.target, func(t *testing.T) {
 			stdout.Reset()
@@ -278,6 +281,23 @@ func TestPostgresRejectsAnEmptyBundle(t *testing.T) {
 	require.EqualError(t, err, "postgres: bundle contains no datasets")
 	assert.Empty(t, stdout.String())
 	assert.Empty(t, stderr.String())
+}
+
+func TestSQLiteRejectsAmbiguousOrUnrenderableBundles(t *testing.T) {
+	empty := &datav1.SchemaBundle{IrVersion: data.IRVersion, MappingVersion: data.MappingVersion}
+	var stdout, stderr bytes.Buffer
+	require.EqualError(t, run([]string{"sqlite", "--bundle", writeBundle(t, empty)}, &stdout, &stderr), "sqlite: bundle contains no datasets")
+	bundle := oneFieldBundle("example.v1.Record")
+	bundle.Datasets[0].Fields = nil
+	bundle.Datasets[0].LastFieldId = 0
+	require.Error(t, run([]string{"sqlite", "--bundle", writeBundle(t, bundle)}, &stdout, &stderr))
+	require.Empty(t, stdout.String())
+	bundle = oneFieldBundle("example.v1.First")
+	second := oneFieldBundle("example.v1.Second").Datasets[0]
+	second.Name = strings.ToUpper(bundle.Datasets[0].Name)
+	bundle.Datasets = append(bundle.Datasets, second)
+	_, err := renderSQLBundle("sqlite", bundle, &stderr)
+	require.ErrorContains(t, err, "case-insensitive table collision")
 }
 
 func TestRenderOutputFileDoesNotContainDiagnostics(t *testing.T) {

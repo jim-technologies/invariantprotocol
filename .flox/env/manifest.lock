@@ -92,6 +92,11 @@
         "pkg-path": "shellcheck",
         "version": "0.11.0"
       },
+      "sqlite": {
+        "pkg-path": "sqlite",
+        "pkg-group": "sqlite",
+        "version": "3.53.3"
+      },
       "uv": {
         "pkg-path": "uv",
         "pkg-group": "uv",
@@ -2268,6 +2273,119 @@
       },
       "system": "x86_64-linux",
       "group": "uv",
+      "priority": 5
+    },
+    {
+      "attr_path": "sqlite",
+      "broken": false,
+      "derivation": "/nix/store/phdxxrsl75icnizbmyk8apw3wwfsrcib-sqlite-3.53.3.drv",
+      "description": "Self-contained, serverless, zero-configuration, transactional SQL database engine",
+      "install_id": "sqlite",
+      "license": "blessing",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "name": "sqlite-3.53.3",
+      "pname": "sqlite",
+      "rev": "e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "rev_count": 1080189,
+      "rev_date": "2026-09-26T22:51:50Z",
+      "scrape_date": "2026-09-28T05:00:21.139787Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "3.53.3",
+      "outputs_to_install": [
+        "bin",
+        "bin",
+        "man"
+      ],
+      "outputs": {
+        "bin": "/nix/store/85n9gja6vyw71xyzw6haas4mxk5p9jic-sqlite-3.53.3-bin",
+        "dev": "/nix/store/c6rlcid4dmcaa0n01j5v37jh4abm20s4-sqlite-3.53.3-dev",
+        "doc": "/nix/store/njn65f8l0ff1vn5n49fjx7lff47ly35r-sqlite-3.53.3-doc",
+        "man": "/nix/store/qzx3z3l0frdwx58hcim8ws26hxahs6kd-sqlite-3.53.3-man",
+        "out": "/nix/store/mc2fh87sg8s44nhdwxmbrgj618x6yspa-sqlite-3.53.3"
+      },
+      "system": "aarch64-darwin",
+      "group": "sqlite",
+      "priority": 5
+    },
+    {
+      "attr_path": "sqlite",
+      "broken": false,
+      "derivation": "/nix/store/rwwp595k3sgmg2z9zs9inax7yhflw66d-sqlite-3.53.3.drv",
+      "description": "Self-contained, serverless, zero-configuration, transactional SQL database engine",
+      "install_id": "sqlite",
+      "license": "blessing",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "name": "sqlite-3.53.3",
+      "pname": "sqlite",
+      "rev": "e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "rev_count": 1080189,
+      "rev_date": "2026-09-26T22:51:50Z",
+      "scrape_date": "2026-09-28T05:32:24.991928Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "3.53.3",
+      "outputs_to_install": [
+        "bin",
+        "bin",
+        "bin",
+        "bin",
+        "man",
+        "man"
+      ],
+      "outputs": {
+        "bin": "/nix/store/1ag9nx63cvsq8144696shw1yx7xclk6b-sqlite-3.53.3-bin",
+        "debug": "/nix/store/p3ax2jqsyp5lrkd24gwr5glb145cxc42-sqlite-3.53.3-debug",
+        "dev": "/nix/store/5q261wj3mn5z5q45xjx8yjx8z7ak49vm-sqlite-3.53.3-dev",
+        "doc": "/nix/store/nfr4z7i3vivcynvsywd36268mx5f99dv-sqlite-3.53.3-doc",
+        "man": "/nix/store/qx8zyv7pk7pfal0q8440iscxarvbq22g-sqlite-3.53.3-man",
+        "out": "/nix/store/1z13nb8zh15n25d3ym19079kd3qb0yyl-sqlite-3.53.3"
+      },
+      "system": "aarch64-linux",
+      "group": "sqlite",
+      "priority": 5
+    },
+    {
+      "attr_path": "sqlite",
+      "broken": false,
+      "derivation": "/nix/store/cqnsh5zkzpngh81wgpf79qgzm2prv5dr-sqlite-3.53.3.drv",
+      "description": "Self-contained, serverless, zero-configuration, transactional SQL database engine",
+      "install_id": "sqlite",
+      "license": "blessing",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "name": "sqlite-3.53.3",
+      "pname": "sqlite",
+      "rev": "e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "rev_count": 1080189,
+      "rev_date": "2026-09-26T22:51:50Z",
+      "scrape_date": "2026-09-28T06:08:24.499669Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "3.53.3",
+      "outputs_to_install": [
+        "bin",
+        "bin",
+        "bin",
+        "bin",
+        "man",
+        "man"
+      ],
+      "outputs": {
+        "bin": "/nix/store/24gq3bi2yzf7g386p5j32mn78hhanf49-sqlite-3.53.3-bin",
+        "debug": "/nix/store/3m9gqya8f7d4x53xyp47qiq19ljq57yb-sqlite-3.53.3-debug",
+        "dev": "/nix/store/yiinw6sm280sip2bap30f8aszi0lzvgr-sqlite-3.53.3-dev",
+        "doc": "/nix/store/vaisv53962ksj9n9w50xagk038qk2sf4-sqlite-3.53.3-doc",
+        "man": "/nix/store/xs0pqjaiqhr33nwbplxcfsxf0kmy314j-sqlite-3.53.3-man",
+        "out": "/nix/store/7a0nx1a0rdc5s07vxrsdhplqnzncl5z9-sqlite-3.53.3"
+      },
+      "system": "x86_64-linux",
+      "group": "sqlite",
       "priority": 5
     }
   ]

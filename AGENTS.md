@@ -166,7 +166,7 @@ second native gRPC listener.
 descriptor compiler in `go/data`; Python, Rust, and TypeScript decode the same
 generated bundle rather than reimplementing protobuf inference. Target
 renderers live in isolated
-`go/data/{arrow,parquet,iceberg,postgres,clickhouse}` packages, and
+`go/data/{arrow,parquet,iceberg,postgres,sqlite,clickhouse}` packages, and
 `go/cmd/invariant-schema` is the build-time CLI.
 
 Python's optional data surface maps a bundle dataset to `pyarrow.Schema` and
@@ -224,7 +224,9 @@ Iceberg schemas target format v3: implicit scalar/enum and repeated/map fields
 carry protobuf-compatible initial/write defaults, while protobuf `required`
 fields are rejected because historical rows have no safe missing value.
 PostgreSQL emits desired-state DDL directly for Atlas; do not introduce HCL as
-an intermediate source.
+an intermediate source. SQLite also emits desired-state DDL from the same
+bundle; its exact value representations and diagnostic limits are recorded in
+`docs/sqlite-schema.md`. This is a build tool, not four runtime implementations.
 
 Arrow maps fixed lists to native `FixedSizeList`. Parquet's physical LIST and
 Iceberg's list do not enforce cardinality, so both emit explicit widening
@@ -643,5 +645,5 @@ as stdio; do not add a second tool registry.
 - Iceberg catalog commits, partition policies, and table migration/application
 - ClickHouse engines, sorting/partition keys, TTLs, codecs, indexes,
   projections, storage policies, ingestion, and direct Iceberg publication
-- Relational keys, indexes, normalization, and SQL dialects beyond PostgreSQL
-  and ClickHouse
+- Relational keys, indexes, normalization, and SQL dialects beyond PostgreSQL,
+  SQLite, and ClickHouse
