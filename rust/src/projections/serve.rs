@@ -5,11 +5,20 @@
 //! Cancellation propagates: when any projection returns (error or stdin EOF
 //! for MCP) or the supplied cancellation token fires, all projections are
 //! signalled to shut down gracefully. Same semantics as Go's `errc <- ...`.
+//! The HTTP projection drains in-flight requests for up to
+//! [`Server::set_http_shutdown_timeout`] (unbounded by default) and then
+//! aborts the connections still open.
 
 use crate::projections::{http, mcp};
 use crate::server::Server;
+use axum::serve::Listener;
 use futures::StreamExt;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto::Builder;
+use hyper_util::service::TowerToHyperService;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 /// One projection to run.
@@ -87,15 +96,62 @@ async fn run_projection(
 ) -> Result<(), ServeError> {
     match projection {
         Projection::Http(port) => {
+            let drain_timeout = server.http_shutdown_timeout();
             let app = http::http_router(server);
             let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown.cancelled_owned())
-                .await
-                .map_err(ServeError::Http)
+            serve_http(listener, app, shutdown, drain_timeout).await;
+            Ok(())
         }
         Projection::McpStdio => mcp::serve_mcp_stdio_until_cancelled(server, shutdown)
             .await
             .map_err(ServeError::Http),
+    }
+}
+
+/// Accept connections until `shutdown` fires, then stop accepting and let each
+/// connection finish its in-flight requests (hyper's graceful shutdown: HTTP/1
+/// closes once idle, HTTP/2 sends GOAWAY). Connections still open when
+/// `drain_timeout` elapses are aborted, which closes their sockets and drops
+/// their in-flight handler futures. Every connection task ends before this
+/// returns.
+async fn serve_http(
+    mut listener: tokio::net::TcpListener,
+    app: axum::Router,
+    shutdown: CancellationToken,
+    drain_timeout: Option<Duration>,
+) {
+    let builder = Builder::new(TokioExecutor::new());
+    let mut connections = JoinSet::new();
+    loop {
+        let (io, _) = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => break,
+            accepted = Listener::accept(&mut listener) => accepted,
+        };
+        while connections.try_join_next().is_some() {}
+        let builder = builder.clone();
+        let service = TowerToHyperService::new(app.clone());
+        let shutdown = shutdown.clone();
+        connections.spawn(async move {
+            let connection = builder.serve_connection_with_upgrades(TokioIo::new(io), service);
+            tokio::pin!(connection);
+            tokio::select! {
+                _ = connection.as_mut() => return,
+                () = shutdown.cancelled() => connection.as_mut().graceful_shutdown(),
+            }
+            let _ = connection.await;
+        });
+    }
+    drop(listener);
+
+    let drained = async { while connections.join_next().await.is_some() {} };
+    match drain_timeout {
+        None => drained.await,
+        Some(limit) => {
+            if tokio::time::timeout(limit, drained).await.is_err() {
+                connections.abort_all();
+                while connections.join_next().await.is_some() {}
+            }
+        }
     }
 }

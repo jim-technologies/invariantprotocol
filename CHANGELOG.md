@@ -10,6 +10,20 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+### Added
+
+- **The HTTP projection's drain can be bounded to fit a host's grace
+  period.** Go's `Server.SetHTTPShutdownTimeout` sets how long
+  `ServeProjections` lets in-flight HTTP requests finish once its context ends
+  before it closes their connections; it was a fixed 5 s, which stays the
+  default. Rust's `Server::set_http_shutdown_timeout(Some(duration))` gives
+  `projections::serve::serve` the same bound: connections still open after
+  `duration` are aborted and their handler futures dropped. The Rust default,
+  `None`, still waits for every in-flight request. The Rust runner now drives
+  hyper-util's connection builder itself (the builder `axum::serve` uses) so
+  it can abort connections; `hyper-util` becomes a direct dependency at the
+  version the lockfile already carried.
+
 ### Changed
 
 - `MAKEFILE-CONTRACT.md` takes the organisation-wide `make release` row:

@@ -72,6 +72,10 @@ When a runtime has a useful extra integration, document it as such without
 quietly expanding a Core row. For example, Go, Python, and TypeScript currently
 consume a primary `google.api.http` binding in their remote HTTP adapters, while
 the portable remote-HTTP contract is the canonical Connect method path.
+Likewise, the Go and Rust projection runners bound their HTTP drain with
+`SetHTTPShutdownTimeout` / `set_http_shutdown_timeout`; Python's runner leaves
+it to uvicorn and TypeScript's `serveHttp` returns the caller-owned Node
+server, so the drain bound is a runner integration, not a Core row.
 
 The data compiler follows the same rule: dataset and field annotations are
 language-neutral protobuf options, one Go build tool compiles the descriptor

@@ -379,6 +379,17 @@ optional HTTP/MCP/CLI processes. Rust exposes its projection runner and
 TypeScript exposes the individual host adapters. Native gRPC keeps its own
 language-standard lifecycle.
 
+When the Go or Rust runner is cancelled, its HTTP projection stops accepting
+and lets in-flight requests finish. Go's `SetHTTPShutdownTimeout` bounds that
+drain (5 s by default) and then closes the connections still open; Rust's
+`set_http_shutdown_timeout(Some(duration))` aborts the connections still open
+after `duration` and drops their handler futures (by default it waits for every
+request). Set the bound below the host's grace period, such as a pod's
+`terminationGracePeriodSeconds`, so the process exits before it is killed.
+Python's runner leaves the HTTP drain to uvicorn; a host that needs a bound
+serves `asgi_app()` under its own uvicorn configuration. A host that mounts an
+adapter on its own server owns that server's drain.
+
 Configure `Include` / `Exclude` and their idiomatic equivalents before any
 local or remote registration. They filter optional projection catalogs only
 and never remove a method from a locally registered native gRPC service.

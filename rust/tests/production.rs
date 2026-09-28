@@ -409,28 +409,18 @@ async fn mcp_notifications_have_no_response_and_unknown_methods_are_json_rpc_err
     assert_eq!(response["error"]["code"], -32601);
 }
 
-#[tokio::test]
-async fn projection_runner_drains_in_flight_http_requests_on_cancellation() {
-    let started = Arc::new(tokio::sync::Notify::new());
-    let release = Arc::new(tokio::sync::Notify::new());
-    let service = TestGreetService::default().with_greet({
-        let started = started.clone();
-        let release = release.clone();
-        move |_| {
-            let started = started.clone();
-            let release = release.clone();
-            async move {
-                let released = release.notified();
-                started.notify_one();
-                released.await;
-                Ok(Response::new(greet::GreetResponse {
-                    message: "drained".into(),
-                    ..Default::default()
-                }))
-            }
-        }
-    });
-    let server = registered_server(service);
+type RunnerHandle = tokio::task::JoinHandle<Result<(), invariant::projections::serve::ServeError>>;
+
+/// Start the projection runner's HTTP projection on a free port, wait until it
+/// answers `/healthz`, and send one Greet call. Returns the runner's
+/// cancellation token and task and the in-flight call.
+async fn start_http_runner_with_call(
+    server: Arc<invariant::Server>,
+) -> (
+    tokio_util::sync::CancellationToken,
+    RunnerHandle,
+    tokio::task::JoinHandle<reqwest::Result<reqwest::Response>>,
+) {
     let reserved = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = reserved.local_addr().unwrap().port();
     drop(reserved);
@@ -459,17 +449,38 @@ async fn projection_runner_drains_in_flight_http_requests_on_cancellation() {
     .await
     .unwrap();
 
-    let request = tokio::spawn({
-        let client = client.clone();
-        async move {
-            client
-                .post(format!("{base_url}/greet.v1.GreetService/Greet"))
-                .json(&json!({"name": "graceful"}))
-                .send()
-                .await
-                .unwrap()
+    let call = tokio::spawn(async move {
+        client
+            .post(format!("{base_url}/greet.v1.GreetService/Greet"))
+            .json(&json!({"name": "graceful"}))
+            .send()
+            .await
+    });
+    (cancel, runner, call)
+}
+
+#[tokio::test]
+async fn projection_runner_drains_in_flight_http_requests_on_cancellation() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let service = TestGreetService::default().with_greet({
+        let started = started.clone();
+        let release = release.clone();
+        move |_| {
+            let started = started.clone();
+            let release = release.clone();
+            async move {
+                let released = release.notified();
+                started.notify_one();
+                released.await;
+                Ok(Response::new(greet::GreetResponse {
+                    message: "drained".into(),
+                    ..Default::default()
+                }))
+            }
         }
     });
+    let (cancel, runner, request) = start_http_runner_with_call(registered_server(service)).await;
     tokio::time::timeout(Duration::from_secs(2), started.notified())
         .await
         .unwrap();
@@ -482,6 +493,7 @@ async fn projection_runner_drains_in_flight_http_requests_on_cancellation() {
     let response = tokio::time::timeout(Duration::from_secs(2), request)
         .await
         .unwrap()
+        .unwrap()
         .unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(
@@ -492,6 +504,68 @@ async fn projection_runner_drains_in_flight_http_requests_on_cancellation() {
         .await
         .unwrap()
         .unwrap()
+        .unwrap();
+}
+
+/// Notifies when dropped, proving a handler future was cancelled rather than
+/// left running.
+struct NotifyOnDrop(Arc<tokio::sync::Notify>);
+
+impl Drop for NotifyOnDrop {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
+}
+
+#[tokio::test]
+async fn projection_runner_aborts_http_requests_that_outlive_the_shutdown_timeout() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(tokio::sync::Notify::new());
+    let service = TestGreetService::default().with_greet({
+        let started = started.clone();
+        let dropped = dropped.clone();
+        move |_| {
+            let started = started.clone();
+            let guard = NotifyOnDrop(dropped.clone());
+            async move {
+                let _guard = guard;
+                started.notify_one();
+                std::future::pending::<Result<Response<greet::GreetResponse>, Status>>().await
+            }
+        }
+    });
+    let server = registered_server(service);
+    assert_eq!(server.http_shutdown_timeout(), None);
+    let timeout = Duration::from_millis(100);
+    server.set_http_shutdown_timeout(Some(timeout)).unwrap();
+    assert_eq!(server.http_shutdown_timeout(), Some(timeout));
+    let (cancel, runner, request) = start_http_runner_with_call(server.clone()).await;
+    tokio::time::timeout(Duration::from_secs(2), started.notified())
+        .await
+        .unwrap();
+    assert_eq!(
+        server.set_http_shutdown_timeout(None).unwrap_err().code(),
+        Code::FailedPrecondition
+    );
+
+    let cancelled = tokio::time::Instant::now();
+    cancel.cancel();
+    tokio::time::timeout(Duration::from_secs(2), runner)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(cancelled.elapsed() >= timeout);
+
+    // The held call's connection is aborted rather than answered, and its
+    // handler future is dropped instead of left running.
+    let response = tokio::time::timeout(Duration::from_secs(2), request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.is_err());
+    tokio::time::timeout(Duration::from_secs(2), dropped.notified())
+        .await
         .unwrap();
 }
 

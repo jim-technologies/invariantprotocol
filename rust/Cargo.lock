@@ -894,6 +894,7 @@ dependencies = [
  "futures",
  "http",
  "http-body-util",
+ "hyper-util",
  "invariant-protocol-codegen",
  "parking_lot",
  "prost",

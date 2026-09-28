@@ -431,6 +431,7 @@ struct Registry {
     http_max_unary_response: usize,
     connect_stream_max_request: usize,
     connect_stream_max_response: usize,
+    http_shutdown_timeout: Option<Duration>,
     method_configs: BTreeMap<String, MethodConfig>,
 }
 
@@ -475,6 +476,7 @@ impl Server {
                     http_max_unary_response: DEFAULT_MAX_UNARY_RESPONSE_BYTES,
                     connect_stream_max_request: DEFAULT_MAX_STREAM_REQUEST_BYTES,
                     connect_stream_max_response: DEFAULT_MAX_STREAM_RESPONSE_BYTES,
+                    http_shutdown_timeout: None,
                     method_configs: BTreeMap::new(),
                 }),
             }),
@@ -979,6 +981,25 @@ impl Server {
             value
         };
         Ok(())
+    }
+
+    /// Bound how long the HTTP projection run by
+    /// [`crate::projections::serve::serve`] lets in-flight requests finish
+    /// once shutdown begins; connections still open after that are aborted.
+    /// `None`, the default, waits for every in-flight request. Keep it below
+    /// the host's own grace period, such as a pod's
+    /// `terminationGracePeriodSeconds`, so the process exits before it is
+    /// killed. It does not apply to `http_router` mounted on a caller-owned
+    /// server or to native gRPC, whose lifecycle stays with Tonic.
+    pub fn set_http_shutdown_timeout(&self, timeout: Option<Duration>) -> Result<(), Status> {
+        let mut registry = self.inner.registry.write();
+        ensure_configuring(&registry, "HTTP shutdown timeout")?;
+        registry.http_shutdown_timeout = timeout;
+        Ok(())
+    }
+
+    pub fn http_shutdown_timeout(&self) -> Option<Duration> {
+        self.inner.registry.read().http_shutdown_timeout
     }
 
     /// Override the four encoded HTTP limits for one canonical full method

@@ -336,7 +336,11 @@ migration before changing the compiler's required version.
 `grpc.ServerOption` values to `ServerFromDescriptor` or `ServerFromBytes`.
 `ServeProjections(ctx, ...)`
 runs optional projections in parallel; the first completion cancels the others
-and waits for their shutdown.
+and waits for their shutdown. The HTTP projection drains in-flight requests for
+up to `SetHTTPShutdownTimeout` (5 s by default), with a context derived from
+`ctx` minus its cancellation, then closes what is still open. Rust's runner has
+the same bound through `Server::set_http_shutdown_timeout` (unbounded by
+default) and aborts, rather than detaches, the connection tasks still open.
 
 Generated service registration and configuration freeze when native serving or
 projection execution begins. Because `grpc.ServiceRegistrar` cannot return an

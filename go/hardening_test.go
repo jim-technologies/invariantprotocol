@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -201,6 +202,146 @@ func TestServeProjectionsCancelsAndWaitsForSiblingAfterError(t *testing.T) {
 
 	// Returning means the ephemeral HTTP sibling observed cancellation and
 	// completed graceful shutdown after the occupied-port projection failed.
+}
+
+// blockingGreetServicer holds each Greet until release closes or its request
+// context ends, so a test controls when an in-flight HTTP call completes.
+type blockingGreetServicer struct {
+	greetpb.UnimplementedGreetServiceServer
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingGreetServicer) Greet(ctx context.Context, req *greetpb.GreetRequest) (*greetpb.GreetResponse, error) {
+	b.started <- struct{}{}
+	select {
+	case <-b.release:
+		return &greetpb.GreetResponse{Message: "drained " + req.GetName()}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type httpCallResult struct {
+	status int
+	body   string
+	err    error
+}
+
+// serveBlockingHTTP runs ServeProjections(HTTP) for srv on a free port, waits
+// until it answers /healthz, and starts one Greet call that the servicer holds.
+func serveBlockingHTTP(t *testing.T, srv *Server, servicer *blockingGreetServicer) (context.CancelFunc, <-chan error, <-chan httpCallResult) {
+	t.Helper()
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := reserved.Addr().(*net.TCPAddr).Port
+	require.NoError(t, reserved.Close())
+	baseURL := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	served := make(chan error, 1)
+	go func() { served <- srv.ServeProjections(ctx, HTTP(port)) }()
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/healthz", nil)
+		if err != nil {
+			return false
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 2*time.Second, 10*time.Millisecond)
+
+	called := make(chan httpCallResult, 1)
+	go func() {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+			baseURL+"/greet.v1.GreetService/Greet", strings.NewReader(`{"name":"graceful"}`))
+		if err != nil {
+			called <- httpCallResult{err: err}
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			called <- httpCallResult{err: err}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		called <- httpCallResult{status: resp.StatusCode, body: string(body), err: err}
+	}()
+	select {
+	case <-servicer.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Greet did not start")
+	}
+	return cancel, served, called
+}
+
+func TestServeProjectionsDrainsInFlightHTTPOnCancellation(t *testing.T) {
+	servicer := &blockingGreetServicer{started: make(chan struct{}, 1), release: make(chan struct{})}
+	srv := streamServer(t, servicer)
+	cancel, served, called := serveBlockingHTTP(t, srv, servicer)
+
+	cancel()
+	select {
+	case err := <-served:
+		t.Fatalf("ServeProjections returned before the in-flight call finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(servicer.release)
+
+	result := <-called
+	require.NoError(t, result.err)
+	assert.Equal(t, http.StatusOK, result.status)
+	assert.Contains(t, result.body, "drained graceful")
+	err := <-served
+	require.ErrorIs(t, err, context.Canceled)
+	require.NotErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestServeProjectionsClosesHTTPCallsThatOutliveShutdownTimeout(t *testing.T) {
+	const timeout = 100 * time.Millisecond
+	servicer := &blockingGreetServicer{started: make(chan struct{}, 1), release: make(chan struct{})}
+	srv := streamServer(t, servicer)
+	srv.SetHTTPShutdownTimeout(timeout)
+	cancel, served, called := serveBlockingHTTP(t, srv, servicer)
+
+	stopped := time.Now()
+	cancel()
+	var err error
+	select {
+	case err = <-served:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ServeProjections did not return after the shutdown timeout")
+	}
+	assert.GreaterOrEqual(t, time.Since(stopped), timeout)
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	// The held call's connection is closed rather than answered.
+	result := <-called
+	require.Error(t, result.err)
+}
+
+func TestSetHTTPShutdownTimeout(t *testing.T) {
+	srv := streamServer(t, &streamServicer{})
+	assert.Equal(t, defaultHTTPShutdownTimeout, srv.httpShutdownTimeout)
+
+	srv.SetHTTPShutdownTimeout(25 * time.Second)
+	assert.Equal(t, 25*time.Second, srv.httpShutdownTimeout)
+	srv.SetHTTPShutdownTimeout(0)
+	assert.Equal(t, defaultHTTPShutdownTimeout, srv.httpShutdownTimeout)
+	assert.PanicsWithValue(t, "invariant: HTTP shutdown timeout must be non-negative", func() {
+		srv.SetHTTPShutdownTimeout(-time.Second)
+	})
+
+	_ = srv.HTTPHandler()
+	assert.PanicsWithValue(t, "invariant: HTTP shutdown timeout cannot be changed after serving begins", func() {
+		srv.SetHTTPShutdownTimeout(time.Second)
+	})
 }
 
 // -- Stream edge cases. --

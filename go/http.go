@@ -38,6 +38,10 @@ const (
 	defaultConnectStreamMaxResponse = 16 << 20
 	maxConnectControlEnvelope       = 1 << 20
 
+	// defaultHTTPShutdownTimeout bounds the HTTP projection's drain once
+	// ServeProjections' context ends. Override via SetHTTPShutdownTimeout.
+	defaultHTTPShutdownTimeout = 5 * time.Second
+
 	// Kept for tests that exercise the default-cap behavior.
 	httpMaxUnaryRequest     = defaultHTTPMaxUnaryRequest
 	connectStreamMaxRequest = defaultConnectStreamMaxRequest
@@ -124,8 +128,9 @@ func (s *Server) HTTPHandler() http.Handler {
 	return mux
 }
 
-// serveHTTP starts a blocking HTTP server on the given port. Honors ctx for
-// graceful shutdown.
+// serveHTTP starts a blocking HTTP server on the given port. When ctx ends it
+// stops accepting, lets in-flight requests finish for up to the configured
+// shutdown timeout, then closes the connections still open.
 func (s *Server) serveHTTP(ctx context.Context, port int) error {
 	handler := s.HTTPHandler()
 
@@ -145,7 +150,9 @@ func (s *Server) serveHTTP(ctx context.Context, port int) error {
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// The drain keeps ctx's values but not its cancellation, which has
+		// already fired; the shutdown timeout alone bounds it.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.httpShutdownTimeout)
 		shutdownErr := srv.Shutdown(shutdownCtx)
 		cancel()
 		if shutdownErr != nil {

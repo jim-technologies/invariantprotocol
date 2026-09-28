@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	invpb "github.com/jim-technologies/invariantprotocol/go/gen/invariant/v1"
 	"google.golang.org/grpc"
@@ -107,6 +108,10 @@ type Server struct {
 	connectStreamMaxRequest  int64
 	connectStreamMaxResponse int64
 
+	// httpShutdownTimeout bounds how long the HTTP projection run by
+	// ServeProjections drains in-flight requests before closing them.
+	httpShutdownTimeout time.Duration
+
 	// methodConfigs is the per-method override table. Keys are
 	// `/pkg.Service/Method` paths (matching the Connect URL space and
 	// the same identity generated registration and remote projections use).
@@ -188,6 +193,23 @@ func (s *Server) SetMaxStreamResponseBytes(n int64) {
 		n = defaultConnectStreamMaxResponse
 	}
 	s.updateConfiguration("HTTP stream response limit", func() { s.connectStreamMaxResponse = n })
+}
+
+// SetHTTPShutdownTimeout bounds how long the HTTP projection started by
+// ServeProjections lets in-flight requests finish once its context ends;
+// connections still open after that are closed. Pass 0 to reset to the
+// default (5 s). Keep it below the host's own grace period, such as a pod's
+// terminationGracePeriodSeconds, so the process exits before it is killed.
+// It does not apply to HTTPHandler mounted on a caller-owned http.Server or to
+// native gRPC, whose lifecycle stays with GracefulStop and Stop.
+func (s *Server) SetHTTPShutdownTimeout(d time.Duration) {
+	if d < 0 {
+		panic("invariant: HTTP shutdown timeout must be non-negative")
+	}
+	if d == 0 {
+		d = defaultHTTPShutdownTimeout
+	}
+	s.updateConfiguration("HTTP shutdown timeout", func() { s.httpShutdownTimeout = d })
 }
 
 // ConfigureMethod registers a per-method override. The method path is the
@@ -393,6 +415,7 @@ func newServerWithFDS(
 		httpMaxUnaryResponse:     defaultHTTPMaxUnaryResponse,
 		connectStreamMaxRequest:  defaultConnectStreamMaxRequest,
 		connectStreamMaxResponse: defaultConnectStreamMaxResponse,
+		httpShutdownTimeout:      defaultHTTPShutdownTimeout,
 		registeredServices:       make(map[string]registeredService),
 		httpMetadataMapper:       DefaultHTTPMetadataMapper,
 		fds:                      fds,
@@ -620,6 +643,9 @@ func CLI() Projection { return Projection{kind: "cli"} }
 //	server.ServeProjections(ctx, invariant.HTTP(8080), invariant.MCP())
 //
 // On error or cancellation, all projections receive a graceful shutdown signal.
+// The HTTP projection drains in-flight requests for up to
+// SetHTTPShutdownTimeout (5 s by default), then closes the connections still
+// open, and its error then also wraps context.DeadlineExceeded.
 func (s *Server) ServeProjections(ctx context.Context, projections ...Projection) error {
 	if len(projections) == 0 {
 		return errors.New("no projections specified")
