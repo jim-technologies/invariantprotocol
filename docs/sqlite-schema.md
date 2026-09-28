@@ -51,7 +51,7 @@ malformed JSON and rejected overflows. `make sqlite-integration` exercises the
 CLI through compiled bundle fixtures and persisted reopen. Flox pins 3.53.3,
 the newest available catalog build on the qualification date; upstream 3.53.4
 is newer. This fixture tool pin is not an application runtime recommendation or
-a claim about any consuming medallion-table engine.
+a claim about any consuming storage engine.
 
 This is an additive build tool available to all language consumers. Existing
 bundles, PostgreSQL/ClickHouse projections, deployed schemas and persisted data
