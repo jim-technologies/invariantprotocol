@@ -8,6 +8,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x minor releases may include deliberate API changes,
 but never silent wire-behavior regressions.
 
+## Unreleased
+
+### Changed
+
+- Go builds require 1.27.2 and use `golang.org/x/net` 0.60.0, addressing the
+  reachable HTTP/2 vulnerabilities reported by the October 9 audit.
+- Weekly audits use the documented `make audit` entrypoint, combining the
+  existing security and integration checks without removing either boundary.
+- Document migration from the retired nested Go module to the root module;
+  package imports retain their `/go` path and generated service registration.
+
 ## v0.16.7 — 2026-09-28
 
 ### Added

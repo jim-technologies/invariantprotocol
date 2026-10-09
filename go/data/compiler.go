@@ -1098,8 +1098,8 @@ func (c *datasetCompiler) validateRetiredReservation(
 }
 
 func parentCompilerIdentity(identity string) string {
-	if slash := strings.LastIndexByte(identity, '/'); slash >= 0 {
-		return identity[:slash]
+	if parent, _, ok := strings.CutLast(identity, "/"); ok {
+		return parent
 	}
 	return ""
 }

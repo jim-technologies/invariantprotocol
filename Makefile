@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help help-all build validate validate-static release release-test version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration sqlite-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
+.PHONY: help help-all build validate validate-static audit release release-test version-check parity parity-release git-install-check connect-interop postgres-integration clickhouse-integration lance-integration sqlite-integration data-integration integration lint fmt fmt-check go-mod-check test test-go race-go test-python test-rust test-typescript coverage coverage-go coverage-python coverage-rust coverage-typescript typecheck proto-comments public-surface security bench generate openapi-codegen-check deps verify-generate breaking
 
 help: ## One-screen help (make help-all for every target)
 	@echo "Daily:"
@@ -66,6 +66,8 @@ sqlite-integration: ## Apply compiled bundles and round-trip exact domains throu
 data-integration: postgres-integration clickhouse-integration lance-integration sqlite-integration ## Exercise every external data-schema boundary.
 
 integration: git-install-check connect-interop data-integration ## Exercise Git installs and external protocol/data boundaries.
+
+audit: security integration ## Audit dependencies and Git/protocol/data boundaries.
 
 fmt-check: node_modules/.package-lock.json ## Verify formatting without modifying files.
 	test -z "$$(gofmt -l go)" || { echo "gofmt: files need formatting:"; gofmt -l go; exit 1; }

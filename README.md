@@ -1,5 +1,12 @@
 # Invariant Protocol
 
+Go consumers use the root module `github.com/jim-technologies/invariantprotocol`.
+The former nested `github.com/jim-technologies/invariantprotocol/go` module and
+its version stream were retired; `/go` remains the package import path. Replace
+the nested `go.mod` requirement with the root release and run `go mod tidy`.
+Use generated service registration and `ServeProjections` for optional
+transports; the old reflective registration/projection-serving APIs are gone.
+
 [![CI](https://github.com/jim-technologies/invariantprotocol/actions/workflows/ci.yml/badge.svg)](https://github.com/jim-technologies/invariantprotocol/actions/workflows/ci.yml)
 
 Invariant is a gRPC-first framework for projecting one registered protobuf

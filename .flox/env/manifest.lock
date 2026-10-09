@@ -43,10 +43,14 @@
         "version": "1.26.4"
       },
       "golangci-lint": {
-        "pkg-path": "golangci-lint"
+        "pkg-path": "golangci-lint",
+        "pkg-group": "golangci-lint",
+        "version": "2.14.0"
       },
       "govulncheck": {
-        "pkg-path": "govulncheck"
+        "pkg-path": "govulncheck",
+        "pkg-group": "govulncheck",
+        "version": "1.8.0"
       },
       "llvm": {
         "pkg-path": "llvm_21",
@@ -105,7 +109,7 @@
     },
     "vars": {
       "CARGO_LLVM_COV_SETUP": "no",
-      "GOTOOLCHAIN": "go1.26.6+auto",
+      "GOTOOLCHAIN": "go1.27.2+auto",
       "UV_PYTHON_DOWNLOADS": "never"
     },
     "hook": {
@@ -205,6 +209,180 @@
       },
       "system": "x86_64-linux",
       "group": "buf",
+      "priority": 5
+    },
+    {
+      "attr_path": "golangci-lint",
+      "broken": false,
+      "derivation": "/nix/store/6j1crf8wn410v73nz8xakhb79rdgmmp7-golangci-lint-2.14.0.drv",
+      "description": "Fast linters Runner for Go",
+      "install_id": "golangci-lint",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "name": "golangci-lint-2.14.0",
+      "pname": "golangci-lint",
+      "rev": "e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "rev_count": 1087755,
+      "rev_date": "2026-10-08T10:40:40Z",
+      "scrape_date": "2026-10-09T05:00:38.715977Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "2.14.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/wvbygf0dw7z7p32wjm85llavg3zbc256-golangci-lint-2.14.0"
+      },
+      "system": "aarch64-darwin",
+      "group": "golangci-lint",
+      "priority": 5
+    },
+    {
+      "attr_path": "golangci-lint",
+      "broken": false,
+      "derivation": "/nix/store/hi3bxgm28y3x3s7k8ngciw4h62wp0ljc-golangci-lint-2.14.0.drv",
+      "description": "Fast linters Runner for Go",
+      "install_id": "golangci-lint",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "name": "golangci-lint-2.14.0",
+      "pname": "golangci-lint",
+      "rev": "e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "rev_count": 1087755,
+      "rev_date": "2026-10-08T10:40:40Z",
+      "scrape_date": "2026-10-09T05:34:22.744114Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "2.14.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/wka485zfv0206ypy6hsk2zs86ndlryfm-golangci-lint-2.14.0"
+      },
+      "system": "aarch64-linux",
+      "group": "golangci-lint",
+      "priority": 5
+    },
+    {
+      "attr_path": "golangci-lint",
+      "broken": false,
+      "derivation": "/nix/store/0hbi1m84jf06axjbs63gay84yqnddsd3-golangci-lint-2.14.0.drv",
+      "description": "Fast linters Runner for Go",
+      "install_id": "golangci-lint",
+      "license": "GPL-3.0-or-later",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "name": "golangci-lint-2.14.0",
+      "pname": "golangci-lint",
+      "rev": "e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "rev_count": 1087755,
+      "rev_date": "2026-10-08T10:40:40Z",
+      "scrape_date": "2026-10-09T06:11:38.799840Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "2.14.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/wnjaiawf798z57if1yf59i73abakkxwk-golangci-lint-2.14.0"
+      },
+      "system": "x86_64-linux",
+      "group": "golangci-lint",
+      "priority": 5
+    },
+    {
+      "attr_path": "govulncheck",
+      "broken": false,
+      "derivation": "/nix/store/g5c9bslmnrgs83z63fkqg3zbjd9is36n-govulncheck-1.8.0.drv",
+      "description": "Database client and tools for the Go vulnerability database, also known as vuln",
+      "install_id": "govulncheck",
+      "license": "BSD-3-Clause",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "name": "govulncheck-1.8.0",
+      "pname": "govulncheck",
+      "rev": "e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "rev_count": 1087755,
+      "rev_date": "2026-10-08T10:40:40Z",
+      "scrape_date": "2026-10-09T05:00:38.762584Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "1.8.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/8h2vdyj7gnpnx0wibi59i4n8j5dw0mla-govulncheck-1.8.0"
+      },
+      "system": "aarch64-darwin",
+      "group": "govulncheck",
+      "priority": 5
+    },
+    {
+      "attr_path": "govulncheck",
+      "broken": false,
+      "derivation": "/nix/store/myz0y49r78vya4h6wpmm9c0ldvp89sd6-govulncheck-1.8.0.drv",
+      "description": "Database client and tools for the Go vulnerability database, also known as vuln",
+      "install_id": "govulncheck",
+      "license": "BSD-3-Clause",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "name": "govulncheck-1.8.0",
+      "pname": "govulncheck",
+      "rev": "e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "rev_count": 1087755,
+      "rev_date": "2026-10-08T10:40:40Z",
+      "scrape_date": "2026-10-09T05:34:22.813092Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "1.8.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/9nm0bzwb9vr7mg966jqj2lz6k8j82b0q-govulncheck-1.8.0"
+      },
+      "system": "aarch64-linux",
+      "group": "govulncheck",
+      "priority": 5
+    },
+    {
+      "attr_path": "govulncheck",
+      "broken": false,
+      "derivation": "/nix/store/rmwzpx278wgp173rdfrm6zl9kw720jr4-govulncheck-1.8.0.drv",
+      "description": "Database client and tools for the Go vulnerability database, also known as vuln",
+      "install_id": "govulncheck",
+      "license": "BSD-3-Clause",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "name": "govulncheck-1.8.0",
+      "pname": "govulncheck",
+      "rev": "e7439b6b14ad3cc35d05608ebca9bce01a25f5f8",
+      "rev_count": 1087755,
+      "rev_date": "2026-10-08T10:40:40Z",
+      "scrape_date": "2026-10-09T06:11:38.876211Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "1.8.0",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/9jbh8q27fl90281r4l3prpjvjy5ylqj0-govulncheck-1.8.0"
+      },
+      "system": "x86_64-linux",
+      "group": "govulncheck",
       "priority": 5
     },
     {
@@ -666,6 +844,119 @@
       },
       "system": "x86_64-linux",
       "group": "rust-toolchain",
+      "priority": 5
+    },
+    {
+      "attr_path": "sqlite",
+      "broken": false,
+      "derivation": "/nix/store/phdxxrsl75icnizbmyk8apw3wwfsrcib-sqlite-3.53.3.drv",
+      "description": "Self-contained, serverless, zero-configuration, transactional SQL database engine",
+      "install_id": "sqlite",
+      "license": "blessing",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "name": "sqlite-3.53.3",
+      "pname": "sqlite",
+      "rev": "e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "rev_count": 1080189,
+      "rev_date": "2026-09-26T22:51:50Z",
+      "scrape_date": "2026-09-28T05:00:21.139787Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "3.53.3",
+      "outputs_to_install": [
+        "bin",
+        "bin",
+        "man"
+      ],
+      "outputs": {
+        "bin": "/nix/store/85n9gja6vyw71xyzw6haas4mxk5p9jic-sqlite-3.53.3-bin",
+        "dev": "/nix/store/c6rlcid4dmcaa0n01j5v37jh4abm20s4-sqlite-3.53.3-dev",
+        "doc": "/nix/store/njn65f8l0ff1vn5n49fjx7lff47ly35r-sqlite-3.53.3-doc",
+        "man": "/nix/store/qzx3z3l0frdwx58hcim8ws26hxahs6kd-sqlite-3.53.3-man",
+        "out": "/nix/store/mc2fh87sg8s44nhdwxmbrgj618x6yspa-sqlite-3.53.3"
+      },
+      "system": "aarch64-darwin",
+      "group": "sqlite",
+      "priority": 5
+    },
+    {
+      "attr_path": "sqlite",
+      "broken": false,
+      "derivation": "/nix/store/rwwp595k3sgmg2z9zs9inax7yhflw66d-sqlite-3.53.3.drv",
+      "description": "Self-contained, serverless, zero-configuration, transactional SQL database engine",
+      "install_id": "sqlite",
+      "license": "blessing",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "name": "sqlite-3.53.3",
+      "pname": "sqlite",
+      "rev": "e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "rev_count": 1080189,
+      "rev_date": "2026-09-26T22:51:50Z",
+      "scrape_date": "2026-09-28T05:32:24.991928Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "3.53.3",
+      "outputs_to_install": [
+        "bin",
+        "bin",
+        "bin",
+        "bin",
+        "man",
+        "man"
+      ],
+      "outputs": {
+        "bin": "/nix/store/1ag9nx63cvsq8144696shw1yx7xclk6b-sqlite-3.53.3-bin",
+        "debug": "/nix/store/p3ax2jqsyp5lrkd24gwr5glb145cxc42-sqlite-3.53.3-debug",
+        "dev": "/nix/store/5q261wj3mn5z5q45xjx8yjx8z7ak49vm-sqlite-3.53.3-dev",
+        "doc": "/nix/store/nfr4z7i3vivcynvsywd36268mx5f99dv-sqlite-3.53.3-doc",
+        "man": "/nix/store/qx8zyv7pk7pfal0q8440iscxarvbq22g-sqlite-3.53.3-man",
+        "out": "/nix/store/1z13nb8zh15n25d3ym19079kd3qb0yyl-sqlite-3.53.3"
+      },
+      "system": "aarch64-linux",
+      "group": "sqlite",
+      "priority": 5
+    },
+    {
+      "attr_path": "sqlite",
+      "broken": false,
+      "derivation": "/nix/store/cqnsh5zkzpngh81wgpf79qgzm2prv5dr-sqlite-3.53.3.drv",
+      "description": "Self-contained, serverless, zero-configuration, transactional SQL database engine",
+      "install_id": "sqlite",
+      "license": "blessing",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "name": "sqlite-3.53.3",
+      "pname": "sqlite",
+      "rev": "e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
+      "rev_count": 1080189,
+      "rev_date": "2026-09-26T22:51:50Z",
+      "scrape_date": "2026-09-28T06:08:24.499669Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "3.53.3",
+      "outputs_to_install": [
+        "bin",
+        "bin",
+        "bin",
+        "bin",
+        "man",
+        "man"
+      ],
+      "outputs": {
+        "bin": "/nix/store/24gq3bi2yzf7g386p5j32mn78hhanf49-sqlite-3.53.3-bin",
+        "debug": "/nix/store/3m9gqya8f7d4x53xyp47qiq19ljq57yb-sqlite-3.53.3-debug",
+        "dev": "/nix/store/yiinw6sm280sip2bap30f8aszi0lzvgr-sqlite-3.53.3-dev",
+        "doc": "/nix/store/vaisv53962ksj9n9w50xagk038qk2sf4-sqlite-3.53.3-doc",
+        "man": "/nix/store/xs0pqjaiqhr33nwbplxcfsxf0kmy314j-sqlite-3.53.3-man",
+        "out": "/nix/store/7a0nx1a0rdc5s07vxrsdhplqnzncl5z9-sqlite-3.53.3"
+      },
+      "system": "x86_64-linux",
+      "group": "sqlite",
       "priority": 5
     },
     {
@@ -1281,180 +1572,6 @@
       ],
       "outputs": {
         "out": "/nix/store/1xklj6dmgcpgz60c9w2ynaq7ynzfsrrq-go-1.26.4"
-      },
-      "system": "x86_64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "golangci-lint",
-      "broken": false,
-      "derivation": "/nix/store/man0lkzycrjdx5k1qh8l0gyxr30z75vg-golangci-lint-2.12.2.drv",
-      "description": "Fast linters Runner for Go",
-      "install_id": "golangci-lint",
-      "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "golangci-lint-2.12.2",
-      "pname": "golangci-lint",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T04:52:33.775862Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "2.12.2",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/ml47a2mby38y5wmi1i9gh0ab27wvyrmg-golangci-lint-2.12.2"
-      },
-      "system": "aarch64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "golangci-lint",
-      "broken": false,
-      "derivation": "/nix/store/1z6q727xwkiagkgkrn4190qabaxvmzph-golangci-lint-2.12.2.drv",
-      "description": "Fast linters Runner for Go",
-      "install_id": "golangci-lint",
-      "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "golangci-lint-2.12.2",
-      "pname": "golangci-lint",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T05:21:48.387847Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "2.12.2",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/c9pfd5glmjlls9miydsn4vqr6dd5r6mv-golangci-lint-2.12.2"
-      },
-      "system": "aarch64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "golangci-lint",
-      "broken": false,
-      "derivation": "/nix/store/68b7ayxdyrb9daq8pdhswha475n2wsni-golangci-lint-2.12.2.drv",
-      "description": "Fast linters Runner for Go",
-      "install_id": "golangci-lint",
-      "license": "GPL-3.0-or-later",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "golangci-lint-2.12.2",
-      "pname": "golangci-lint",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T05:54:57.900597Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "2.12.2",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/s37vfcmi4cgni6piw2rp2jd0kqdqvzr1-golangci-lint-2.12.2"
-      },
-      "system": "x86_64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "govulncheck",
-      "broken": false,
-      "derivation": "/nix/store/57s1br53y1r6s253a152cg7ka0pf6bd2-govulncheck-1.6.0.drv",
-      "description": "Database client and tools for the Go vulnerability database, also known as vuln",
-      "install_id": "govulncheck",
-      "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "govulncheck-1.6.0",
-      "pname": "govulncheck",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T04:52:33.819564Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.6.0",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/y70ac1nc3p0va5b95n1jar3z6nl4w6a2-govulncheck-1.6.0"
-      },
-      "system": "aarch64-darwin",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "govulncheck",
-      "broken": false,
-      "derivation": "/nix/store/8imhrgj36c6fiqnyf91hsjk1g656r20v-govulncheck-1.6.0.drv",
-      "description": "Database client and tools for the Go vulnerability database, also known as vuln",
-      "install_id": "govulncheck",
-      "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "govulncheck-1.6.0",
-      "pname": "govulncheck",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T05:21:48.454951Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.6.0",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/3irdknqp739y8wc4farhdz3xj93fdamk-govulncheck-1.6.0"
-      },
-      "system": "aarch64-linux",
-      "group": "toplevel",
-      "priority": 5
-    },
-    {
-      "attr_path": "govulncheck",
-      "broken": false,
-      "derivation": "/nix/store/nix2531v9gdx8yg575n92f3cgn12jjrr-govulncheck-1.6.0.drv",
-      "description": "Database client and tools for the Go vulnerability database, also known as vuln",
-      "install_id": "govulncheck",
-      "license": "BSD-3-Clause",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "name": "govulncheck-1.6.0",
-      "pname": "govulncheck",
-      "rev": "753cc8a3a87467296ddd1fa93f0cc3e81120ee46",
-      "rev_count": 1035164,
-      "rev_date": "2026-07-15T13:07:34Z",
-      "scrape_date": "2026-07-17T05:54:57.974007Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "1.6.0",
-      "outputs_to_install": [
-        "out"
-      ],
-      "outputs": {
-        "out": "/nix/store/wrjh9zhw6bl7h7ampn9x4ligvfv1022i-govulncheck-1.6.0"
       },
       "system": "x86_64-linux",
       "group": "toplevel",
@@ -2273,119 +2390,6 @@
       },
       "system": "x86_64-linux",
       "group": "uv",
-      "priority": 5
-    },
-    {
-      "attr_path": "sqlite",
-      "broken": false,
-      "derivation": "/nix/store/phdxxrsl75icnizbmyk8apw3wwfsrcib-sqlite-3.53.3.drv",
-      "description": "Self-contained, serverless, zero-configuration, transactional SQL database engine",
-      "install_id": "sqlite",
-      "license": "blessing",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
-      "name": "sqlite-3.53.3",
-      "pname": "sqlite",
-      "rev": "e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
-      "rev_count": 1080189,
-      "rev_date": "2026-09-26T22:51:50Z",
-      "scrape_date": "2026-09-28T05:00:21.139787Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "3.53.3",
-      "outputs_to_install": [
-        "bin",
-        "bin",
-        "man"
-      ],
-      "outputs": {
-        "bin": "/nix/store/85n9gja6vyw71xyzw6haas4mxk5p9jic-sqlite-3.53.3-bin",
-        "dev": "/nix/store/c6rlcid4dmcaa0n01j5v37jh4abm20s4-sqlite-3.53.3-dev",
-        "doc": "/nix/store/njn65f8l0ff1vn5n49fjx7lff47ly35r-sqlite-3.53.3-doc",
-        "man": "/nix/store/qzx3z3l0frdwx58hcim8ws26hxahs6kd-sqlite-3.53.3-man",
-        "out": "/nix/store/mc2fh87sg8s44nhdwxmbrgj618x6yspa-sqlite-3.53.3"
-      },
-      "system": "aarch64-darwin",
-      "group": "sqlite",
-      "priority": 5
-    },
-    {
-      "attr_path": "sqlite",
-      "broken": false,
-      "derivation": "/nix/store/rwwp595k3sgmg2z9zs9inax7yhflw66d-sqlite-3.53.3.drv",
-      "description": "Self-contained, serverless, zero-configuration, transactional SQL database engine",
-      "install_id": "sqlite",
-      "license": "blessing",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
-      "name": "sqlite-3.53.3",
-      "pname": "sqlite",
-      "rev": "e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
-      "rev_count": 1080189,
-      "rev_date": "2026-09-26T22:51:50Z",
-      "scrape_date": "2026-09-28T05:32:24.991928Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "3.53.3",
-      "outputs_to_install": [
-        "bin",
-        "bin",
-        "bin",
-        "bin",
-        "man",
-        "man"
-      ],
-      "outputs": {
-        "bin": "/nix/store/1ag9nx63cvsq8144696shw1yx7xclk6b-sqlite-3.53.3-bin",
-        "debug": "/nix/store/p3ax2jqsyp5lrkd24gwr5glb145cxc42-sqlite-3.53.3-debug",
-        "dev": "/nix/store/5q261wj3mn5z5q45xjx8yjx8z7ak49vm-sqlite-3.53.3-dev",
-        "doc": "/nix/store/nfr4z7i3vivcynvsywd36268mx5f99dv-sqlite-3.53.3-doc",
-        "man": "/nix/store/qx8zyv7pk7pfal0q8440iscxarvbq22g-sqlite-3.53.3-man",
-        "out": "/nix/store/1z13nb8zh15n25d3ym19079kd3qb0yyl-sqlite-3.53.3"
-      },
-      "system": "aarch64-linux",
-      "group": "sqlite",
-      "priority": 5
-    },
-    {
-      "attr_path": "sqlite",
-      "broken": false,
-      "derivation": "/nix/store/cqnsh5zkzpngh81wgpf79qgzm2prv5dr-sqlite-3.53.3.drv",
-      "description": "Self-contained, serverless, zero-configuration, transactional SQL database engine",
-      "install_id": "sqlite",
-      "license": "blessing",
-      "locked_url": "https://github.com/flox/nixpkgs?rev=e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
-      "name": "sqlite-3.53.3",
-      "pname": "sqlite",
-      "rev": "e158d9ed9b51c98974c5e66e1ba1c9e0255fecaa",
-      "rev_count": 1080189,
-      "rev_date": "2026-09-26T22:51:50Z",
-      "scrape_date": "2026-09-28T06:08:24.499669Z",
-      "stabilities": [
-        "unstable"
-      ],
-      "unfree": false,
-      "version": "3.53.3",
-      "outputs_to_install": [
-        "bin",
-        "bin",
-        "bin",
-        "bin",
-        "man",
-        "man"
-      ],
-      "outputs": {
-        "bin": "/nix/store/24gq3bi2yzf7g386p5j32mn78hhanf49-sqlite-3.53.3-bin",
-        "debug": "/nix/store/3m9gqya8f7d4x53xyp47qiq19ljq57yb-sqlite-3.53.3-debug",
-        "dev": "/nix/store/yiinw6sm280sip2bap30f8aszi0lzvgr-sqlite-3.53.3-dev",
-        "doc": "/nix/store/vaisv53962ksj9n9w50xagk038qk2sf4-sqlite-3.53.3-doc",
-        "man": "/nix/store/xs0pqjaiqhr33nwbplxcfsxf0kmy314j-sqlite-3.53.3-man",
-        "out": "/nix/store/7a0nx1a0rdc5s07vxrsdhplqnzncl5z9-sqlite-3.53.3"
-      },
-      "system": "x86_64-linux",
-      "group": "sqlite",
       "priority": 5
     }
   ]

@@ -212,8 +212,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request, entry *httpT
 			httpErrorWithLimit(w, status.FromContextError(contextErr).Err(), entry.maxUnaryResponse)
 			return
 		}
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			httpErrorWithLimit(w, status.Errorf(codes.ResourceExhausted, "request body exceeds %d byte limit", entry.maxUnaryRequest), entry.maxUnaryResponse)
 		} else {
 			httpErrorWithLimit(w, invalidArgumentError("read body: "+err.Error()), entry.maxUnaryResponse)
@@ -394,8 +393,7 @@ func (s *Server) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
 			httpErrorWithLimit(w, status.FromContextError(contextErr).Err(), s.httpMaxUnaryResponse)
 			return
 		}
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			httpErrorWithLimit(w, status.Errorf(codes.ResourceExhausted, "request body exceeds %d byte limit", s.httpMaxUnaryRequest), s.httpMaxUnaryResponse)
 		} else {
 			httpErrorWithLimit(w, invalidArgumentError("read body: "+err.Error()), s.httpMaxUnaryResponse)
