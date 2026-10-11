@@ -89,13 +89,14 @@ def main() -> int:
         errors.append(f"go.mod declares {module_path!r}; expected the repository root module")
 
     go_version = captured("go.mod", r"^go\s+(\S+)$")
-    expected_go_toolchain = f"go{go_version}+auto"
-    actual_go_toolchain = flox["vars"].get("GOTOOLCHAIN")
-    if actual_go_toolchain != expected_go_toolchain:
+    flox_go_version = flox["install"].get("go", {}).get("version")
+    if flox_go_version != go_version:
         errors.append(
-            ".flox/env/manifest.toml must select the go.mod toolchain explicitly: "
-            f"got {actual_go_toolchain!r}; expected {expected_go_toolchain!r}"
+            ".flox/env/manifest.toml must install the go.mod Go release: "
+            f"got {flox_go_version!r}; expected {go_version!r}"
         )
+    if "GOTOOLCHAIN" in flox["vars"]:
+        errors.append(".flox/env/manifest.toml must not set GOTOOLCHAIN; Flox supplies Go directly")
 
     nested_go_mods: list[Path] = []
     ignored_dirs = {".flox", ".git", ".venv", "node_modules", "target"}

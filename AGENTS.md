@@ -549,12 +549,13 @@ Dependency roots and lockfiles:
   coverage), and `rust-analyzer`, `gcc` (libstdc++ for native Python wheels),
   the linters `golangci-lint`, `ruff`, `actionlint`, and `shellcheck`, the
   audit tools `gitleaks`, `cargo-audit`, and `govulncheck`, and `atlas`. Flox
-  may provide a bootstrap Go command while `GOTOOLCHAIN` selects the exact
-  checksum-verified patch release required by `go.mod` when the Flox catalog
-  lags a security release. The manifest pins `buf` at 1.72.0, `nodejs` at
-  24.20.0, `uv` at 0.11.28, and the Rust toolchain group at 1.97.1 (the crates
-  declare `rust-version = "1.97"`); `.flox/env/manifest.lock` records the
-  resolved build of every tool.
+  installs the exact Go release `go.mod` declares (`go_1_27` 1.27.2), and
+  `make validate` fails when the two differ or when the manifest sets
+  `GOTOOLCHAIN`, so no toolchain is downloaded at run time. Bump both together
+  once the Flox catalog carries a new Go patch. The manifest pins `buf` at
+  1.72.0, `nodejs` at 24.20.0, `uv` at 0.11.28, and the Rust toolchain group at
+  1.97.1 (the crates declare `rust-version = "1.97"`);
+  `.flox/env/manifest.lock` records the resolved build of every tool.
 - **`python/pyproject.toml` + `python/uv.lock`** — every Python runtime and dev
   dep, including pytest-cov. `uv run` resolves against this, and every `uv run`
   in the Makefile and `scripts/` passes `--locked`, so a lock that no longer

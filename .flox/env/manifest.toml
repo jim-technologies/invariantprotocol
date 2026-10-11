@@ -12,10 +12,13 @@ buf.pkg-group = "buf"
 uv.pkg-path = "uv"
 uv.version = "0.11.28"
 uv.pkg-group = "uv"
-go.pkg-path = "go"
-# Flox currently supplies the bootstrap command. GOTOOLCHAIN below selects the
-# exact patched Go release through Go's checksum-verified toolchain mechanism.
-go.version = "1.26.4"
+# Flox supplies the exact patched Go release go.mod declares, so nothing
+# downloads a toolchain at run time. The catalog's 1.27 line is its own
+# package, resolved in its own group; scripts/check_versions.py keeps this
+# version equal to go.mod's `go` directive.
+go.pkg-path = "go_1_27"
+go.version = "1.27.2"
+go.pkg-group = "go"
 nodejs.pkg-path = "nodejs_24"
 nodejs.version = "24.20.0"
 nodejs.pkg-group = "nodejs"
@@ -75,9 +78,6 @@ sqlite.pkg-group = "sqlite"
 # Keep uv on the same Python 3.14 interpreter as the reproducible Flox
 # environment instead of downloading a separate interpreter.
 UV_PYTHON_DOWNLOADS = "never"
-# Flox's catalog can lag a Go security patch. Select the exact release
-# explicitly instead of letting `auto` choose an unreviewed newer toolchain.
-GOTOOLCHAIN = "go1.27.2+auto"
 # Flox supplies llvm-cov and llvm-profdata directly rather than through rustup.
 CARGO_LLVM_COV_SETUP = "no"
 

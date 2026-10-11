@@ -18,6 +18,14 @@ but never silent wire-behavior regressions.
   existing security and integration checks without removing either boundary.
 - Document migration from the retired nested Go module to the root module;
   package imports retain their `/go` path and generated service registration.
+- Flox installs Go 1.27.2 directly (`go_1_27`), and the version check now
+  requires the Flox Go pin to equal `go.mod`'s `go` directive.
+
+### Removed
+
+- The `GOTOOLCHAIN=go1.27.2+auto` Flox variable, which downloaded that
+  toolchain at run time on top of a Flox Go 1.26.4 bootstrap, and the
+  documentation describing that bootstrap arrangement.
 
 ## v0.16.7 — 2026-09-28
 

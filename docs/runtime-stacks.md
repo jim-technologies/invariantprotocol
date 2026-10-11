@@ -45,10 +45,10 @@ Toolchains track supported stable releases. Production runtimes use an LTS
 line when the ecosystem distinguishes Current from LTS; therefore Node uses
 the latest cross-platform Node 24 LTS build available in the Flox lock, not the
 non-LTS Node 26 Current line. Pre-release frameworks and unsupported runtimes do
-not become defaults simply to maximize version numbers. When the Flox catalog
-lags a Go security patch, its Go command is only the bootstrap: the manifest's
-explicit `GOTOOLCHAIN` value selects the exact checksum-verified patch release
-required by `go.mod`.
+not become defaults simply to maximize version numbers. Flox installs the
+exact Go release `go.mod` declares and the version check keeps the two equal,
+so the toolchain is never downloaded at run time; a Go security patch lands
+once the Flox catalog carries it.
 
 ## Why some protocol boundaries remain local
 
