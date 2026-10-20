@@ -52,7 +52,12 @@ class HTTPAuth:
 
 @dataclass(slots=True)
 class ChannelOptions:
-    """Transport options for ``Server.connect_http``."""
+    """Transport options for ``Server.connect_http``.
+
+    ``trust_env`` controls outbound ``INVARIANT_HTTP_HEADER_*`` headers and
+    HTTPX environment discovery, including proxy and TLS certificate settings.
+    Explicit auth providers and explicit ``proxy`` remain authoritative options.
+    """
 
     max_receive_message_size: int = DEFAULT_HTTP_MESSAGE_BYTES
     connect_timeout: float = 10.0
@@ -64,6 +69,7 @@ class ChannelOptions:
     keepalive_expiry: float = 5.0
     proxy: str | None = None
     http2: bool = False
+    trust_env: bool = True
 
 
 HTTPMetadataMapper = Callable[[Mapping[str, str]], Sequence[tuple[str, str | bytes]]]

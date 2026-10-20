@@ -10,6 +10,11 @@ but never silent wire-behavior regressions.
 
 ## Unreleased
 
+### Added
+
+- Python HTTP clients expose `ChannelOptions.trust_env` (default `True`) to
+  disable environment-derived headers, proxies and TLS settings per connection.
+
 ### Changed
 
 - Go builds require 1.27.2 and use `golang.org/x/net` 0.60.0, addressing the
