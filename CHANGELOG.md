@@ -14,6 +14,10 @@ but never silent wire-behavior regressions.
 
 - Python HTTP clients expose `ChannelOptions.trust_env` (default `True`) to
   disable environment-derived headers, proxies and TLS settings per connection.
+- Python HTTP clients can require identity response encoding and admit each
+  request attempt, including retries and redirects, through a per-connection
+  callback. This opt-in path checks receive limits before retaining raw bodies;
+  ordinary decoding and transport defaults remain unchanged.
 
 ### Changed
 
