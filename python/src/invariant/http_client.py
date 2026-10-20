@@ -129,7 +129,9 @@ class HTTPConnection:
         self.observer = observer
         self.options = options or ChannelOptions()
         self._method_configs = _parse_method_configs(service_config)
-        self._headers = _outbound_http_headers_from_env()
+        self._headers = (
+            _outbound_http_headers_from_env() if self.options.trust_env else {"User-Agent": _DEFAULT_USER_AGENT}
+        )
         self._client: httpx.AsyncClient | None = None
 
     @property
@@ -153,6 +155,7 @@ class HTTPConnection:
                 ),
                 proxy=self.options.proxy,
                 http2=self.options.http2,
+                trust_env=self.options.trust_env,
             )
         return self._client
 
