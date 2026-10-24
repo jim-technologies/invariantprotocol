@@ -1,20 +1,17 @@
 module github.com/jim-technologies/invariantprotocol
 
-go 1.27.2
+go 1.27.3
 
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	buf.build/go/protovalidate v1.4.0
-	// Held at v18.7.0: v18.8.0 requires github.com/twmb/avro v1.8.0, which the
-	// avro hold below cannot accept yet. Move both once Iceberg-Go ships a
-	// release built against Avro v1.8.
-	github.com/apache/arrow-go/v18 v18.7.0
-	github.com/apache/iceberg-go v0.6.0
-	github.com/pb33f/libopenapi v0.40.0
+	github.com/apache/arrow-go/v18 v18.8.0
+	github.com/apache/iceberg-go v0.7.0
+	github.com/pb33f/go-yaml v0.1.1
+	github.com/pb33f/libopenapi v0.41.6
 	github.com/stretchr/testify v1.12.1
-	go.yaml.in/yaml/v4 v4.0.0-rc.6
-	google.golang.org/genproto/googleapis/api v0.0.0-20260921155816-b14227669459
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459
+	google.golang.org/genproto/googleapis/api v0.0.0-20261019180522-ce908d29299b
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b
 	// Held at v1.83.2: v1.84.0 carries GO-2026-6443 (server panic on missing
 	// :authority); take the first patched 1.84.x.
 	google.golang.org/grpc v1.83.2
@@ -24,33 +21,30 @@ require (
 require (
 	cel.dev/cel-go v0.32.0 // indirect
 	cel.dev/expr v0.25.3 // indirect
-	github.com/andybalholm/brotli v1.2.3 // indirect
+	github.com/andybalholm/brotli v1.2.7 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
-	github.com/apache/thrift v0.24.0 // indirect
+	github.com/apache/thrift v0.25.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.6.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/goccy/go-json v0.10.6 // indirect
+	github.com/geoarrow/geoarrow-go v0.0.0-20261005150217-fc2b33c3141d // indirect
+	github.com/goccy/go-json v0.11.2 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
-	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
-	github.com/pb33f/jsonpath v0.8.3 // indirect
-	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
-	github.com/pierrec/lz4/v4 v4.1.29 // indirect
-	github.com/stretchr/objx v0.5.3 // indirect
-	// Held at v1.7.2. Avro v1.8.0 changes Schema.Root() to return
-	// *avro.SchemaNode, which does not compile against the current
-	// github.com/apache/iceberg-go release. Upgrade once Iceberg-Go ships a
-	// release built against Avro v1.8.
-	github.com/twmb/avro v1.7.2 // indirect
-	github.com/twmb/murmur3 v1.1.8 // indirect
+	github.com/klauspost/compress v1.20.3 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.1 // indirect
+	github.com/pb33f/jsonpath v0.8.4 // indirect
+	github.com/pb33f/ordered-map/v2 v2.3.2 // indirect
+	github.com/pierrec/lz4/v4 v4.1.33 // indirect
+	github.com/stretchr/objx v0.8.0 // indirect
+	github.com/twmb/avro v1.9.0 // indirect
+	github.com/twmb/murmur3 v1.2.1 // indirect
 	github.com/zeebo/xxh3 v1.1.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/exp v0.0.0-20260824195058-e88cd73687aa // indirect
-	golang.org/x/net v0.60.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
+	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 )

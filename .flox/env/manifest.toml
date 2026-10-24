@@ -2,25 +2,25 @@ schema-version = "1.12.0"
 
 [install]
 python3.pkg-path = "python314"
-python3.version = "python3-3.14.6"
+python3.version = "python3-3.14.8"
 buf.pkg-path = "buf"
-buf.version = "1.72.0"
+buf.version = "1.73.0"
 # buf, nodejs, and uv are pinned newer than the toplevel catalog page can
 # satisfy alongside the exact toolchain pins below, so each resolves in
 # its own group. All three are standalone CLIs with no shared ABI to keep.
 buf.pkg-group = "buf"
 uv.pkg-path = "uv"
-uv.version = "0.11.28"
+uv.version = "0.13.1"
 uv.pkg-group = "uv"
 # Flox supplies the exact patched Go release go.mod declares, so nothing
 # downloads a toolchain at run time. The catalog's 1.27 line is its own
 # package, resolved in its own group; scripts/check_versions.py keeps this
 # version equal to go.mod's `go` directive.
 go.pkg-path = "go_1_27"
-go.version = "1.27.2"
+go.version = "1.27.3"
 go.pkg-group = "go"
 nodejs.pkg-path = "nodejs_24"
-nodejs.version = "24.20.0"
+nodejs.version = "24.21.0"
 nodejs.pkg-group = "nodejs"
 # Native Python wheels such as grpcio link libstdc++ on Linux. GCC supplies the
 # runtime library and also covers source-build fallbacks for native extensions.
@@ -29,28 +29,33 @@ protoc-gen-go.pkg-path = "protoc-gen-go"
 protoc-gen-go-grpc.pkg-path = "protoc-gen-go-grpc"
 protoc-gen-go-grpc.version = "1.6.2"
 golangci-lint.pkg-path = "golangci-lint"
-golangci-lint.version = "2.14.0"
+golangci-lint.version = "2.15.0"
 golangci-lint.pkg-group = "golangci-lint"
 ruff.pkg-path = "ruff"
 protoc.pkg-path = "protobuf"
-protoc.version = ">=34.1"
+protoc.version = ">=36.2"
 
 # Rust toolchain. Lock to a stable channel via flox-provided rustc/cargo so
 # nothing pulls a different toolchain at build time. clippy + rustfmt mirror
 # the lint/format role of golangci-lint + ruff in the other two languages.
+# Held at 1.98.1 (2026-10-24): the catalog's rustc 1.99.0 profiler runtime
+# writes raw profile format 11, which no catalog llvm-profdata reads, and
+# instrumented build scripts crash under cargo-llvm-cov. Retry with the next
+# rustc or llvm catalog build.
 rustc.pkg-path = "rustc"
-rustc.version = "1.97.1"
+rustc.version = "1.98.1"
 rustc.pkg-group = "rust-toolchain"
 cargo.pkg-path = "cargo"
-cargo.version = "1.97.1"
+cargo.version = "1.98.1"
 cargo.pkg-group = "rust-toolchain"
 cargo-llvm-cov.pkg-path = "cargo-llvm-cov"
-cargo-llvm-cov.version = "0.8.5"
+cargo-llvm-cov.version = "0.8.7"
+cargo-llvm-cov.pkg-group = "cargo-llvm-cov"
 clippy.pkg-path = "clippy"
-clippy.version = "1.97.1"
+clippy.version = "1.98.1"
 clippy.pkg-group = "rust-toolchain"
 rustfmt.pkg-path = "rustfmt"
-rustfmt.version = "1.97.1"
+rustfmt.version = "1.98.1"
 rustfmt.pkg-group = "rust-toolchain"
 # Match rustc's embedded LLVM so coverage profiles and reports use the same
 # instrumentation format on every supported development system.
@@ -61,7 +66,7 @@ rust-analyzer.pkg-path = "rust-analyzer"
 gitleaks.pkg-path = "gitleaks"
 cargo-audit.pkg-path = "cargo-audit"
 govulncheck.pkg-path = "govulncheck"
-govulncheck.version = "1.8.0"
+govulncheck.version = "1.9.0"
 govulncheck.pkg-group = "govulncheck"
 actionlint.pkg-path = "actionlint"
 shellcheck.pkg-path = "shellcheck"
@@ -69,7 +74,8 @@ shellcheck.version = "0.11.0"
 # Atlas validates that emitted PostgreSQL desired-state SQL is accepted by the
 # real migration boundary documented by this project.
 atlas.pkg-path = "atlas"
-atlas.version = "1.2.3"
+atlas.version = "1.3.0"
+atlas.pkg-group = "atlas"
 sqlite.pkg-path = "sqlite"
 sqlite.version = "3.53.3"
 sqlite.pkg-group = "sqlite"

@@ -58,7 +58,7 @@ type Tool struct {
 
 const (
 	serverName    = "invariant-protocol"
-	serverVersion = "0.16.7"
+	serverVersion = "0.16.8"
 )
 
 // MethodConfig overrides per-server defaults for one RPC method. Zero-valued
@@ -662,8 +662,9 @@ func (s *Server) ServeProjections(ctx context.Context, projections ...Projection
 	}
 	first := <-errc
 	cancel()
+	// Drain the rest so every projection has stopped before returning.
 	for i := 1; i < len(projections); i++ {
-		<-errc
+		<-errc //nolint:errcheck // the first result decides; later ones only confirm shutdown
 	}
 	return first
 }

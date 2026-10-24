@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x minor releases may include deliberate API changes,
 but never silent wire-behavior regressions.
 
-## Unreleased
+## v0.16.8 — 2026-10-24
 
 ### Added
 
@@ -35,6 +35,23 @@ but never silent wire-behavior regressions.
   package imports retain their `/go` path and generated service registration.
 - Flox installs Go 1.27.2 directly (`go_1_27`), and the version check now
   requires the Flox Go pin to equal `go.mod`'s `go` directive.
+- The redirect policy applies to both outbound send paths: connections with
+  `identity_response_only` or `before_http_attempt` walk redirects themselves
+  and now honour `follow_redirects` the same way as the ordinary path.
+- Toolchain currency: Go 1.27.3 (Flox `go_1_27`, and `go.mod`'s `go`
+  directive), Rust 1.98.1, Python 3.14.8, uv 0.13.1, Node.js 24.21.0, buf
+  1.73.0, protoc 36.2, golangci-lint 2.15.0, govulncheck 1.9.0, Atlas 1.3.0
+  and cargo-llvm-cov 0.8.7. `atlas` and `cargo-llvm-cov` resolve in their own
+  Flox groups so the toplevel group can take the newest catalog builds.
+- Dependency currency: Apache Iceberg-Go 0.7.0 with Arrow-Go 18.8.0 and Avro
+  1.9.0 (the Avro and Arrow holds are released), libopenapi 0.41.6 (the
+  OpenAPI importer reads enum nodes through libopenapi's `pb33f/go-yaml`),
+  `golang.org/x/net` 0.61.0; Python gRPC 1.84.1, protovalidate 2.1.0 and
+  PyArrow 26.0.0; `@bufbuild/protobuf` and `protoc-gen-es` 2.16.0, Biome
+  2.6.2 and Vitest 5.0.5; the Rust lockfile moves to tokio 1.54.1 and hyper
+  1.12.0. Generated code is refreshed for protoc-gen-go 1.36.12 and
+  protoc-gen-es 2.16.0. `google.golang.org/grpc` stays held at 1.83.2 because
+  no patched 1.84.x release exists yet.
 
 ### Removed
 
