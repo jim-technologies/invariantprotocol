@@ -18,6 +18,12 @@ but never silent wire-behavior regressions.
   request attempt, including retries and redirects, through a per-connection
   callback. This opt-in path checks receive limits before retaining raw bodies;
   ordinary decoding and transport defaults remain unchanged.
+- Python outbound HTTP clients accept `ChannelOptions(follow_redirects=False)`
+  to prevent redirect requests, including `google.api.HttpBody` responses.
+  `None` preserves the existing policy: follow redirects for `HttpBody`,
+  refuse them for other response types. Explicit `True` follows redirects for
+  either response type. Response observers receive the actual final URL in
+  `OutboundHTTPResponse.url`; `request.url` remains the original request URL.
 
 ### Changed
 
