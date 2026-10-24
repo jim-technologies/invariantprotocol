@@ -527,6 +527,13 @@ carries a body, even for an empty message: `{}` from the JSON clients (Go,
 Python, TypeScript) and zero protobuf bytes with `Content-Length: 0` from Rust.
 Header providers add headers but cannot replace `Accept` or `Content-Type`.
 
+Python callers can set `ChannelOptions(follow_redirects=False)` when a request
+must stay at its approved URL. The default `None` preserves the existing
+policy: `google.api.HttpBody` responses follow redirects, while other response
+types do not. Explicit `True` follows redirects for either response type.
+Outbound response observers expose the actual final URL as `response.url` and
+the original outbound URL as `response.request.url`.
+
 ## Protobuf-derived data schemas
 
 Invariant compiles messages marked with `(invariant.data.v1.dataset)` into one

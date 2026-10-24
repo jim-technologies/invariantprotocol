@@ -448,10 +448,15 @@ class HTTPDynamicHandler:
             target,
             content=body_bytes,
             headers=headers,
-            follow_redirects=self._httpbody_response,
+            follow_redirects=self._follow_redirects(),
         ) as response:
             read_result = await _read_response_body(response, self._connection.options.max_receive_message_size)
             return response, read_result, (time.perf_counter() - start) * 1000
+
+    def _follow_redirects(self) -> bool:
+        """Resolve the connection redirect policy for this method's response type."""
+        configured = self._connection.options.follow_redirects
+        return self._httpbody_response if configured is None else configured
 
     async def _send_admitted(
         self,
@@ -492,7 +497,7 @@ class HTTPDynamicHandler:
                 if not budget.expired():
                     raise
                 raise httpx.ReadTimeout("admitted HTTP attempt deadline elapsed", request=request) from None
-            next_request = response.next_request if self._httpbody_response else None
+            next_request = response.next_request if self._follow_redirects() else None
             if result.exceeded:
                 raise _response_too_large(
                     self._connection.options.max_receive_message_size,
@@ -576,6 +581,7 @@ class HTTPDynamicHandler:
                         url=target,
                         body=body_bytes or b"",
                     ),
+                    url=str(response.url),
                 )
             )
 

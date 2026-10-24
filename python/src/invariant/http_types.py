@@ -24,7 +24,11 @@ HTTPQueryProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
 
 @dataclass
 class OutboundHTTPResponse:
-    """Raw outbound HTTP response metadata supplied to observers."""
+    """Raw response metadata; ``url`` is the final response URL.
+
+    ``request.url`` retains the original outbound request URL. An empty
+    ``url`` means a caller constructed metadata without a response URL.
+    """
 
     method_path: str
     status_code: int
@@ -33,6 +37,7 @@ class OutboundHTTPResponse:
     duration_ms: float
     success: bool
     request: OutboundHTTPRequest
+    url: str = ""
 
 
 HTTPResponseObserver = Callable[[OutboundHTTPResponse], None]
@@ -57,6 +62,10 @@ class ChannelOptions:
     ``trust_env`` controls outbound ``INVARIANT_HTTP_HEADER_*`` headers and
     HTTPX environment discovery, including proxy and TLS certificate settings.
     Explicit auth providers and explicit ``proxy`` remain authoritative options.
+
+    ``follow_redirects=None`` follows redirects for ``google.api.HttpBody``
+    responses and refuses them for other response types. An explicit boolean
+    overrides that policy for every method on the connection.
     """
 
     max_receive_message_size: int = DEFAULT_HTTP_MESSAGE_BYTES
@@ -87,6 +96,7 @@ class ChannelOptions:
     shared counters/deadlines; the callback runs synchronously before each
     send without an intervening await.
     """
+    follow_redirects: bool | None = None
 
 
 HTTPMetadataMapper = Callable[[Mapping[str, str]], Sequence[tuple[str, str | bytes]]]

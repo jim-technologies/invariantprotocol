@@ -1919,6 +1919,8 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
             assert resp.content_type == "text/csv"
             assert seen[-1].success is True
             assert seen[-1].headers["x-archive-id"] == "raw-1"
+            assert seen[-1].request.url == f"http://localhost:{port}/raw/World"
+            assert seen[-1].url == f"http://localhost:{port}/download/world.csv"
 
             with pytest.raises(InvariantError) as exc:
                 await srv.invoke("greet.v1.GreetService.RawBody", greet_pb2.GreetRequest(name="Huge"))
@@ -1929,6 +1931,78 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
             await srv.stop()
     finally:
         httpd.shutdown()
+
+
+@pytest.mark.parametrize("admitted", [False, True])
+@pytest.mark.parametrize("httpbody", [False, True])
+@pytest.mark.parametrize("follow_redirects", [None, False, True])
+async def test_connect_http_redirect_policy_controls_cross_origin_requests(httpbody, follow_redirects, admitted):
+    payload = b'{"message":"redirected"}'
+    target_requests: list[str] = []
+    observed: list = []
+
+    class TargetHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            target_requests.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            pass
+
+    target = ThreadingHTTPServer(("localhost", 0), TargetHandler)
+    target_url = f"http://localhost:{target.server_address[1]}/redirect-target"
+
+    class SourceHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", target_url)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    source = ThreadingHTTPServer(("localhost", 0), SourceHandler)
+    for backend in (source, target):
+        threading.Thread(target=backend.serve_forever, daemon=True).start()
+    srv = Server.from_bytes(_descriptor_with_raw_httpbody()) if httpbody else Server.from_descriptor(DESCRIPTOR_PATH)
+    origin = f"http://localhost:{source.server_address[1]}"
+    srv.connect_http(
+        origin,
+        options=ChannelOptions(
+            follow_redirects=follow_redirects,
+            # The admitted send path walks redirects itself; it must honour the same policy.
+            before_http_attempt=(lambda: None) if admitted else None,
+        ),
+        observer=observed.append,
+    )
+    try:
+        method = "RawBody" if httpbody else "Greet"
+        response = await srv.invoke(f"greet.v1.GreetService.{method}", greet_pb2.GreetRequest(name="World"))
+        follows = httpbody if follow_redirects is None else follow_redirects
+        assert len(observed) == 1
+        assert observed[0].request.url.startswith(origin + "/")
+        if follows:
+            assert target_requests == ["/redirect-target"]
+            assert observed[0].status_code == 200
+            assert observed[0].url == target_url
+            assert observed[0].body == payload
+            assert response.data == payload if httpbody else response.message == "redirected"
+        else:
+            assert target_requests == []
+            assert observed[0].status_code == 302
+            assert observed[0].url == observed[0].request.url
+            assert observed[0].body == b""
+            assert response.data == b"" if httpbody else response.message == ""
+    finally:
+        await srv.stop()
+        for backend in (source, target):
+            backend.shutdown()
+            backend.server_close()
 
 
 async def test_connect_http_uses_one_shared_client_per_connection(monkeypatch):
