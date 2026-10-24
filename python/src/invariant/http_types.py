@@ -52,7 +52,12 @@ class HTTPAuth:
 
 @dataclass(slots=True)
 class ChannelOptions:
-    """Transport options for ``Server.connect_http``."""
+    """Transport options for ``Server.connect_http``.
+
+    ``trust_env`` controls outbound ``INVARIANT_HTTP_HEADER_*`` headers and
+    HTTPX environment discovery, including proxy and TLS certificate settings.
+    Explicit auth providers and explicit ``proxy`` remain authoritative options.
+    """
 
     max_receive_message_size: int = DEFAULT_HTTP_MESSAGE_BYTES
     connect_timeout: float = 10.0
@@ -64,6 +69,24 @@ class ChannelOptions:
     keepalive_expiry: float = 5.0
     proxy: str | None = None
     http2: bool = False
+    trust_env: bool = True
+    identity_response_only: bool = False
+    """Request identity encoding and refuse compressed bodies before reading.
+
+    Raw identity bytes are capped before retention, including errors and
+    redirects. This profile disables ambient header and HTTPX environment
+    discovery, regardless of trust_env; explicit auth/proxy remain available.
+    False preserves ordinary response decoding and configuration.
+    """
+    before_http_attempt: Callable[[], float | None] | None = None
+    """Admit each physical send, including retries and redirect hops.
+
+    A callback may refuse before network IO. A positive return bounds that
+    send's elapsed seconds; None retains the ordinary phase timeouts.
+    Admission is not refunded on failure or cancellation. The caller owns
+    shared counters/deadlines; the callback runs synchronously before each
+    send without an intervening await.
+    """
 
 
 HTTPMetadataMapper = Callable[[Mapping[str, str]], Sequence[tuple[str, str | bytes]]]

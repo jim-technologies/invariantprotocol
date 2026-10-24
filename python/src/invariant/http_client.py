@@ -7,6 +7,7 @@ import base64
 import binascii
 import contextlib
 import json
+import math
 import os
 import random
 import time
@@ -129,7 +130,19 @@ class HTTPConnection:
         self.observer = observer
         self.options = options or ChannelOptions()
         self._method_configs = _parse_method_configs(service_config)
-        self._headers = _outbound_http_headers_from_env()
+        if self.options.identity_response_only and (
+            isinstance(self.options.max_receive_message_size, bool)
+            or not isinstance(self.options.max_receive_message_size, int)
+            or self.options.max_receive_message_size <= 0
+        ):
+            raise ValueError("identity-only response limit must be a positive integer")
+        if self.options.before_http_attempt is not None and not callable(self.options.before_http_attempt):
+            raise ValueError("before_http_attempt must be callable")
+        self._headers = (
+            _outbound_http_headers_from_env()
+            if self.options.trust_env and not self.options.identity_response_only
+            else {"User-Agent": _DEFAULT_USER_AGENT}
+        )
         self._client: httpx.AsyncClient | None = None
 
     @property
@@ -153,6 +166,7 @@ class HTTPConnection:
                 ),
                 proxy=self.options.proxy,
                 http2=self.options.http2,
+                trust_env=self.options.trust_env and not self.options.identity_response_only,
             )
         return self._client
 
@@ -426,6 +440,8 @@ class HTTPDynamicHandler:
         body_bytes: bytes | None,
         headers: dict[str, str],
     ) -> tuple[httpx.Response, _ReadResult, float]:
+        if self._connection.options.identity_response_only or self._connection.options.before_http_attempt is not None:
+            return await self._send_admitted(target, body_bytes, headers)
         start = time.perf_counter()
         async with self._connection.client.stream(
             self._binding.method,
@@ -436,6 +452,60 @@ class HTTPDynamicHandler:
         ) as response:
             read_result = await _read_response_body(response, self._connection.options.max_receive_message_size)
             return response, read_result, (time.perf_counter() - start) * 1000
+
+    async def _send_admitted(
+        self,
+        target: str,
+        body_bytes: bytes | None,
+        headers: dict[str, str],
+    ) -> tuple[httpx.Response, _ReadResult, float]:
+        """Keep redirect reads and each physical admission inside the limits."""
+        start = time.perf_counter()
+        client = self._connection.client
+        request = client.build_request(self._binding.method, target, content=body_bytes, headers=headers)
+        redirects = 0
+        while True:
+            if self._connection.options.identity_response_only:
+                request.headers["Accept-Encoding"] = "identity"
+            callback = self._connection.options.before_http_attempt
+            seconds = callback() if callback is not None else None
+            if seconds is not None and (
+                isinstance(seconds, bool)
+                or not isinstance(seconds, (int, float))
+                or not math.isfinite(seconds)
+                or seconds <= 0
+            ):
+                raise ValueError("HTTP attempt admission needs a finite positive timeout")
+            budget = asyncio.timeout(seconds)
+            try:
+                async with budget:
+                    response = await client.send(request, stream=True, follow_redirects=False)
+                    try:
+                        result = await _read_response_body(
+                            response,
+                            self._connection.options.max_receive_message_size,
+                            identity_only=self._connection.options.identity_response_only,
+                        )
+                    finally:
+                        await response.aclose()
+            except TimeoutError:
+                if not budget.expired():
+                    raise
+                raise httpx.ReadTimeout("admitted HTTP attempt deadline elapsed", request=request) from None
+            next_request = response.next_request if self._httpbody_response else None
+            if result.exceeded:
+                raise _response_too_large(
+                    self._connection.options.max_receive_message_size,
+                    method_path=self._method_path,
+                    url=target,
+                    body=result.body,
+                )
+            if next_request is None:
+                return response, result, (time.perf_counter() - start) * 1000
+            redirects += 1
+            if redirects > client.max_redirects:
+                raise httpx.TooManyRedirects("admitted HTTP redirect limit exceeded", request=request)
+            request = next_request
 
     def _apply_query_provider(self, target: str, body_bytes: bytes | None) -> str:
         """Let an optional query_provider add auth query params (API key, HMAC
@@ -569,7 +639,38 @@ class HTTPDynamicHandler:
             headers[name] = value
 
 
-async def _read_response_body(response: httpx.Response, max_bytes: int) -> _ReadResult:
+async def _read_response_body(
+    response: httpx.Response,
+    max_bytes: int,
+    *,
+    identity_only: bool = False,
+) -> _ReadResult:
+    if identity_only:
+        encoding = response.headers.get("content-encoding", "identity").strip().lower()
+        if encoding != "identity":
+            raise InvariantError(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                "identity-only HTTP response uses an unsupported encoding",
+            )
+        declared = response.headers.get("content-length")
+        if declared is not None:
+            if not declared.isascii() or not declared.isdigit():
+                raise InvariantError(
+                    grpc.StatusCode.FAILED_PRECONDITION,
+                    "identity-only HTTP Content-Length is invalid",
+                )
+            significant = declared.lstrip("0") or "0"
+            ceiling = str(max_bytes)
+            if len(significant) > len(ceiling) or (len(significant) == len(ceiling) and significant > ceiling):
+                return _ReadResult(body=b"", exceeded=True)
+        raw_chunks: list[bytes] = []
+        retained = 0
+        async for chunk in response.aiter_raw():
+            if len(chunk) > max_bytes - retained:
+                return _ReadResult(body=b"".join(raw_chunks), exceeded=True)
+            raw_chunks.append(chunk)
+            retained += len(chunk)
+        return _ReadResult(body=b"".join(raw_chunks), exceeded=False)
     chunks: list[bytes] = []
     total = 0
     retained = 0
