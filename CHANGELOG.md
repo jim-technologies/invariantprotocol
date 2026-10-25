@@ -8,6 +8,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x minor releases may include deliberate API changes,
 but never silent wire-behavior regressions.
 
+## Unreleased
+
+### Fixed
+
+- Rust MCP over HTTP preserves trusted request extensions from enclosing
+  middleware for unary and server-streaming tools, matching Connect. Reserved
+  authentication metadata remains filtered.
+
 ## v0.16.8 — 2026-10-24
 
 ### Added

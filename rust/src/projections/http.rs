@@ -97,7 +97,7 @@ async fn not_found() -> impl IntoResponse {
     error_response(&Status::not_found("not found"))
 }
 
-async fn mcp_http_handler(State(server): State<Arc<Server>>, req: Request) -> Response {
+async fn mcp_http_handler(State(server): State<Arc<Server>>, mut req: Request) -> Response {
     if req.headers().contains_key(header::ORIGIN) {
         return (StatusCode::FORBIDDEN, "").into_response();
     }
@@ -130,6 +130,7 @@ async fn mcp_http_handler(State(server): State<Arc<Server>>, req: Request) -> Re
     };
     let projection = ProjectionContext::new(timeout);
     let _guard = ProjectionGuard::new(projection.clone());
+    let extensions = std::mem::take(req.extensions_mut());
     let body = match until_projection_deadline(
         &projection,
         read_limited_body(req, server.max_unary_request_bytes()),
@@ -185,6 +186,7 @@ async fn mcp_http_handler(State(server): State<Arc<Server>>, req: Request) -> Re
         &server,
         &msg,
         metadata,
+        extensions,
         Some(projection.clone()),
         Some(max_response_bytes),
     );

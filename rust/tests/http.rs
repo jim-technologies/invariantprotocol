@@ -421,6 +421,167 @@ async fn http_middleware_extensions_reach_the_tonic_request() {
     task.abort();
 }
 
+async fn mcp_extensions_round_trip(streaming: bool) {
+    #[derive(Clone)]
+    struct TrustedPrincipal(String);
+    #[derive(Clone)]
+    struct AdmissionPermit(Arc<()>);
+
+    fn check_context<T>(
+        request: &tonic::Request<T>,
+        expected: &str,
+        permit: &Arc<()>,
+    ) -> Result<(), Status> {
+        let principal = request
+            .extensions()
+            .get::<TrustedPrincipal>()
+            .ok_or_else(|| Status::unauthenticated("trusted principal required"))?;
+        assert_eq!(principal.0, expected);
+        assert!(Arc::ptr_eq(
+            &request.extensions().get::<AdmissionPermit>().unwrap().0,
+            permit,
+        ));
+        assert!(request.metadata().get("authorization").is_none());
+        assert!(request.metadata().get("x-principal").is_none());
+        assert_eq!(
+            request.metadata().get("x-request-id").unwrap(),
+            "context-test"
+        );
+        let projection = request.extensions().get::<ProjectionContext>().unwrap();
+        assert!(projection.deadline().is_some());
+        assert!(!projection.is_cancelled());
+        Ok(())
+    }
+
+    let permit = Arc::new(());
+    let unary_permit = permit.clone();
+    let stream_permit = permit.clone();
+    let service = TestGreetService::default()
+        .with_greet(move |request| {
+            let permit = unary_permit.clone();
+            async move {
+                check_context(&request, &request.get_ref().name, &permit)?;
+                Ok(Response::new(greet::GreetResponse {
+                    message: request.into_inner().name,
+                    ..Default::default()
+                }))
+            }
+        })
+        .with_stream(move |request| {
+            let permit = stream_permit.clone();
+            async move {
+                check_context(&request, &request.get_ref().name, &permit)?;
+                let name = request.into_inner().name;
+                Ok(Response::new(
+                    Box::pin(futures::stream::iter((0..2).map(move |_| {
+                        Ok(greet::GreetResponse {
+                            message: name.clone(),
+                            ..Default::default()
+                        })
+                    }))) as BoxResponseStream<_>,
+                ))
+            }
+        });
+    let server = registered_server(service);
+    server
+        .use_http_metadata_mapper(Arc::new(|_| {
+            let mut metadata = tonic::metadata::MetadataMap::new();
+            metadata.insert("authorization", "untrusted".parse().unwrap());
+            metadata.insert("x-principal", "untrusted".parse().unwrap());
+            metadata.insert("x-request-id", "context-test".parse().unwrap());
+            metadata
+        }))
+        .unwrap();
+    let app = http_router(server).layer(axum::middleware::from_fn(
+        move |mut request: axum::extract::Request, next: axum::middleware::Next| {
+            let permit = permit.clone();
+            async move {
+                let principal = request
+                    .headers()
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| match value {
+                        "Bearer alice" => Some("alice"),
+                        "Bearer bob" => Some("bob"),
+                        _ => None,
+                    });
+                if let Some(principal) = principal {
+                    request
+                        .extensions_mut()
+                        .insert(TrustedPrincipal(principal.into()));
+                    request.extensions_mut().insert(AdmissionPermit(permit));
+                }
+                next.run(request).await
+            }
+        },
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{address}/greet.v1.GreetService/Greet"))
+        .bearer_auth("alice")
+        .header("connect-timeout-ms", "2000")
+        .json(&json!({"name": "alice"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.json::<serde_json::Value>().await.unwrap()["message"],
+        "alice"
+    );
+
+    let method = if streaming { "StreamGreet" } else { "Greet" };
+    for principal in [Some("alice"), Some("bob"), None] {
+        let mut request = client
+            .post(format!("http://{address}/mcp"))
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2025-11-25")
+            .header("connect-timeout-ms", "2000")
+            .header("x-principal", "mallory")
+            .json(&json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {
+                    "name": format!("greet.v1.GreetService.{method}"),
+                    "arguments": {"name": principal.unwrap_or("anonymous")},
+                },
+            }));
+        if let Some(principal) = principal {
+            request = request.bearer_auth(principal);
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        let body: serde_json::Value = response.json().await.unwrap();
+        if let Some(principal) = principal {
+            assert_ne!(body["result"]["isError"], true, "{body}");
+            let content = body["result"]["content"].as_array().unwrap();
+            assert_eq!(content.len(), if streaming { 2 } else { 1 });
+            for block in content {
+                let message: serde_json::Value =
+                    serde_json::from_str(block["text"].as_str().unwrap()).unwrap();
+                assert_eq!(message["message"], principal);
+            }
+        } else {
+            assert_eq!(body["result"]["isError"], true, "{body}");
+            assert!(body.to_string().contains("trusted principal required"));
+        }
+    }
+    task.abort();
+    let _ = task.await;
+}
+
+#[tokio::test]
+async fn mcp_http_preserves_unary_request_extensions() {
+    mcp_extensions_round_trip(false).await;
+}
+
+#[tokio::test]
+async fn mcp_http_preserves_streaming_request_extensions() {
+    mcp_extensions_round_trip(true).await;
+}
+
 #[tokio::test]
 async fn four_http_limits_are_independent_and_method_overrides_are_scoped() {
     let service = TestGreetService::default().with_greet(|request| async move {

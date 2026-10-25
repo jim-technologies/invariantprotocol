@@ -10,6 +10,7 @@
 
 use crate::errors::error_payload;
 use crate::server::{ProjectionContext, Server};
+use http::Extensions;
 use parking_lot::Mutex;
 use prost_reflect::{DynamicMessage, SerializeOptions};
 use serde_json::{Value, json};
@@ -218,15 +219,23 @@ fn id_type(id: &Value) -> &'static str {
 /// Dispatch a single MCP JSON-RPC message. Returns `None` for notifications
 /// (no `id` field); otherwise a fully-formed JSON-RPC response.
 pub async fn mcp_dispatch(server: &Arc<Server>, msg: &Value) -> Option<Value> {
-    mcp_dispatch_with_context(server, msg, MetadataMap::new(), None, None)
-        .await
-        .expect("unbounded MCP dispatch cannot exceed an HTTP response limit")
+    mcp_dispatch_with_context(
+        server,
+        msg,
+        MetadataMap::new(),
+        Extensions::new(),
+        None,
+        None,
+    )
+    .await
+    .expect("unbounded MCP dispatch cannot exceed an HTTP response limit")
 }
 
 pub(crate) async fn mcp_dispatch_with_context(
     server: &Arc<Server>,
     msg: &Value,
     metadata: MetadataMap,
+    extensions: Extensions,
     projection: Option<ProjectionContext>,
     max_response_bytes: Option<usize>,
 ) -> Result<Option<Value>, Status> {
@@ -282,6 +291,7 @@ pub(crate) async fn mcp_dispatch_with_context(
                 id,
                 &params,
                 metadata,
+                extensions,
                 projection,
                 max_response_bytes,
             )
@@ -409,6 +419,7 @@ async fn tools_call(
     id: Value,
     params: &Value,
     metadata: MetadataMap,
+    extensions: Extensions,
     projection: Option<ProjectionContext>,
     max_response_bytes: Option<usize>,
 ) -> Result<Value, Status> {
@@ -427,26 +438,17 @@ async fn tools_call(
         Err(s) => return Ok(error_result(id, &s)),
     };
 
-    if tool.server_streaming {
-        return stream_tools_call(
-            server,
-            id,
-            &tool.name,
-            request,
-            metadata,
-            projection,
-            max_response_bytes,
-        )
-        .await;
-    }
-
     let mut request = Request::new(request);
     *request.metadata_mut() = metadata;
+    *request.extensions_mut() = extensions.clone();
     if let Some(projection) = projection {
         if let Some(remaining) = projection.remaining() {
             request.set_timeout(remaining);
         }
         request.extensions_mut().insert(projection);
+    }
+    if tool.server_streaming {
+        return stream_tools_call(server, id, &tool.name, request, max_response_bytes).await;
     }
     Ok(match server.invoke(tool_name, request).await {
         Ok(resp) => {
@@ -465,9 +467,7 @@ async fn stream_tools_call(
     server: &Arc<Server>,
     id: Value,
     tool_name: &str,
-    request: DynamicMessage,
-    metadata: MetadataMap,
-    projection: Option<ProjectionContext>,
+    request: Request<DynamicMessage>,
     max_response_bytes: Option<usize>,
 ) -> Result<Value, Status> {
     use futures::StreamExt;
@@ -488,14 +488,6 @@ async fn stream_tools_call(
         .is_some_and(|(limit, encoded)| encoded > limit)
     {
         return Err(mcp_response_limit_error());
-    }
-    let mut request = Request::new(request);
-    *request.metadata_mut() = metadata;
-    if let Some(projection) = projection {
-        if let Some(remaining) = projection.remaining() {
-            request.set_timeout(remaining);
-        }
-        request.extensions_mut().insert(projection);
     }
     let mut stream = match server.invoke_stream(tool_name, request).await {
         Ok(response) => response.into_inner(),
