@@ -726,14 +726,14 @@ evolution rules, the qualified LanceDB lifecycle, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.16.8`; new releases do not create language-prefixed tags. The project
+tag `v0.16.9`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.16.8
+go get github.com/jim-technologies/invariantprotocol/go@v0.16.9
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -743,26 +743,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.8#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.9#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.8#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.9#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.8" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.9" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.8" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.9" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.16.8"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.16.9"
 ```
 
 For reproducible production builds, replace the tag with a full commit
