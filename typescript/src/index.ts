@@ -6,7 +6,14 @@ export { type Code, InvariantError } from "./errors.js";
 export * from "./gen/invariant/cdc/v1/change_pb.js";
 export * as cdcV2 from "./gen/invariant/cdc/v2/change_pb.js";
 export * from "./gen/io/cloudevents/v1/cloudevents_pb.js";
-export { CONNECT_STREAM_JSON, CONNECT_STREAM_PROTO, httpHandler, PROTO_CONTENT_TYPE, serveHttp } from "./http.js";
+export {
+  CONNECT_STREAM_JSON,
+  CONNECT_STREAM_PROTO,
+  type HttpHandlerOptions,
+  httpHandler,
+  PROTO_CONTENT_TYPE,
+  serveHttp,
+} from "./http.js";
 export type {
   ChannelOptions,
   ConnectHttpOptions,
@@ -17,6 +24,7 @@ export type {
   OutboundHTTPRequest,
   OutboundHTTPResponse,
 } from "./http_client.js";
+export type { FetchHandlerOptions } from "./http_fetch.js";
 export {
   type JsonRpcRequest,
   MCP_PROTOCOL_VERSION,

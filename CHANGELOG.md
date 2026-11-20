@@ -8,6 +8,98 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x minor releases may include deliberate API changes,
 but never silent wire-behavior regressions.
 
+## v0.17.0 — 2026-11-19
+
+### Added
+
+- TypeScript `Server.fetchHandler(options?)` serves the HTTP projection
+  (Connect routes, `POST /mcp`, discovery, and health probes) from WHATWG Fetch
+  hosts such as Next.js App Router route handlers on the Node.js runtime. The
+  returned `(request: Request) => Promise<Response>` declares exactly one
+  parameter and never rejects. `requestPathPrefix` mounts it under a literal
+  path such as `/api/rpc`, is validated when the handler is built, and answers
+  `404` outside the prefix. The Fetch and Node hosts share one HTTP core, so
+  limits, deadlines, cancellation, MCP framing, and error envelopes are
+  identical. When the core stops reading a body early, such as one over a byte
+  limit, the Fetch host stops discarding at the first stream chunk boundary
+  that reaches a 256 KiB budget. Draining the whole upload would buffer it in
+  any unread clone of the request. Next.js closes a connection left with a
+  longer remainder after its keep-alive timeout. `docs/nextjs.md` covers an
+  App Router migration that preserves typed REST routes and uses the same service
+  for OAuth-protected remote MCP, an HTTP-backed CLI or stdio MCP bridge,
+  and direct local CLI or MCP. Next.js is not a dependency.
+- Both TypeScript HTTP hosts accept a trusted `contextValues` hook:
+  `Server.httpHandler(options)`, `httpHandler(server, options)`, and
+  `Server.fetchHandler(options)`. It receives the raw host request once per
+  request, except `GET /healthz` and `GET /readyz`, before any body byte is
+  read and before `Connect-Timeout-Ms` starts. It returns a new Connect
+  `ContextValues` that handlers read as `context.values` and shared
+  interceptors as `req.contextValues`, on Connect routes and MCP `tools/call`;
+  a reused instance fails the request with `internal`. A thrown `ConnectError`
+  or `InvariantError` becomes the HTTP status envelope with its metadata as
+  response headers, so a `WWW-Authenticate` challenge also reaches MCP
+  `initialize` and `tools/list`. It renders as a handler's error would: a code
+  outside `Code` becomes `unknown`, only Connect-shaped details remain,
+  Connect's protocol headers and hop-by-hop headers are not relayed, and an
+  error a Connect client parsed from an upstream response relays none of that
+  response's headers. Any other thrown value becomes `500` `internal`. Request
+  headers remain untrusted and filtered.
+- `HttpHandlerOptions` and `FetchHandlerOptions` are exported as types.
+
+### Security
+
+- One unauthenticated request could stop a TypeScript HTTP server. The Node
+  `httpHandler` parsed the request target before its error handling, so a
+  target that Node accepts but `URL` rejects, such as `GET http://[/`, made the
+  handler's promise reject, and under `serveHttp` or the documented
+  `void handler(request, response)` host the unhandled rejection ended the
+  process. Such a request now closes its connection without a response.
+
+### Fixed
+
+- The TypeScript Node host answers a `POST /mcp` body over the unary request
+  limit with `429 resource_exhausted`; it previously sent no response, so the
+  client hung. A declared over-limit length is rejected before any byte is
+  read. Whether the connection is then reused depends on connect-node's
+  response writer: 2.2 lets Node discard the rest of the upload and keeps it,
+  while 2.3 reads up to 256 KiB more and otherwise closes it. The rest is
+  discarded as soon as the server stops reading, also when `/mcp` has already
+  answered a `Connect-Timeout-Ms` deadline mid-upload, which previously left the
+  connection blocked until Node's request timeout.
+- `POST /mcp` on a `node:http2` compatibility server no longer fails with
+  `500`: like the other routes, it now skips the HTTP/2 pseudo-headers, and a
+  stream reset aborts the handler as a client disconnect. On such a server, a
+  request body the server stops reading early, such as one over a limit, is
+  now discarded, so the client can finish sending and the stream closes; it
+  previously stayed open, with its handler promise pending, for the life of
+  the session.
+- Node `httpHandler` promises now resolve when the response closes and never
+  reject. On Connect routes they previously never settled, because
+  connect-node's response writer never does, so the re-arming timer behind a
+  `Connect-Timeout-Ms` above Node's 2,147,483,647 ms timer limit was never
+  cleared either.
+
+### Changed
+
+- On the TypeScript Node host, Connect-route and MCP `context.url` use the fixed
+  `http://localhost` origin. Connect routes previously took it from the `Host`
+  header or an absolute-form request target, and MCP from an absolute-form
+  target. Connect routes no longer read `Host` at all: an HTTP/1.0 request
+  without one, or a request with a malformed one, previously failed with `500`.
+  An HTTP/2 `:path` without an absolute path, which a non-http `:scheme` admits,
+  now resets the stream instead of answering `404`. A client disconnect aborts
+  `context.signal` with `ConnectError("client disconnected", Code.Canceled)` on
+  every route, as `/mcp` already did, instead of the reason connect-node derived
+  from the socket: an `aborted` `ConnectError` or a bare `AbortError`.
+- The TypeScript Node host no longer destroys a request body it does not read
+  to the end, such as one over a byte limit; the unread remainder is
+  discarded, as described above, so a client that continues a large upload
+  holds its socket until the upload ends or the connection closes.
+- The TypeScript Node host reads every raw header line, as a Fetch `Request`
+  does, instead of Node's collapsed `req.headers`. A request that repeats
+  `Content-Type` previously used the first value; the joined value now fails
+  the content-type check, so `/mcp` and Connect routes answer `415`.
+
 ## v0.16.9 — 2026-10-25
 
 ### Fixed

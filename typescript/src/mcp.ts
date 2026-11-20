@@ -135,6 +135,7 @@ async function mcpCallTool(
     timeoutMs: deadlineAt === undefined ? contextOptions.timeoutMs : undefined,
     requestSignal: contextOptions.requestSignal,
     requestHeader: contextOptions.requestHeader,
+    contextValues: contextOptions.contextValues,
   });
   if (deadlineAt !== undefined) {
     Object.assign(context, {

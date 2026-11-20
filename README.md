@@ -381,6 +381,26 @@ let router = invariant::projections::http::http_router(server.clone());
 axum::serve(listener, router).await?;
 ```
 
+TypeScript also serves the same routes from WHATWG Fetch hosts.
+`fetchHandler()` returns a one-parameter `(request: Request) =>
+Promise<Response>` that can be exported directly as Next.js App Router route
+handlers. `requestPathPrefix` names the literal path the host mounts it under,
+and requests outside that path receive `404`. Both TypeScript hosts share one
+HTTP core, so limits, deadlines, cancellation, MCP framing, and error envelopes
+are identical. The adoption example keeps a typed REST route, adds
+OAuth-protected MCP and Connect, and runs the same service from a CLI or
+stdio MCP. [Next.js App Router](docs/nextjs.md)
+
+```ts
+// src/app/api/rpc/[...path]/route.ts
+const rpc = server.fetchHandler({
+  requestPathPrefix: "/api/rpc",
+  contextValues: authenticate, // returns a new Connect ContextValues
+});
+
+export { rpc as GET, rpc as POST };
+```
+
 Go's `ServeProjections` and Python's `serve_projections` are conveniences for
 optional HTTP/MCP/CLI processes. Rust exposes its projection runner and
 TypeScript exposes the individual host adapters. Native gRPC keeps its own
@@ -482,6 +502,17 @@ application metadata, but Invariant still strips authorization, tenant,
 principal, role, user, protocol, and internal identity keys. Authenticate in
 the enclosing HTTP middleware; never treat a caller-chosen header as trusted
 gRPC identity.
+
+TypeScript's HTTP hosts take that role through an optional `contextValues`
+hook: `server.httpHandler({ contextValues })` or
+`server.fetchHandler({ contextValues })`. It receives the raw host request
+(`IncomingMessage` or `Request`) once per request, except the health probes,
+before any body byte is read and before `Connect-Timeout-Ms` starts. It
+verifies credentials and returns a new Connect `ContextValues`, which handlers
+read as `context.values` and shared interceptors as `req.contextValues`. A
+thrown `ConnectError` or `InvariantError` becomes the HTTP response, so an
+`unauthenticated` error carrying a `WWW-Authenticate` header produces a `401`
+challenge even for MCP `initialize`, which never reaches interceptors.
 
 HTTP/Connect has four independent 16 MiB defaults in every runtime:
 
@@ -726,14 +757,14 @@ evolution rules, the qualified LanceDB lifecycle, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.16.9`; new releases do not create language-prefixed tags. The project
+tag `v0.17.0`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.16.9
+go get github.com/jim-technologies/invariantprotocol/go@v0.17.0
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -743,26 +774,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.9#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.17.0#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.16.9#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.17.0#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.9" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.17.0" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.16.9" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.17.0" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.16.9"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.17.0"
 ```
 
 For reproducible production builds, replace the tag with a full commit

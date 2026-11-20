@@ -32,7 +32,7 @@ cancellation, limits, registration freeze, and lifecycle behavior.
 | Remote HTTP | `ConnectHTTP` | `connect_http` | `connect_http` | `connectHttp` |
 | Shared middleware | `Use` / `UseStream` | `use` with `grpc.aio.ServerInterceptor` | `use_shared_unary` / `use_shared_stream` | `use` with Connect-ES `Interceptor` |
 | In-process call | `Invoke` / `InvokeStream` | `invoke` / `invoke_stream` | `invoke` / `invoke_stream` | `invoke` / `invokeStream` |
-| HTTP host adapter | `HTTPHandler` | `asgi_app` | `http_router` | `httpHandler` |
+| HTTP host adapter | `HTTPHandler` | `asgi_app` | `http_router` | `httpHandler` (Node) / `fetchHandler` (Fetch, ecosystem) |
 | Per-method limits | `ConfigureMethod` | `configure_method` | `configure_method` | `configureMethod` |
 | Data bundle read/migrate | `data.ParseSchemaBundle` / `data.MigrateSchemaBundle` | `parse_schema_bundle` / `migrate_schema_bundle` | `parse_schema_bundle` / `migrate_schema_bundle` | `parseSchemaBundle` / `migrateSchemaBundle` |
 
@@ -53,10 +53,10 @@ streaming; Go's standard API intentionally has separate unary and stream types.
   The one-way OpenAPI importer also belongs here: every language consumes its
   generated protobuf contract through normal Buf generation rather than
   carrying a runtime-specific importer.
-- **Ecosystem** means an adapter to a language-native library. PyArrow record
-  conversion and maintained Protovalidate implementations are examples; their
-  narrower availability must be explicit but does not imply a server-runtime
-  parity gap.
+- **Ecosystem** means an adapter to a language-native library or host.
+  PyArrow record conversion, maintained Protovalidate implementations, and
+  TypeScript's WHATWG Fetch host are examples; their narrower availability
+  must be explicit but does not imply a server-runtime parity gap.
 
 The common MCP contract is the non-SSE tool-server subset of `2025-11-25`. The
 common HTTP contract is Connect on canonical full method paths, including four
@@ -76,6 +76,18 @@ Likewise, the Go and Rust projection runners bound their HTTP drain with
 `SetHTTPShutdownTimeout` / `set_http_shutdown_timeout`; Python's runner leaves
 it to uvicorn and TypeScript's `serveHttp` returns the caller-owned Node
 server, so the drain bound is a runner integration, not a Core row.
+
+TypeScript's `fetchHandler` (the `fetch_http_host` ecosystem row) serves the
+same HTTP core as `httpHandler` from WHATWG Fetch `Request`/`Response` hosts
+such as Next.js App Router route handlers, which never expose Node's
+`IncomingMessage` and `ServerResponse`. Go's `http.Handler`, Python's ASGI
+application, and Rust's Axum router are already their ecosystems'
+framework-neutral host contracts, so the row does not apply to them; the Core
+HTTP and MCP rows cite TypeScript evidence that runs against both hosts.
+Trusted host context is not a Core row yet either. TypeScript's HTTP hosts
+accept it through the `contextValues` hook, while Go and Rust carry it in the
+enclosing request context and request extensions; promoting it requires
+behavioral evidence in all four runtimes.
 
 The data compiler follows the same rule: dataset and field annotations are
 language-neutral protobuf options, one Go build tool compiles the descriptor

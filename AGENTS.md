@@ -98,6 +98,45 @@ and its typed `ServiceImpl<T>`. Shared middleware uses Connect-ES `Interceptor`;
 native gRPC uses grpc-js. Do not add parallel custom handler or interceptor
 types.
 
+`httpHandler()` (Node `IncomingMessage`/`ServerResponse`) and `fetchHandler()`
+(WHATWG `Request`/`Response`) are thin hosts over one internal HTTP core built
+only on Connect-ES public universal types and connect-node's public response
+writer. Routing, limits, deadlines, MCP framing, cancellation, and error
+envelopes live in that core; never duplicate them in a host. Both hosts take
+the optional `contextValues` hook. It runs exactly once for every in-mount
+request except `GET /healthz` and `GET /readyz`, before any body byte is read,
+before the `/mcp` Origin, method, Accept, Content-Type, and protocol-version
+checks, and before the `Connect-Timeout-Ms` deadline starts. Its failures are
+HTTP status envelopes, never JSON-RPC errors, and the renderer never throws.
+A hook's `InvariantError` goes through `ConnectError` like a handler's, so a
+code outside `Code` becomes `unknown` and only Connect-shaped details remain.
+Like Connect's own handlers, the renderer relays an application error's
+metadata as headers, minus Connect's protocol headers and hop-by-hop headers,
+and relays none from an error a Connect client parsed from an upstream
+response. The hook must return a new Connect `ContextValues` for every request:
+the core rejects a reused instance with `internal`, because sharing one leaks
+principals and Invariant's private long-deadline key across requests. Neither
+host cancels or destroys a request body it stops reading early, because the
+response must still reach the client: the Node host resumes the request as soon
+as the core stops reading, and the Fetch host stops draining after reaching a
+256 KiB budget at a stream chunk boundary, like connect-node's limited
+read-ahead, because a `request.clone()` tees the body and an
+unbounded drain would buffer the whole upload into an unread clone; Next.js
+closes a connection left with a longer remainder after its keep-alive timeout.
+The Node host closes a request target without an absolute path, which HTTP/2
+admits and which would otherwise extend `context.url`'s fixed origin, answers
+`500` when Node rejects a response header that Fetch `Headers` accept, and sends
+no body for `HEAD`. It settles on the response's `close` and never awaits
+connect-node's response writer, whose promise does not settle; the Fetch host
+keeps each in-flight `Request` referenced until cleanup, because undici links
+`request.signal` through a weak reference. Both report a client disconnect as a
+`canceled` `ConnectError`.
+
+The Fetch host is a TypeScript host integration (the `fetch_http_host`
+ecosystem row), not a Core feature. Next.js appears only as the documented
+example in `docs/nextjs.md`: never add it as a dependency, peer dependency,
+subpath export, or framework-specific option.
+
 ### Async-native Python (load-bearing)
 
 Python is async-only; there is no sync-compat layer. Generated service
@@ -404,7 +443,11 @@ HTTP request headers are untrusted. The default mapper forwards only tracing and
 correlation values; a custom `HTTPMetadataMapper` still cannot assert authorization,
 tenant, principal, role, user, protocol, or `invariant-internal-*` metadata.
 Authenticate in enclosing HTTP middleware. Do not turn a caller-controlled
-header into trusted identity metadata.
+header into trusted identity metadata. TypeScript's `contextValues` hook is that
+enclosing middleware: it verifies credentials from the raw host request and
+returns the `ContextValues` that handlers read as `context.values`. Never feed
+it from `HttpMetadataMapper` output, and never copy its values into headers or
+metadata.
 
 ### HTTP error format
 Connect-style envelope only: `{"code": "invalid_argument", "message": "...", "details": [...]}`. Lowercase code, no wrapper, no toggle. The `connect_http` client parses the same canonical format.
@@ -648,3 +691,6 @@ as stdio; do not add a second tool registry.
   projections, storage policies, ingestion, and direct Iceberg publication
 - Relational keys, indexes, normalization, and SQL dialects beyond PostgreSQL,
   SQLite, and ClickHouse
+- Framework packages or subpath exports for the TypeScript Fetch host, and
+  Edge, Deno, Bun, or Workers qualification; it targets the Node.js runtime
+- Per-caller tool visibility in `tools/list` and the tool catalog

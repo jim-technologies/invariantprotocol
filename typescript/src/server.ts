@@ -21,6 +21,7 @@ import {
 import {
   Code as ConnectCode,
   ConnectError,
+  type ContextValues,
   type HandlerContext as ConnectHandlerContext,
   createServiceImplSpec,
   type Interceptor,
@@ -37,7 +38,7 @@ import { createDeadlineHandlerContext } from "./deadline.js";
 import { ParsedDescriptor, type ServiceInfo } from "./descriptor.js";
 import { failedPrecondition, InvariantError, normalizeHandlerError, notFound } from "./errors.js";
 import { createGrpcServer, grpcProxyHandler } from "./grpc.js";
-import { httpHandler as buildHttpHandler, serveHttp as serveHttpProjection } from "./http.js";
+import { type HttpHandlerOptions, httpHandler as buildHttpHandler, serveHttp as serveHttpProjection } from "./http.js";
 import {
   type ConnectHttpOptions,
   clientBindingForMethod,
@@ -45,6 +46,7 @@ import {
   httpProxyHandler,
   httpRulesByMethodPath,
 } from "./http_client.js";
+import { type FetchHandlerOptions, fetchHandler as buildFetchHandler } from "./http_fetch.js";
 import { type JsonSchema, SchemaGenerator } from "./schema.js";
 
 export type HandlerContext = ConnectHandlerContext;
@@ -56,6 +58,7 @@ export type ProjectionContextOptions = {
   timeoutMs?: number;
   requestSignal?: AbortSignal;
   requestHeader?: HeadersInit;
+  contextValues?: ContextValues;
 };
 export type HttpMetadataMapper = (requestHeaders: Readonly<Headers>) => HeadersInit;
 export type UnaryHandler = (request: MessageShape<DescMessage>, context: HandlerContext) => Promise<unknown> | unknown;
@@ -123,7 +126,7 @@ export type ToolCatalogEntry = Readonly<{
 }>;
 
 export const SERVER_NAME = "invariant-protocol";
-export const SERVER_VERSION = "0.16.9";
+export const SERVER_VERSION = "0.17.0";
 const DEFAULT_HTTP_MESSAGE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_HTTP_METADATA_KEYS = ["traceparent", "tracestate", "baggage", "x-request-id"] as const;
 
@@ -495,9 +498,18 @@ export class Server {
     );
   }
 
-  httpHandler(): ReturnType<typeof buildHttpHandler> {
+  httpHandler(options?: HttpHandlerOptions): ReturnType<typeof buildHttpHandler> {
     this.freezeConfiguration();
-    return buildHttpHandler(this);
+    return buildHttpHandler(this, options);
+  }
+
+  /**
+   * Build a WHATWG Fetch handler, such as a Next.js App Router route export,
+   * serving the same routes as {@link httpHandler}. It never rejects.
+   */
+  fetchHandler(options?: FetchHandlerOptions): (request: Request) => Promise<Response> {
+    this.freezeConfiguration();
+    return buildFetchHandler(this, options);
   }
 
   serveHttp(port: number, host?: string) {
@@ -752,6 +764,7 @@ export class Server {
       timeoutMs: options.timeoutMs,
       requestSignal: options.requestSignal,
       requestHeader: options.requestHeader,
+      contextValues: options.contextValues,
     });
   }
 

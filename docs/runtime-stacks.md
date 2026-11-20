@@ -39,7 +39,7 @@ the application's business-modeling strategy.
 | Go | grpc-go + protobuf-go | `net/http` | Generated `Register<Service>Server` and `grpc.ServiceRegistrar` are the public model. Ordinary `grpc.ServerOption` and interceptor types remain native. |
 | Python | grpcio AsyncIO + Google Protobuf | ASGI + Uvicorn, HTTPX client | Generated `add_<Service>Servicer_to_server` is the public model. The runtime is async-only; shared middleware uses `grpc.aio.ServerInterceptor`, and callers configure the returned aio server normally. |
 | Rust | Tonic + Prost + Tokio/Tower | Axum, Reqwest client | Generated Tonic traits, clients, and servers are canonical. The code generator adds only the registration bridge needed to retain projection metadata; callers host extracted routes on Tonic. |
-| TypeScript | grpc-js + Protobuf-ES + Connect-ES | Connect-Node + Node HTTP | A generated `DescService`, Connect-ES `ServiceImpl<T>`, and standard Connect `Interceptor` form the typed model; grpc-js remains the native gRPC transport. |
+| TypeScript | grpc-js + Protobuf-ES + Connect-ES | Connect-Node + Node HTTP; WHATWG Fetch `Request`/`Response` | A generated `DescService`, Connect-ES `ServiceImpl<T>`, and standard Connect `Interceptor` form the typed model; grpc-js remains the native gRPC transport. |
 
 Toolchains track supported stable releases. Production runtimes use an LTS
 line when the ecosystem distinguishes Current from LTS; therefore Node uses
@@ -58,7 +58,13 @@ interface, and they must not use a hidden in-memory gRPC transport.
 
 - TypeScript uses Connect-ES because its generated Protobuf-ES service
   descriptors and handler context are the normal Node service model and can be
-  shared with the grpc-js adapter.
+  shared with the grpc-js adapter. Its Node and WHATWG Fetch HTTP hosts share
+  one core built only on Connect-ES's public universal request and response
+  types and connect-node's public response writer. Connect-ES ships no App
+  Router host. Its public Fetch converter keeps the request body locked once
+  reading stops early and passes host abort reasons through unchanged, and
+  connect-node's request converter requires a `Host` header and destroys a
+  body it stops reading, so each host keeps a small converter of its own.
 - connect-go is stable, but its generated handler interface is separate from a
   generated grpc-go server interface. Invariant keeps its narrow Connect wire
   adapter so the application implements only the grpc-go service.

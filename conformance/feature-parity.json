@@ -119,7 +119,7 @@
         "go": "HTTPHandler",
         "python": "asgi_app",
         "rust": "http_router",
-        "typescript": "httpHandler"
+        "typescript": "httpHandler / fetchHandler"
       },
       "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
       "tests": {
@@ -141,7 +141,11 @@
           "rust/examples/connect_interop_server.rs",
           "typescript/tests/connect_interop.ts"
         ],
-        "typescript": ["typescript/tests/runtime.test.ts", "typescript/tests/connect_interop.ts"]
+        "typescript": [
+          "typescript/tests/runtime.test.ts",
+          "typescript/tests/connect_interop.ts",
+          "typescript/tests/http_hosts.test.ts"
+        ]
       }
     },
     {
@@ -152,7 +156,7 @@
         "go": "MCP / HTTPHandler",
         "python": "serve_projections(mcp=True) / asgi_app",
         "rust": "serve_mcp_stdio / http_router",
-        "typescript": "serveMcpStdio / httpHandler"
+        "typescript": "serveMcpStdio / httpHandler / fetchHandler"
       },
       "support": {"go": "supported", "python": "supported", "rust": "supported", "typescript": "supported"},
       "tests": {
@@ -164,7 +168,7 @@
           "rust/tests/production.rs",
           "rust/tests/streaming.rs"
         ],
-        "typescript": ["typescript/tests/semantics.test.ts"]
+        "typescript": ["typescript/tests/semantics.test.ts", "typescript/tests/http_hosts.test.ts"]
       }
     },
     {
@@ -322,6 +326,19 @@
         "python": ["python/tests/test_validation.py"],
         "rust": [],
         "typescript": ["typescript/tests/semantics.test.ts"]
+      }
+    },
+    {
+      "id": "fetch_http_host",
+      "kind": "ecosystem",
+      "description": "Serve the shared HTTP core (Connect routes, POST /mcp, discovery, and probes) from a WHATWG Fetch Request/Response host such as a Next.js App Router route handler, with a validated literal mount prefix and the same contextValues hook, limits, deadlines, cancellation, and error envelopes as the Node host.",
+      "rationale": "WHATWG Fetch Request/Response is the host contract of JavaScript server frameworks such as Next.js route handlers, which never expose Node's IncomingMessage/ServerResponse. Go's http.Handler, Python's ASGI application, and Rust's Axum router are already their ecosystems' framework-neutral host contracts, so this is a TypeScript host integration over the Core HTTP and MCP projection, not a portable runtime capability.",
+      "support": {"go": "not_applicable", "python": "not_applicable", "rust": "not_applicable", "typescript": "supported"},
+      "tests": {
+        "go": [],
+        "python": [],
+        "rust": [],
+        "typescript": ["typescript/tests/http_hosts.test.ts"]
       }
     },
     {
