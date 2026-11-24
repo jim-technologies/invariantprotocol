@@ -665,12 +665,12 @@ async def test_connect_http_maps_remote_error():
         srv = Server.from_descriptor(DESCRIPTOR_PATH)
         srv.connect_http(f"http://localhost:{port}", service_config=_retry_service_config())
         try:
-            with pytest.raises(InvariantError, match="bad name") as exc:
+            with pytest.raises(InvariantError, match="HTTP 400") as exc:
                 await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"bad"}'])
             assert exc.value.code == grpc.StatusCode.INVALID_ARGUMENT
             assert exc.value.to_payload()["code"] == "invalid_argument"
 
-            with pytest.raises(InvariantError, match="request canceled") as canceled:
+            with pytest.raises(InvariantError, match="HTTP 499") as canceled:
                 await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"cancel"}'])
             assert canceled.value.code == grpc.StatusCode.CANCELLED
             assert canceled.value.to_payload()["code"] == "canceled"
@@ -690,15 +690,16 @@ async def test_connect_http_uses_connect_http_status_fallbacks_for_malformed_err
         401: grpc.StatusCode.UNAUTHENTICATED,
         403: grpc.StatusCode.PERMISSION_DENIED,
         404: grpc.StatusCode.UNIMPLEMENTED,
-        429: grpc.StatusCode.UNAVAILABLE,
+        429: grpc.StatusCode.RESOURCE_EXHAUSTED,
         502: grpc.StatusCode.UNAVAILABLE,
         503: grpc.StatusCode.UNAVAILABLE,
         504: grpc.StatusCode.UNAVAILABLE,
         418: grpc.StatusCode.UNKNOWN,
         409: grpc.StatusCode.UNKNOWN,
         499: grpc.StatusCode.UNKNOWN,
-        500: grpc.StatusCode.UNKNOWN,
-        501: grpc.StatusCode.UNKNOWN,
+        500: grpc.StatusCode.UNAVAILABLE,
+        501: grpc.StatusCode.UNAVAILABLE,
+        **dict.fromkeys(range(520, 525), grpc.StatusCode.UNAVAILABLE),
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -1024,7 +1025,7 @@ async def test_connect_http_dynamic_header_provider_error():
 
     srv.connect_http("http://localhost:1", auth=provider)
     try:
-        with pytest.raises(InvariantError, match="missing signing key") as exc:
+        with pytest.raises(InvariantError, match="HTTP_AUTH_BUILD_FAILED") as exc:
             await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
         assert exc.value.code == grpc.StatusCode.UNAUTHENTICATED
     finally:
@@ -1343,7 +1344,7 @@ async def test_connect_http_retry_policy_caps_max_attempts_at_five():
         httpd.shutdown()
 
 
-@pytest.mark.parametrize(("codes", "status"), [([14], 503), (["UNKNOWN"], 520)])
+@pytest.mark.parametrize(("codes", "status"), [([14], 503), (["UNAVAILABLE"], 520)])
 async def test_connect_http_retry_policy_accepts_enum_numbers_and_unknown(codes, status):
     class Handler(BaseHTTPRequestHandler):
         attempts = 0
@@ -1662,11 +1663,12 @@ async def test_connect_http_error_details_are_standard_google_rpc_types():
             detail_types = {d["@type"] for d in payload["details"]}
             assert "type.googleapis.com/google.rpc.RetryInfo" in detail_types
             assert "type.googleapis.com/google.rpc.ErrorInfo" in detail_types
-            assert "type.googleapis.com/google.rpc.QuotaFailure" in detail_types
             error_info = next(d for d in payload["details"] if d["@type"].endswith("google.rpc.ErrorInfo"))
             assert error_info["reason"] == "HTTP_STATUS_429"
             assert error_info["metadata"]["http_status"] == "429"
-            assert "rate limit exceeded" in error_info["metadata"]["body_snippet"]
+            assert error_info["metadata"]["retry_after"] == "2"
+            assert set(error_info["metadata"]) == {"host", "http_status", "retry_after", "error_class"}
+            assert "rate limit exceeded" not in json.dumps(payload)
         finally:
             await srv.stop()
     finally:
@@ -1769,16 +1771,16 @@ async def test_connect_http_observer_captures_error_responses():
                 await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
             assert seen["status"] == 400
             assert seen["success"] is False
-            assert json.loads(seen["body"]) == {"message": "bad upstream"}
+            assert seen["body"] == b""
             assert seen["duration_ms"] >= 0
-            assert seen["trace"] == "abc"
+            assert seen["trace"] is None
         finally:
             await srv.stop()
     finally:
         httpd.shutdown()
 
 
-async def test_connect_http_preserves_unparseable_details_in_payloads_but_not_grpc_trailer():
+async def test_connect_http_only_forwards_allowlisted_retry_details():
     import httpx
     from google.rpc import status_pb2
 
@@ -1823,7 +1825,8 @@ async def test_connect_http_preserves_unparseable_details_in_payloads_but_not_gr
 
         with pytest.raises(InvariantError) as exc:
             await srv._cli(["greet.v1.GreetService", "Greet", "-r", '{"name":"World"}'])
-        assert exc.value.to_payload()["details"][:3] == details
+        assert details[1] not in exc.value.to_payload()["details"]
+        assert details[0] in exc.value.to_payload()["details"]
 
         mcp = await mcp_dispatch(
             srv,
@@ -1834,7 +1837,8 @@ async def test_connect_http_preserves_unparseable_details_in_payloads_but_not_gr
                 "params": {"name": "greet.v1.GreetService.Greet", "arguments": {"name": "World"}},
             },
         )
-        assert mcp["result"]["error"]["details"][:3] == details
+        assert details[1] not in mcp["result"]["error"]["details"]
+        assert details[0] in mcp["result"]["error"]["details"]
 
         http_port = await srv._start_http(port=0)
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{http_port}") as client:
@@ -1918,7 +1922,7 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
             assert resp.data == payload
             assert resp.content_type == "text/csv"
             assert seen[-1].success is True
-            assert seen[-1].headers["x-archive-id"] == "raw-1"
+            assert seen[-1].headers == {"content-type": "text/csv"}
             assert seen[-1].request.url == f"http://localhost:{port}/raw/World"
             assert seen[-1].url == f"http://localhost:{port}/download/world.csv"
 
@@ -1926,7 +1930,7 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
                 await srv.invoke("greet.v1.GreetService.RawBody", greet_pb2.GreetRequest(name="Huge"))
             assert exc.value.code == grpc.StatusCode.RESOURCE_EXHAUSTED
             assert seen[-1].success is False
-            assert len(seen[-1].body) == 24
+            assert not seen[-1].body
         finally:
             await srv.stop()
     finally:
@@ -1975,6 +1979,7 @@ async def test_connect_http_redirect_policy_controls_cross_origin_requests(httpb
         origin,
         options=ChannelOptions(
             follow_redirects=follow_redirects,
+            allow_cross_origin_redirects=True,
             # The admitted send path walks redirects itself; it must honour the same policy.
             before_http_attempt=(lambda: None) if admitted else None,
         ),
@@ -2160,9 +2165,487 @@ async def test_connect_http_google_rpc_details_propagate_through_grpc_projection
             detail_types = {detail.type_url for detail in status.details}
             assert "type.googleapis.com/google.rpc.RetryInfo" in detail_types
             assert "type.googleapis.com/google.rpc.ErrorInfo" in detail_types
-            assert "type.googleapis.com/google.rpc.QuotaFailure" in detail_types
         finally:
             await srv._stop_grpc()
     finally:
         await srv.stop()
         httpd.shutdown()
+
+
+@pytest.mark.parametrize("failure", ["status", "exception", "invalid_url", "pool"])
+async def test_http_transport_redacts_credentials_in_payload_observer_and_logs(caplog, failure):
+    import logging
+
+    import httpx
+
+    markers = ("password_secret", "path_secret", "query_secret", "body_secret", "header_secret")
+    target = f"https://user:{markers[0]}@provider.test/{markers[1]}"
+    events = []
+
+    def respond(request):
+        assert markers[2] in str(request.url)
+        logging.getLogger("hpack.hpack").debug("encoding :path %s", request.url)
+        if failure == "invalid_url":
+            raise httpx.InvalidURL(f"invalid URL {request.url}")
+        if failure == "pool":
+            raise httpx.PoolTimeout(f"no connection for {request.url}", request=request)
+        if failure == "exception":
+            raise httpx.LocalProtocolError(f"{request.url} {markers[3]}", request=request)
+        return httpx.Response(503, content=markers[3].encode(), headers={"Retry-After": markers[4]})
+
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    server.connect_http(
+        target,
+        auth=HTTPAuth(query_provider=lambda _: {"api_key": markers[2]}),
+        observer=events.append,
+    )
+    connection = server._http_connections[0]
+    connection._client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        with caplog.at_level(logging.DEBUG), pytest.raises(InvariantError) as caught:
+            await server.invoke("greet.v1.GreetService.Greet", greet_pb2.GreetRequest(name="test"))
+        serialized = json.dumps(caught.value.to_payload())
+        serialized += str(caught.value.to_status_proto()) + caplog.text + repr(events)
+        assert all(marker not in serialized for marker in markers)
+        detail = caught.value.details[-1]
+        assert detail["metadata"]["host"] == "provider.test"
+        if failure == "status":
+            assert caught.value.code == grpc.StatusCode.UNAVAILABLE
+            assert detail["metadata"]["http_status"] == "503"
+            assert "retry_after" not in detail["metadata"]
+            assert events
+            assert not events[0].body
+            assert not events[0].headers
+        elif failure == "pool":
+            assert caught.value.code == grpc.StatusCode.DEADLINE_EXCEEDED
+            assert detail["reason"] == "LOCAL_HTTP_FAILURE"
+            assert detail["metadata"]["error_class"] == "PoolTimeout"
+        else:
+            expected_code = grpc.StatusCode.INTERNAL if failure == "invalid_url" else grpc.StatusCode.UNAVAILABLE
+            assert caught.value.code == expected_code
+            assert detail["reason"] == "LOCAL_HTTP_FAILURE"
+            expected = "InvalidURL" if failure == "invalid_url" else "LocalProtocolError"
+            assert detail["metadata"]["error_class"] == expected
+    finally:
+        await server.stop()
+
+
+async def test_call_deadline_shorter_than_retry_after_sends_once(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from invariant import http_client
+
+    calls = 0
+    sleeping = asyncio.Event()
+
+    def respond(request):
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503, headers={"Retry-After": "1"})
+
+    async def sleep(delay):
+        assert delay == 1
+        sleeping.set()
+        await asyncio.sleep(delay)
+
+    monkeypatch.setattr(http_client, "_retry_sleep", sleep)
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    server.connect_http("https://provider.test", service_config=_retry_service_config())
+    server._http_connections[0]._client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        async with asyncio.timeout(0.2):
+            task = asyncio.create_task(
+                server.invoke("greet.v1.GreetService.Greet", greet_pb2.GreetRequest(name="test"))
+            )
+            await sleeping.wait()
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(task, timeout=0.01)
+        assert calls == 1
+    finally:
+        await server.stop()
+
+
+async def test_transport_does_not_wait_for_pushback_beyond_call_context_deadline(monkeypatch):
+    from types import SimpleNamespace
+
+    import httpx
+
+    from invariant import http_client
+
+    def respond(request):
+        return httpx.Response(503, headers={"Retry-After": "1"})
+
+    async def unexpected_sleep(_delay):
+        pytest.fail("pushback exceeds the call deadline")
+
+    monkeypatch.setattr(http_client, "_retry_sleep", unexpected_sleep)
+    server = Server.from_descriptor(DESCRIPTOR_PATH)
+    server.connect_http("https://provider.test", service_config=_retry_service_config())
+    server._http_connections[0]._client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    try:
+        with pytest.raises(InvariantError) as caught:
+            await server.invoke(
+                "greet.v1.GreetService.Greet",
+                greet_pb2.GreetRequest(name="test"),
+                SimpleNamespace(time_remaining=lambda: 0.2),
+            )
+        assert caught.value.code == grpc.StatusCode.UNAVAILABLE
+        assert caught.value.details[-1]["metadata"]["retry_after"] == "1"
+    finally:
+        await server.stop()
+
+
+async def test_refused_post_redirect_raises_and_only_sends_once():
+    import httpx
+
+    sends = []
+
+    def response(request):
+        sends.append(request.method)
+        return httpx.Response(307, headers={"Location": "https://other.test/hidden?token=secret"})
+
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.connect_http("https://provider.test", options=ChannelOptions(follow_redirects=True))
+    srv._http_connections[0]._client = httpx.AsyncClient(transport=httpx.MockTransport(response))
+    try:
+        with pytest.raises(InvariantError, match="HTTP 307") as error:
+            await srv._cli(["greet.v1.GreetService", "GreetGroup", "-r", '{"people":[]}'])
+        assert error.value.details[-1]["metadata"]["host"] == "provider.test"
+        assert sends == ["POST"]
+    finally:
+        await srv.stop()
+
+
+async def test_outage_uses_redirected_host():
+    import httpx
+
+    def response(request):
+        if request.url.host == "provider.test":
+            return httpx.Response(302, headers={"Location": "https://other.test"})
+        return httpx.Response(520)
+
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.connect_http(
+        "https://provider.test", options=ChannelOptions(follow_redirects=True, allow_cross_origin_redirects=True)
+    )
+    srv._http_connections[0]._client = httpx.AsyncClient(transport=httpx.MockTransport(response))
+    try:
+        with pytest.raises(InvariantError, match="HTTP 520") as error:
+            await srv.invoke("greet.v1.GreetService.Greet", greet_pb2.GreetRequest(name="test"))
+        assert error.value.details[-1]["metadata"]["host"] == "other.test"
+    finally:
+        await srv.stop()
+
+
+async def test_sensitive_http_data_absent_from_observation_chains_and_otel(caplog):
+    import logging
+
+    import httpx
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    markers = ["secret-user", "secret-path", "secret-query", "secret-header", "secret-cookie"]
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    observed = []
+    errors = []
+    outcomes = iter(("success", "exception", "auth"))
+
+    def auth(request):
+        state = next(outcomes)
+        if state == "auth":
+            raise ValueError(f"failed: {request!r} {request.url} {markers[3]}")
+        return {"X-Private": markers[3], "X-State": state}
+
+    def response(request):
+        if request.headers["X-State"] == "exception":
+            raise httpx.ReadError(f"failed: {request.url} {markers[-1]}", request=request)
+        return httpx.Response(
+            200,
+            json={"message": "ok"},
+            headers={
+                "Set-Cookie": f"sid={markers[-1]}",
+                "X-Private": markers[3],
+                "Record-Total": "042",
+                "X-OddsAPI-Seq": "123",
+            },
+        )
+
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.connect_http(
+        f"https://{markers[0]}@provider.test/{markers[1]}",
+        auth=HTTPAuth(header_provider=auth, query_provider=lambda _: {"key": markers[2]}),
+        observer=observed.append,
+    )
+    instrumentor = HTTPXClientInstrumentor()
+    instrumentor.instrument(tracer_provider=provider)
+    srv._http_connections[0]._client = httpx.AsyncClient(transport=httpx.MockTransport(response))
+    try:
+        with caplog.at_level(logging.DEBUG), provider.get_tracer(__name__).start_as_current_span("outer"):
+            request = greet_pb2.GreetRequest(name="test")
+            await srv.invoke("greet.v1.GreetService.Greet", request)
+            for _ in range(2):
+                with pytest.raises(InvariantError) as caught:
+                    await srv.invoke("greet.v1.GreetService.Greet", request)
+                errors.append(caught.value)
+                assert caught.value.__cause__ is None
+                assert caught.value.__context__ is None
+                logging.getLogger(__name__).info("sanitized", extra={"error_repr": repr(caught.value)})
+        assert observed[0].headers == {"content-type": "application/json", "record-total": "42", "x-oddsapi-seq": "123"}
+        combined = repr(observed) + repr(vars(observed[0])) + repr(vars(observed[0].request))
+        combined += repr([error.to_payload() for error in errors])
+        combined += repr([vars(record) for record in caplog.records])
+        spans = exporter.get_finished_spans()
+        assert [span.name for span in spans] == ["outer"]
+        combined += repr([dict(span.attributes or {}) for span in spans])
+        assert all(marker not in combined for marker in markers)
+    finally:
+        instrumentor.uninstrument()
+        await srv.stop()
+        provider.shutdown()
+
+
+@pytest.mark.parametrize("admitted", [False, True])
+@pytest.mark.parametrize("allow_cross_origin", [False, True])
+async def test_cross_origin_redirect_credentials_never_reach_destination(admitted, allow_cross_origin):
+    import httpx
+
+    sent = []
+    marker = "synthetic-marker"
+
+    def send(request):
+        sent.append(request)
+        if request.url.host == "provider.test":
+            return httpx.Response(302, headers={"Location": f"https://{marker}@other.test/finish?key={marker}"})
+        return httpx.Response(200, json={"message": "done"})
+
+    async def source_hook(request):
+        request.headers["X-Hook"] = marker
+
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.connect_http(
+        "https://provider.test",
+        auth=HTTPAuth(
+            header_provider=lambda _: {"Authorization": marker, "X-Api-Key": marker, "X-Custom": marker},
+            query_provider=lambda _: {"key": marker},
+        ),
+        options=ChannelOptions(
+            follow_redirects=True,
+            allow_cross_origin_redirects=allow_cross_origin,
+            before_http_attempt=(lambda: None) if admitted else None,
+        ),
+    )
+    srv._http_connections[0]._client = httpx.AsyncClient(
+        headers={"X-Default": marker},
+        auth=(marker, marker),
+        cookies={"initial": marker},
+        event_hooks={"request": [source_hook]},
+        transport=httpx.MockTransport(send),
+    )
+    try:
+        request = greet_pb2.GreetRequest(name="test")
+        if not allow_cross_origin:
+            with pytest.raises(InvariantError, match="cross-origin HTTP redirect refused"):
+                await srv.invoke("greet.v1.GreetService.Greet", request)
+            assert len(sent) == 1
+        else:
+            assert (await srv.invoke("greet.v1.GreetService.Greet", request)).message == "done"
+            assert len(sent) == 2
+            assert str(sent[1].url) == "https://other.test/finish"
+            assert marker not in repr(dict(sent[1].headers))
+            for name in ("authorization", "cookie", "x-api-key", "x-custom", "x-default", "x-hook"):
+                assert name not in sent[1].headers
+        assert sent[0].headers["X-Api-Key"] == marker
+        assert sent[0].headers["Cookie"] == f"initial={marker}"
+        assert sent[0].url.params["key"] == marker
+    finally:
+        await srv.stop()
+
+
+async def test_httpx_hook_exception_and_ambient_context_are_removed_from_diagnostics(caplog):
+    import logging
+
+    import httpx
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    secrets = ("hook-query", "hook-header", "hook-path", "hook-cookie", "hook-user", "caller-secret")
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer(__name__)
+
+    async def hook(request):
+        raise RuntimeError(f"{request.url} {dict(request.headers)}")
+
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.connect_http(
+        f"https://{secrets[4]}@provider.test/{secrets[2]}",
+        auth=HTTPAuth(query_provider=lambda _: {"key": secrets[0]}, header_provider=lambda _: {"X-Key": secrets[1]}),
+    )
+    srv._http_connections[0]._client = httpx.AsyncClient(
+        cookies={"sid": secrets[3]},
+        event_hooks={"request": [hook]},
+        transport=httpx.MockTransport(lambda _: httpx.Response(200)),
+    )
+    try:
+        try:
+            raise ValueError(secrets[5])
+        except ValueError:
+            try:
+                with tracer.start_as_current_span("caller"):
+                    await srv.invoke("greet.v1.GreetService.Greet", greet_pb2.GreetRequest(name="test"))
+            except InvariantError as error:
+                assert error.code == grpc.StatusCode.INTERNAL
+                assert error.__cause__ is None
+                assert error.__context__ is None
+                logging.getLogger(__name__).exception("safe transport failure")
+            else:
+                pytest.fail("hook did not fail")
+        (span,) = exporter.get_finished_spans()
+        assert span.events[0].name == "exception"
+        output = caplog.text + repr(dict(span.events[0].attributes or {}))
+        assert all(marker not in output for marker in secrets)
+    finally:
+        await srv.stop()
+        provider.shutdown()
+
+
+def test_invalid_origin_port_reports_no_origin_text():
+    with pytest.raises(ValueError, match="valid host and port") as error:
+        HTTPConnection(base_url="https://provider.test:synthetic-secret/path")
+    assert "synthetic-secret" not in str(error.value)
+    assert error.value.__context__ is None
+
+
+@pytest.mark.parametrize(("delay", "remaining", "expected"), [(0.5, 3.0, [0.5]), (0.5, 0.2, []), (30, 40, [])])
+async def test_connect_retry_info_controls_retry_sleep_and_send_count(monkeypatch, delay, remaining, expected):
+    from types import SimpleNamespace
+
+    import httpx
+
+    from invariant import http_client
+
+    sleeps = []
+    sends = []
+
+    def send(request):
+        sends.append(request)
+        if len(sends) > 1:
+            return httpx.Response(200, json={"message": "done"})
+        return httpx.Response(
+            503,
+            json={
+                "code": "unavailable",
+                "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": f"{delay}s"}],
+            },
+        )
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(http_client, "_retry_sleep", sleep)
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.connect_http("https://provider.test", service_config=_retry_service_config())
+    srv._http_connections[0]._client = httpx.AsyncClient(transport=httpx.MockTransport(send))
+    context = SimpleNamespace(time_remaining=lambda: remaining)
+    request = greet_pb2.GreetRequest(name="test")
+    try:
+        if expected:
+            assert (await srv.invoke("greet.v1.GreetService.Greet", request, context)).message == "done"
+        else:
+            with pytest.raises(InvariantError, match="HTTP 503"):
+                await srv.invoke("greet.v1.GreetService.Greet", request, context)
+        assert sleeps == expected
+        assert len(sends) == 1 + len(expected)
+    finally:
+        await srv.stop()
+
+
+@pytest.mark.parametrize(
+    ("status", "code"), [(400, grpc.StatusCode.INVALID_ARGUMENT), (403, grpc.StatusCode.RESOURCE_EXHAUSTED)]
+)
+async def test_connect_envelope_survives_content_type_mismatch(status, code):
+    import httpx
+
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.connect_http("https://provider.test")
+    envelope = {"code": code.name.lower(), "message": "synthetic-secret"}
+    srv._http_connections[0]._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(status, content=json.dumps(envelope), headers={"Content-Type": "text/plain"})
+        )
+    )
+    try:
+        with pytest.raises(InvariantError) as error:
+            await srv.invoke("greet.v1.GreetService.Greet", greet_pb2.GreetRequest(name="test"))
+        assert error.value.code == code
+        kinds = [d["@type"] for d in error.value.details]
+        assert ("type.googleapis.com/google.rpc.QuotaFailure" in kinds) == (status == 403)
+        assert "synthetic-secret" not in json.dumps(error.value.to_payload())
+    finally:
+        await srv.stop()
+
+
+@pytest.mark.parametrize("admitted", [False, True])
+async def test_signed_cross_origin_download_and_destination_cookies_are_isolated(monkeypatch, admitted):
+    import httpx
+
+    from invariant import http_client
+
+    requests = []
+    signed_query = b"signature=cdn%2Fsig%2Bvalue&part=1"
+
+    async def sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(http_client, "_retry_sleep", sleep)
+
+    def send(request):
+        requests.append(request)
+        if request.url.host == "origin.example.test":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": "https://cdn.example.test/download?" + signed_query.decode() + "&signature=source-key"
+                },
+            )
+        assert request.url.query == signed_query
+        assert "cookie" not in request.headers
+        if len(requests) == 2:
+            return httpx.Response(503, headers={"Set-Cookie": "foreign=cdn-cookie; Domain=.example.test; Path=/"})
+        return httpx.Response(200, json={"message": "downloaded"})
+
+    srv = Server.from_descriptor(DESCRIPTOR_PATH)
+    srv.connect_http(
+        "https://origin.example.test",
+        auth=HTTPAuth(query_provider=lambda _: {"signature": "source-key"}),
+        service_config=_retry_service_config(),
+        options=ChannelOptions(
+            follow_redirects=True,
+            allow_cross_origin_redirects=True,
+            before_http_attempt=(lambda: None) if admitted else None,
+        ),
+    )
+    srv._http_connections[0]._client = httpx.AsyncClient(
+        cookies={"local": "origin-cookie"}, transport=httpx.MockTransport(send)
+    )
+    try:
+        result = await srv.invoke("greet.v1.GreetService.Greet", greet_pb2.GreetRequest(name="test"))
+        assert result.message == "downloaded"
+        assert [request.url.host for request in requests] == [
+            "origin.example.test",
+            "cdn.example.test",
+            "origin.example.test",
+            "cdn.example.test",
+        ]
+        assert requests[2].headers["Cookie"] == "local=origin-cookie"
+        assert requests[2].url.params["signature"] == "source-key"
+    finally:
+        await srv.stop()

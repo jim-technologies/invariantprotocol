@@ -6,21 +6,26 @@ import asyncio
 import base64
 import binascii
 import contextlib
+import contextvars
 import json
+import logging
 import math
 import os
 import random
 import time
 import urllib.parse
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
-from email.utils import parsedate_to_datetime
-from typing import Any, cast
+from datetime import UTC
+from email.utils import format_datetime, parsedate_to_datetime
+from typing import Any, Never, cast
 
 import grpc
 import httpx
 from google.api import annotations_pb2
-from google.protobuf import any_pb2, descriptor_pool, duration_pb2, json_format, message_factory
+from google.protobuf import descriptor_pool, duration_pb2, json_format, message_factory
+from google.protobuf.message import DecodeError
 from google.rpc import error_details_pb2
 
 from invariant.errors import InvariantError, invalid_argument
@@ -39,10 +44,40 @@ _DEFAULT_USER_AGENT = f"invariant-protocol/{package_version()}"
 # `content_type`, with no JSON<->proto mapping. Lets callers model the typed
 # parts of an API and pass arbitrary/irregular payloads through verbatim.
 _HTTPBODY_TYPE = "google.api.HttpBody"
-_ERROR_BODY_SNIPPET_BYTES = 2048
 _MAX_RETRY_ATTEMPTS = 5
 _retry_jitter = random.uniform
 _retry_sleep = asyncio.sleep
+
+# HTTPX logs full URLs and httpcore can trace raw headers. Silence those
+# logs only inside this transport's request context, including redirects.
+_private_request = contextvars.ContextVar("invariant_private_http_request", default=False)
+
+
+def _allow_httpx_log(_record: logging.LogRecord) -> bool:
+    return not _private_request.get()
+
+
+for _name in (
+    "httpx",
+    "httpcore.connection",
+    "httpcore.http11",
+    "httpcore.http2",
+    "httpcore.proxy",
+    "httpcore.socks",
+    "hpack.hpack",
+    "hpack.table",
+):
+    logging.getLogger(_name).addFilter(_allow_httpx_log)
+
+
+_suppress_http: Callable[[], contextlib.AbstractContextManager[None]]
+try:
+    from opentelemetry.instrumentation.utils import suppress_http_instrumentation
+except ImportError:
+    _suppress_http = contextlib.nullcontext
+else:
+    _suppress_http = suppress_http_instrumentation
+
 
 _GRPC_CODES_BY_NUMBER = {
     0: grpc.StatusCode.OK,
@@ -118,7 +153,7 @@ class HTTPConnection:
         options: ChannelOptions | None = None,
         observer: HTTPResponseObserver | None = None,
     ) -> None:
-        self.base_url = _validated_base_url(base_url)
+        self.base_url, self.host = _validated_base_url(base_url)
         if auth is None:
             self.auth = HTTPAuth()
         elif isinstance(auth, HTTPAuth):
@@ -300,6 +335,10 @@ class HTTPClientBinding:
         return json.dumps(value).encode(), self.body
 
 
+class _AdmittedAttemptTimeout(httpx.TimeoutException):
+    """A local attempt budget elapsed, with unknown connection progress."""
+
+
 class HTTPDynamicHandler:
     """Async callable tool handler that proxies to a remote HTTP endpoint."""
 
@@ -330,7 +369,19 @@ class HTTPDynamicHandler:
                 req_desc = None
             binding.resolve_fields(req_desc)
 
-    async def __call__(self, request, _context):
+    async def __call__(self, request, context):
+        failure: InvariantError | type[Exception]
+        try:
+            return await self._call(request, context)
+        except InvariantError as error:
+            failure = error
+        except Exception as error:
+            failure = type(error)
+        if isinstance(failure, type):
+            failure = _request_error(self._connection.host, failure)
+        return _raise_without_chain(failure)
+
+    async def _call(self, request, context):
         req_content_type: str | None = None
         if self._httpbody_request:
             # google.api.HttpBody request: send the raw `data` bytes verbatim
@@ -344,6 +395,7 @@ class HTTPDynamicHandler:
             # at bind time (resolve_fields), so path/body/query all line up.
             args = json_format.MessageToDict(request)
             body_bytes, base_target = self._binding.build(args, self._connection.base_url)
+        time_remaining = getattr(context, "time_remaining", lambda: None)
         attempt = 0
         retry_backoff = self._retry_policy.initial_backoff if self._retry_policy else 0.0
 
@@ -355,62 +407,80 @@ class HTTPDynamicHandler:
             if req_content_type:
                 headers["Content-Type"] = req_content_type
 
+            error: InvariantError | None = None
+            failure_type: type[Exception] | None = None
+            effective_host = self._connection.host
             try:
-                response, read_result, duration_ms = await self._send_once(target, body_bytes, headers)
-            except httpx.TimeoutException as e:
-                if self._should_retry(attempt, grpc.StatusCode.DEADLINE_EXCEEDED):
+                token = _private_request.set(True)
+                try:
+                    remaining = time_remaining()
+                    if remaining is not None and remaining <= 0:
+                        raise _AdmittedAttemptTimeout("HTTP call deadline elapsed")
+                    budget = asyncio.timeout(remaining)
+                    try:
+                        with _suppress_http():
+                            async with budget:
+                                response, read_result, duration_ms = await self._send_once(
+                                    target, body_bytes, headers, base_target=base_target
+                                )
+                    except TimeoutError:
+                        if not budget.expired():
+                            raise
+                        raise _AdmittedAttemptTimeout("HTTP call deadline elapsed") from None
+                finally:
+                    _private_request.reset(token)
+            except _ResponsePolicyError as exc:
+                error = exc
+            except Exception as exc:
+                failure_type = type(exc)
+                if isinstance(exc, httpx.RequestError):
+                    with contextlib.suppress(RuntimeError):
+                        effective_host = exc.request.url.host
+            if failure_type is not None:
+                error = _request_error(effective_host, failure_type)
+            if error is not None:
+                if self._should_retry(attempt, error.code):
                     retry_delay = _retry_delay_seconds(self._retry_policy, retry_backoff, None)
-                    if retry_delay is None:
-                        raise _request_timeout_error(self._method_path, target, e) from None
-                    delay, retry_backoff = retry_delay
-                    attempt += 1
-                    await _retry_sleep(delay)
-                    continue
-                raise _request_timeout_error(self._method_path, target, e) from None
-            except httpx.RequestError as e:
-                if self._should_retry(attempt, grpc.StatusCode.UNAVAILABLE):
-                    retry_delay = _retry_delay_seconds(self._retry_policy, retry_backoff, None)
-                    if retry_delay is None:
-                        raise _request_error(self._method_path, target, e) from None
-                    delay, retry_backoff = retry_delay
-                    attempt += 1
-                    await _retry_sleep(delay)
-                    continue
-                raise _request_error(self._method_path, target, e) from None
+                    if retry_delay is not None and _retry_fits(retry_delay[0], time_remaining()):
+                        delay, retry_backoff = retry_delay
+                        attempt += 1
+                        await _retry_sleep(delay)
+                        continue
+                raise error from None
 
-            if response.status_code >= 400:
-                error = _http_error(
+            effective_host = response.url.host
+            bounded_body_exceeded = self._connection.options.identity_response_only and read_result.exceeded
+            response_failed = response.status_code >= 400 or (
+                response.is_redirect and not _is_safe_retry_method(self._binding.method)
+            )
+            if response_failed and not bounded_body_exceeded:
+                response_error, pushback = _http_error(
                     response.status_code,
                     read_result.body,
                     response.headers,
-                    method_path=self._method_path,
-                    url=target,
-                    truncated=read_result.exceeded,
+                    host=effective_host,
                 )
-                if self._should_retry(attempt, error.code):
+                if self._should_retry(attempt, response_error.code):
                     retry_delay = _retry_delay_seconds(
                         self._retry_policy,
                         retry_backoff,
-                        response.headers.get("Retry-After"),
+                        pushback,
                     )
                     self._observe_response(response, read_result.body, duration_ms, target, body_bytes, success=False)
-                    if retry_delay is None:
-                        raise error from None
+                    if retry_delay is None or not _retry_fits(retry_delay[0], time_remaining()):
+                        raise response_error from None
                     delay, retry_backoff = retry_delay
                     attempt += 1
                     await _retry_sleep(delay)
                     continue
                 self._observe_response(response, read_result.body, duration_ms, target, body_bytes, success=False)
-                raise error from None
+                raise response_error from None
 
-            success = not read_result.exceeded
-            self._observe_response(response, read_result.body, duration_ms, target, body_bytes, success=success)
             if read_result.exceeded:
+                self._observe_response(response, b"", duration_ms, target, body_bytes, success=False)
                 raise _response_too_large(
                     self._connection.options.max_receive_message_size,
-                    method_path=self._method_path,
-                    url=target,
-                    body=read_result.body,
+                    host=effective_host,
                 )
 
             raw = read_result.body
@@ -424,51 +494,52 @@ class HTTPDynamicHandler:
                 content_type = response.headers.get("content-type")
                 if content_type:
                     http_body.content_type = content_type
+                self._observe_response(response, raw, duration_ms, target, body_bytes, success=True)
                 return out
 
             out = self._resp_class()
+            decode_failed = False
             if raw.strip():
                 try:
                     self._parse_http_response(raw, out)
-                except Exception as e:
-                    raise _decode_error(self._method_path, target, raw, e) from None
+                except Exception:
+                    decode_failed = True
+            if decode_failed:
+                self._observe_response(response, b"", duration_ms, target, body_bytes, success=False)
+                raise _decode_error(effective_host) from None
+            self._observe_response(response, raw, duration_ms, target, body_bytes, success=True)
             return out
+
+    def _follow_redirects(self) -> bool:
+        """Resolve the connection redirect policy for this method's response type."""
+        if not _is_safe_retry_method(self._binding.method) and (
+            self._retry_policy is None or not self._retry_policy.retry_unsafe_methods
+        ):
+            return False
+        configured = self._connection.options.follow_redirects
+        return self._httpbody_response if configured is None else configured
 
     async def _send_once(
         self,
         target: str,
         body_bytes: bytes | None,
         headers: dict[str, str],
-    ) -> tuple[httpx.Response, _ReadResult, float]:
-        if self._connection.options.identity_response_only or self._connection.options.before_http_attempt is not None:
-            return await self._send_admitted(target, body_bytes, headers)
-        start = time.perf_counter()
-        async with self._connection.client.stream(
-            self._binding.method,
-            target,
-            content=body_bytes,
-            headers=headers,
-            follow_redirects=self._follow_redirects(),
-        ) as response:
-            read_result = await _read_response_body(response, self._connection.options.max_receive_message_size)
-            return response, read_result, (time.perf_counter() - start) * 1000
-
-    def _follow_redirects(self) -> bool:
-        """Resolve the connection redirect policy for this method's response type."""
-        configured = self._connection.options.follow_redirects
-        return self._httpbody_response if configured is None else configured
-
-    async def _send_admitted(
-        self,
-        target: str,
-        body_bytes: bytes | None,
-        headers: dict[str, str],
+        *,
+        base_target: str,
     ) -> tuple[httpx.Response, _ReadResult, float]:
         """Keep redirect reads and each physical admission inside the limits."""
         start = time.perf_counter()
         client = self._connection.client
         request = client.build_request(self._binding.method, target, content=body_bytes, headers=headers)
         redirects = 0
+        crossed_origin = False
+        source_query_auth: set[tuple[str, str]] = set()
+        if self._connection.auth.query_provider is not None or client.params:
+            # Capture additions once. A Location may echo an auth value from
+            # the initial request or from any later hop.
+            source_query_auth = set(
+                Counter(request.url.params.multi_items()) - Counter(httpx.URL(base_target).params.multi_items())
+            )
         while True:
             if self._connection.options.identity_response_only:
                 request.headers["Accept-Encoding"] = "identity"
@@ -484,7 +555,24 @@ class HTTPDynamicHandler:
             budget = asyncio.timeout(seconds)
             try:
                 async with budget:
-                    response = await client.send(request, stream=True, follow_redirects=False)
+                    if crossed_origin:
+                        # HTTPX's public send runs client-wide hooks and auth.
+                        # Keep the selected transport but bypass those source
+                        # policies for an explicitly allowed off-origin hop.
+                        request.extensions["timeout"] = client.timeout.as_dict()
+                        transport = client._transport_for_url(request.url)
+                        # The AsyncClient single-send helper extracts cookies
+                        # into its jar. Borrow only the transport so no
+                        # off-origin response can modify source cookie state.
+                        try:
+                            response = await transport.handle_async_request(request)
+                        except httpx.RequestError as error:
+                            error.request = request
+                            raise
+                        response.request = request
+                        response.default_encoding = client._default_encoding
+                    else:
+                        response = await client.send(request, stream=True, follow_redirects=False)
                     try:
                         result = await _read_response_body(
                             response,
@@ -496,21 +584,50 @@ class HTTPDynamicHandler:
             except TimeoutError:
                 if not budget.expired():
                     raise
-                raise httpx.ReadTimeout("admitted HTTP attempt deadline elapsed", request=request) from None
-            next_request = response.next_request if self._follow_redirects() else None
+                raise _AdmittedAttemptTimeout("admitted HTTP attempt deadline elapsed", request=request) from None
             if result.exceeded:
-                raise _response_too_large(
-                    self._connection.options.max_receive_message_size,
-                    method_path=self._method_path,
-                    url=target,
-                    body=result.body,
-                )
+                return response, result, (time.perf_counter() - start) * 1000
+            next_request = None
+            if self._follow_redirects():
+                if crossed_origin and response.has_redirect_location:
+                    next_request = client._build_redirect_request(request, response)
+                else:
+                    next_request = response.next_request
             if next_request is None:
                 return response, result, (time.perf_counter() - start) * 1000
             redirects += 1
             if redirects > client.max_redirects:
                 raise httpx.TooManyRedirects("admitted HTTP redirect limit exceeded", request=request)
-            request = next_request
+            source = request.url
+            dest = next_request.url
+            if (source.scheme, source.host, source.port) != (dest.scheme, dest.host, dest.port):
+                if (
+                    not self._connection.options.allow_cross_origin_redirects
+                    or dest.scheme not in {"http", "https"}
+                    or not _is_safe_retry_method(request.method)
+                    or not _is_safe_retry_method(next_request.method)
+                ):
+                    raise _ResponsePolicyError(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        "cross-origin HTTP redirect refused",
+                        [_error_info("HTTP_REDIRECT_REFUSED", source.host)],
+                    )
+                crossed_origin = True
+            if crossed_origin:
+                # Start over with a plain request. The client's normal build
+                # path would merge configured headers, auth and its cookie jar.
+                request = httpx.Request(
+                    next_request.method,
+                    dest.copy_with(
+                        username=None,
+                        password=None,
+                        query=_redirect_query(dest.query, source_query_auth),
+                        fragment=None,
+                    ),
+                    headers={"Accept": "*/*" if self._httpbody_response else "application/json"},
+                )
+            else:
+                request = next_request
 
     def _apply_query_provider(self, target: str, body_bytes: bytes | None) -> str:
         """Let an optional query_provider add auth query params (API key, HMAC
@@ -521,6 +638,7 @@ class HTTPDynamicHandler:
         """
         if self._connection.auth.query_provider is None:
             return target
+        auth_failure = None
         try:
             extra = self._connection.auth.query_provider(
                 OutboundHTTPRequest(
@@ -530,13 +648,10 @@ class HTTPDynamicHandler:
                     body=body_bytes or b"",
                 )
             )
-        except InvariantError:
-            raise
-        except Exception as e:
-            raise InvariantError(
-                grpc.StatusCode.UNAUTHENTICATED,
-                f"build outbound query params for {self._method_path}: {e}",
-            ) from None
+        except Exception as error:
+            auth_failure = type(error)
+        if auth_failure is not None:
+            raise _auth_error(self._connection.host, auth_failure) from None
         if not extra:
             return target
         parts = urllib.parse.urlsplit(target)
@@ -567,23 +682,31 @@ class HTTPDynamicHandler:
         # An observer is best-effort (archival/metrics); it must never break the
         # call path, so anything it raises is suppressed.
         with contextlib.suppress(Exception):
+            metadata = _observer_metadata(response.headers) if success else {}
             self._connection.observer(
                 OutboundHTTPResponse(
                     method_path=self._method_path,
                     status_code=response.status_code,
-                    headers=dict(response.headers),
-                    body=raw,
+                    headers=dict(metadata),
+                    metadata=metadata,
+                    body=raw if success else b"",
                     duration_ms=duration_ms,
                     success=success,
                     request=OutboundHTTPRequest(
                         method_path=self._method_path,
                         method=self._binding.method,
-                        url=target,
-                        body=body_bytes or b"",
+                        url=self._observer_url(target, success),
+                        body=(body_bytes or b"") if success else b"",
                     ),
-                    url=str(response.url),
+                    url=self._observer_url(str(response.url), success),
                 )
             )
+
+    def _observer_url(self, url: str, success: bool) -> str:
+        parsed = httpx.URL(url)
+        if not success or self._connection.auth.query_provider is not None or parsed.userinfo:
+            return _origin(url)
+        return str(parsed.copy_with(query=None, fragment=None))
 
     def _parse_http_response(self, raw: bytes, out: Any) -> None:
         decoded = raw.decode()
@@ -616,6 +739,7 @@ class HTTPDynamicHandler:
         if self._connection.auth.header_provider is None:
             return
 
+        auth_failure = None
         try:
             dynamic_headers = self._connection.auth.header_provider(
                 OutboundHTTPRequest(
@@ -625,13 +749,10 @@ class HTTPDynamicHandler:
                     body=body_bytes or b"",
                 )
             )
-        except InvariantError:
-            raise
-        except Exception as e:
-            raise InvariantError(
-                grpc.StatusCode.UNAUTHENTICATED,
-                f"build outbound HTTP headers for {self._method_path}: {e}",
-            ) from None
+        except Exception as error:
+            auth_failure = type(error)
+        if auth_failure is not None:
+            raise _auth_error(self._connection.host, auth_failure) from None
 
         if not dynamic_headers:
             return
@@ -645,6 +766,10 @@ class HTTPDynamicHandler:
             headers[name] = value
 
 
+class _ResponsePolicyError(InvariantError):
+    """An error already built from trusted transport policy data."""
+
+
 async def _read_response_body(
     response: httpx.Response,
     max_bytes: int,
@@ -654,14 +779,14 @@ async def _read_response_body(
     if identity_only:
         encoding = response.headers.get("content-encoding", "identity").strip().lower()
         if encoding != "identity":
-            raise InvariantError(
+            raise _ResponsePolicyError(
                 grpc.StatusCode.FAILED_PRECONDITION,
                 "identity-only HTTP response uses an unsupported encoding",
             )
         declared = response.headers.get("content-length")
         if declared is not None:
             if not declared.isascii() or not declared.isdigit():
-                raise InvariantError(
+                raise _ResponsePolicyError(
                     grpc.StatusCode.FAILED_PRECONDITION,
                     "identity-only HTTP Content-Length is invalid",
                 )
@@ -1098,106 +1223,212 @@ def _scalar_to_string(value: Any) -> str:
     raise invalid_argument(f"expected scalar value, got {type(value).__name__}")
 
 
-def _request_error(method_path: str, url: str, err: httpx.RequestError) -> InvariantError:
+def _redirect_query(query: bytes, source_query_auth: set[tuple[str, str]]) -> bytes | None:
+    """Keep destination query bytes, except for echoed source auth pairs."""
+    if not query or not source_query_auth:
+        return query or None
+    fields = []
+    for field in query.split(b"&"):
+        pairs = urllib.parse.parse_qsl(field.decode("ascii"), keep_blank_values=True)
+        if not any(pair in source_query_auth for pair in pairs):
+            fields.append(field)
+    return b"&".join(fields) or None
+
+
+def _observer_metadata(headers: httpx.Headers) -> dict[str, str]:
+    # Typed protocol data needed by existing archival and pagination clients.
+    metadata = {}
+    for name in (
+        "record-total",
+        "record-offset",
+        "record-limit",
+        "total-records-on-page",
+        "record-max-limit",
+        "x-oddsapi-seq",
+    ):
+        value = headers.get(name, "")
+        if len(value) <= 32 and value.isascii() and value.isdecimal():
+            metadata[name] = str(int(value))
+    media = headers.get("content-type", "").split(";", 1)[0].lower()
+    if media in {
+        "application/json",
+        "text/csv",
+        "text/html",
+        "text/plain",
+        "application/xml",
+        "text/xml",
+        "application/octet-stream",
+    }:
+        metadata["content-type"] = media
+    try:
+        modified = parsedate_to_datetime(headers.get("last-modified", ""))
+    except ValueError, TypeError, OverflowError:
+        pass
+    else:
+        if modified.tzinfo is not None:
+            metadata["last-modified"] = format_datetime(modified.astimezone(UTC), usegmt=True)
+    return metadata
+
+
+def _origin(url: str) -> str:
+    parsed = httpx.URL(url)
+    return str(parsed.copy_with(username=None, password=None, path="/", query=None, fragment=None))
+
+
+def _raise_without_chain(failure: Exception) -> Never:
+    # An awaiting caller may itself be handling an exception. Clear even
+    # that implicit context after Python has installed it on the raise.
+    try:
+        raise failure from None
+    except Exception:
+        failure.__context__ = None
+        failure.__cause__ = None
+        raise
+
+
+_TEXT_SAFE_ERROR_TYPES = (
+    RuntimeError,
+    ValueError,
+    TimeoutError,
+    UnicodeError,
+    UnicodeEncodeError,
+    httpx.InvalidURL,
+    httpx.LocalProtocolError,
+    httpx.RemoteProtocolError,
+    httpx.PoolTimeout,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.ConnectTimeout,
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.TooManyRedirects,
+    httpx.DecodingError,
+    _AdmittedAttemptTimeout,
+)
+
+
+def _error_class(error_type: type[Exception]) -> str:
+    for known in _TEXT_SAFE_ERROR_TYPES:
+        if error_type is known:
+            return known.__name__
+    return "HTTPExecutionError"
+
+
+def _auth_error(host: str, error_type: type[Exception]) -> InvariantError:
+    reason = "HTTP_AUTH_BUILD_FAILED"
     return InvariantError(
-        grpc.StatusCode.UNAVAILABLE,
-        f"HTTP request failed: {err}",
-        [_error_info("HTTP_REQUEST_FAILED", method_path=method_path, url=url, metadata={"exception": str(err)})],
+        grpc.StatusCode.UNAUTHENTICATED, reason, [_error_info(reason, host, error_class=_error_class(error_type))]
     )
 
 
-def _request_timeout_error(method_path: str, url: str, err: httpx.TimeoutException) -> InvariantError:
-    return InvariantError(
-        grpc.StatusCode.DEADLINE_EXCEEDED,
-        f"HTTP request deadline exceeded: {err}",
-        [_error_info("HTTP_REQUEST_TIMEOUT", method_path=method_path, url=url, metadata={"exception": str(err)})],
-    )
+def _request_error(host: str, error_type: type[Exception]) -> InvariantError:
+    if issubclass(error_type, (httpx.ReadTimeout, httpx.WriteTimeout)):
+        reason, code = "REMOTE_TIMEOUT", grpc.StatusCode.DEADLINE_EXCEEDED
+    elif issubclass(error_type, (httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError)):
+        reason, code = "REMOTE_TRANSPORT", grpc.StatusCode.UNAVAILABLE
+    elif issubclass(error_type, (httpx.PoolTimeout, _AdmittedAttemptTimeout)):
+        reason, code = "LOCAL_HTTP_FAILURE", grpc.StatusCode.DEADLINE_EXCEEDED
+    elif issubclass(error_type, httpx.ConnectTimeout):
+        reason, code = "CONNECT_TIMEOUT", grpc.StatusCode.DEADLINE_EXCEEDED
+    elif issubclass(error_type, httpx.ConnectError):
+        reason, code = "CONNECT_FAILED", grpc.StatusCode.UNAVAILABLE
+    elif issubclass(error_type, httpx.LocalProtocolError):
+        reason, code = "LOCAL_HTTP_FAILURE", grpc.StatusCode.UNAVAILABLE
+    else:
+        reason, code = "LOCAL_HTTP_FAILURE", grpc.StatusCode.INTERNAL
+    return InvariantError(code, reason, [_error_info(reason, host, error_class=_error_class(error_type))])
 
 
-def _decode_error(method_path: str, url: str, body: bytes, err: Exception) -> InvariantError:
-    return InvariantError(
-        grpc.StatusCode.INTERNAL,
-        f"decode HTTP response JSON: {err}",
-        [
-            _error_info(
-                "HTTP_RESPONSE_DECODE_FAILED",
-                method_path=method_path,
-                url=url,
-                metadata={"body_snippet": _body_snippet(body)},
-            )
-        ],
-    )
+def _decode_error(host: str) -> InvariantError:
+    reason = "HTTP_RESPONSE_DECODE_FAILED"
+    return InvariantError(grpc.StatusCode.INTERNAL, "decode HTTP response JSON", [_error_info(reason, host)])
 
 
-def _response_too_large(max_bytes: int, *, method_path: str, url: str, body: bytes) -> InvariantError:
-    return InvariantError(
+def _response_too_large(max_bytes: int, *, host: str) -> InvariantError:
+    return _ResponsePolicyError(
         grpc.StatusCode.RESOURCE_EXHAUSTED,
         f"upstream HTTP response exceeds {max_bytes} byte limit",
-        [
-            _error_info(
-                "HTTP_RESPONSE_TOO_LARGE",
-                method_path=method_path,
-                url=url,
-                metadata={"max_receive_message_size": str(max_bytes), "body_snippet": _body_snippet(body)},
-            )
-        ],
+        [_error_info("HTTP_RESPONSE_TOO_LARGE", host)],
     )
 
 
 def _http_error(
-    status_code: int,
-    body: bytes,
-    headers: httpx.Headers,
-    *,
-    method_path: str,
-    url: str,
-    truncated: bool,
-) -> InvariantError:
-    """Parse a canonical Connect error envelope."""
-    code = _grpc_code_from_http_status(status_code)
-    message = f"HTTP {status_code}"
-    details: list[Any] = []
-
+    status_code: int, body: bytes, headers: httpx.Headers, *, host: str
+) -> tuple[InvariantError, float | None]:
     try:
-        payload = json.loads(body.decode() if isinstance(body, bytes) else body)
-    except Exception:
-        payload = {}
-
-    if isinstance(payload, dict):
-        parsed_code = _grpc_code_from_connect_name(payload.get("code"))
-        if parsed_code is not None:
-            code = parsed_code
-            msg = payload.get("message")
-            if isinstance(msg, str) and msg:
-                message = msg
-            maybe_details = payload.get("details")
-            if isinstance(maybe_details, list):
-                for detail in maybe_details:
-                    if not isinstance(detail, dict):
-                        continue
-                    decoded = _decode_connect_detail(detail)
-                    details.append(decoded if decoded is not None else detail)
-
+        payload = json.loads(body)
+    except ValueError, RecursionError:
+        payload = None
+    connect_code = _grpc_code_from_connect_name(payload.get("code")) if isinstance(payload, dict) else None
+    error_class = "CONNECT_APPLICATION" if connect_code is not None else "HTTP_RESPONSE"
+    metadata = {"http_status": str(status_code), "error_class": error_class}
     retry_after = _parse_retry_after_seconds(headers.get("Retry-After"))
-    if retry_after is not None and not _has_retry_info(details):
-        details.append(_retry_info(retry_after))
+    details = []
+    if retry_after is not None:
+        metadata["retry_after"] = str(int(retry_after)) if retry_after.is_integer() else str(retry_after)
+    delay = _connect_retry_seconds(payload) if connect_code is not None else None
+    if delay is None:
+        delay = retry_after
+    if delay is not None:
+        details.append(_retry_info(delay))
+    code = connect_code or _grpc_code_from_http_status(status_code)
+    if code == grpc.StatusCode.RESOURCE_EXHAUSTED or (connect_code is not None and _connect_has_quota(payload)):
+        # Preserve the quota signal without forwarding provider-supplied
+        # violation subjects or descriptions, which can contain credentials.
+        details.append(error_details_pb2.QuotaFailure())
+    details.append(_error_info(f"HTTP_STATUS_{status_code}", host, **metadata))
+    return InvariantError(code, f"HTTP {status_code}", details), delay
 
-    details.append(
-        _error_info(
-            f"HTTP_STATUS_{status_code}",
-            method_path=method_path,
-            url=url,
-            metadata={
-                "http_status": str(status_code),
-                "body_snippet": _body_snippet(body),
-                "body_truncated": "true" if truncated or len(body) > _ERROR_BODY_SNIPPET_BYTES else "false",
-            },
+
+def _connect_has_quota(payload: dict) -> bool:
+    details = payload.get("details")
+    return isinstance(details, list) and any(
+        isinstance(detail, dict)
+        and (
+            detail.get("type") == "google.rpc.QuotaFailure"
+            or detail.get("@type") == "type.googleapis.com/google.rpc.QuotaFailure"
         )
+        for detail in details
     )
-    if code == grpc.StatusCode.RESOURCE_EXHAUSTED:
-        details.append(_quota_failure(method_path, f"HTTP {status_code} from upstream"))
 
-    return InvariantError(code, message, details)
+
+def _connect_retry_seconds(payload: dict) -> float | None:
+    """Read a numeric duration, never forward the remote detail itself."""
+    details = payload.get("details")
+    if not isinstance(details, list):
+        return None
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        if detail.get("type") == "google.rpc.RetryInfo":
+            encoded = detail.get("value")
+            if not isinstance(encoded, str) or len(encoded) > 128:
+                continue
+            try:
+                serialized = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
+                retry = error_details_pb2.RetryInfo.FromString(serialized)
+            except ValueError, binascii.Error, DecodeError:
+                continue
+            if not retry.HasField("retry_delay"):
+                continue
+            duration = retry.retry_delay
+        elif detail.get("@type") == "type.googleapis.com/google.rpc.RetryInfo":
+            value = detail.get("retryDelay")
+            if not isinstance(value, str) or len(value) > 32:
+                continue
+            duration = duration_pb2.Duration()
+            try:
+                duration.FromJsonString(value)
+            except ValueError:
+                continue
+        else:
+            continue
+        if 0 <= duration.seconds <= 315_576_000_000 and 0 <= duration.nanos < 1_000_000_000:
+            delay = duration.seconds + duration.nanos / 1_000_000_000
+            if delay <= 315_576_000_000:
+                return delay
+    return None
 
 
 def _retry_info(delay_seconds: float) -> error_details_pb2.RetryInfo:
@@ -1206,75 +1437,23 @@ def _retry_info(delay_seconds: float) -> error_details_pb2.RetryInfo:
     return error_details_pb2.RetryInfo(retry_delay=duration_pb2.Duration(seconds=seconds, nanos=nanos))
 
 
-def _error_info(
-    reason: str,
-    *,
-    method_path: str,
-    url: str,
-    metadata: dict[str, str] | None = None,
-) -> error_details_pb2.ErrorInfo:
-    merged = {
-        "method_path": method_path,
-        "url": url,
-    }
-    if metadata:
-        merged.update(metadata)
+def _error_info(reason: str, host: str, **metadata: str) -> error_details_pb2.ErrorInfo:
     return error_details_pb2.ErrorInfo(
         reason=reason,
         domain="invariant.http_client",
-        metadata=merged,
+        metadata={"host": host, **metadata},
     )
-
-
-def _quota_failure(method_path: str, description: str) -> error_details_pb2.QuotaFailure:
-    return error_details_pb2.QuotaFailure(
-        violations=[
-            error_details_pb2.QuotaFailure.Violation(
-                subject=method_path,
-                description=description,
-            )
-        ]
-    )
-
-
-def _body_snippet(body: bytes) -> str:
-    return body[:_ERROR_BODY_SNIPPET_BYTES].decode("utf-8", errors="replace")
-
-
-def _has_retry_info(details: list[Any]) -> bool:
-    for detail in details:
-        if isinstance(detail, error_details_pb2.RetryInfo):
-            return True
-        if isinstance(detail, any_pb2.Any) and detail.type_url.endswith("/google.rpc.RetryInfo"):
-            return True
-        if isinstance(detail, dict) and detail.get("@type") == "type.googleapis.com/google.rpc.RetryInfo":
-            return True
-    return False
-
-
-def _decode_connect_detail(detail: dict[str, Any]) -> any_pb2.Any | None:
-    type_name = detail.get("type")
-    encoded = detail.get("value")
-    if not isinstance(type_name, str) or not type_name or not isinstance(encoded, str):
-        return None
-    try:
-        padding = "=" * (-len(encoded) % 4)
-        value = base64.b64decode(encoded + padding, validate=True)
-    except ValueError, TypeError, binascii.Error:
-        return None
-    return any_pb2.Any(type_url=f"type.googleapis.com/{type_name}", value=value)
 
 
 def _grpc_code_from_http_status(status_code: int) -> grpc.StatusCode:
+    if 500 <= status_code <= 599:
+        return grpc.StatusCode.UNAVAILABLE
     mapping = {
         400: grpc.StatusCode.INTERNAL,
         401: grpc.StatusCode.UNAUTHENTICATED,
         403: grpc.StatusCode.PERMISSION_DENIED,
         404: grpc.StatusCode.UNIMPLEMENTED,
-        429: grpc.StatusCode.UNAVAILABLE,
-        502: grpc.StatusCode.UNAVAILABLE,
-        503: grpc.StatusCode.UNAVAILABLE,
-        504: grpc.StatusCode.UNAVAILABLE,
+        429: grpc.StatusCode.RESOURCE_EXHAUSTED,
     }
     return mapping.get(status_code, grpc.StatusCode.UNKNOWN)
 
@@ -1327,16 +1506,19 @@ def _env_header_suffix_to_http_header(suffix: str) -> str:
     return "-".join(part[:1].upper() + part[1:] if part else "" for part in parts)
 
 
+def _retry_fits(delay: float, remaining: float | None) -> bool:
+    return remaining is None or delay < remaining
+
+
 def _retry_delay_seconds(
     policy: _RetryPolicy | None,
     current_backoff: float,
-    retry_after: str | None,
+    pushback: float | None,
 ) -> tuple[float, float] | None:
-    parsed = _parse_retry_after_seconds(retry_after)
-    if parsed is not None:
-        if policy is not None and parsed > policy.max_backoff:
+    if pushback is not None:
+        if policy is not None and pushback > policy.max_backoff:
             return None
-        return parsed, policy.initial_backoff if policy is not None else 0.0
+        return pushback, policy.initial_backoff if policy is not None else 0.0
     if policy is None:
         return 0.0, 0.0
 
@@ -1352,11 +1534,11 @@ def _parse_retry_after_seconds(value: str | None) -> float | None:
     if not trimmed:
         return None
 
-    try:
+    if trimmed.isascii() and trimmed.isdecimal():
+        if len(trimmed) > 12:
+            return None
         seconds = int(trimmed)
-        return float(max(0, seconds))
-    except ValueError:
-        pass
+        return float(seconds) if seconds <= 315_576_000_000 else None
 
     try:
         dt = parsedate_to_datetime(trimmed)
@@ -1364,19 +1546,27 @@ def _parse_retry_after_seconds(value: str | None) -> float | None:
         return None
 
     if dt.tzinfo is None:
-        return 0.0
+        return None
     remaining = dt.timestamp() - time.time()
-    return max(0.0, remaining)
+    return min(315_576_000_000.0, max(0.0, remaining))
 
 
 def _is_safe_retry_method(method: str) -> bool:
     return method.upper() in {"GET", "HEAD"}
 
 
-def _validated_base_url(base_url: str) -> str:
-    parsed = urllib.parse.urlsplit(base_url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError("base_url must use http:// or https://")
-    if not parsed.netloc:
-        raise ValueError("base_url must include host")
-    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+def _validated_base_url(base_url: str) -> tuple[str, str]:
+    invalid = False
+    try:
+        parsed = urllib.parse.urlsplit(base_url)
+        # Access port explicitly: urlsplit defers numeric/range validation.
+        _ = parsed.port
+        url = httpx.URL(base_url)
+        if url.scheme not in {"http", "https"} or not url.host:
+            invalid = True
+    except ValueError, httpx.InvalidURL:
+        invalid = True
+    if invalid:
+        _raise_without_chain(ValueError("base_url must be an HTTP(S) URL with a valid host and port"))
+    normalized = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+    return normalized, url.host

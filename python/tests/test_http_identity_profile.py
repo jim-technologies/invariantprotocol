@@ -199,7 +199,7 @@ async def test_every_redirect_and_retry_requires_its_own_physical_admission(budg
         )
         try:
             if budget == 3:
-                with pytest.raises(RuntimeError, match="allowance exhausted"):
+                with pytest.raises(InvariantError, match="LOCAL_HTTP_FAILURE"):
                     await tool(empty_pb2.Empty(), None)
             else:
                 assert (await tool(empty_pb2.Empty(), None)).data == b"ok"
@@ -360,7 +360,7 @@ async def test_channel_limits_and_callbacks_are_isolated_from_other_and_ordinary
             )
             assert [result.data for result in results] == [b"ok", b"ok", b"ok"]
             assert (await second_tool(empty_pb2.Empty(), None)).data == b"ok"
-            with pytest.raises(RuntimeError, match="budget exhausted"):
+            with pytest.raises(InvariantError, match="LOCAL_HTTP_FAILURE"):
                 await first_tool(empty_pb2.Empty(), None)
             assert (await ordinary_tool(empty_pb2.Empty(), None)).data == b"ok"
             assert len(first_admissions) == 1

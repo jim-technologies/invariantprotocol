@@ -397,7 +397,10 @@ class Server:
                 response = await response
                 response = _coerce_response(tool, response)
             except Exception as error:
-                raise _normalize_handler_error(error, full_method) from error
+                normalized = _normalize_handler_error(error, full_method)
+                if normalized is error:
+                    raise
+                raise normalized from error
             if isinstance(context, ProjectionContext):
                 context.raise_for_status()
             return response
@@ -446,7 +449,10 @@ class Server:
                 async for msg in responses:
                     yield _coerce_response(tool, msg)
             except Exception as error:
-                raise _normalize_handler_error(error, full_method) from error
+                normalized = _normalize_handler_error(error, full_method)
+                if normalized is error:
+                    raise
+                raise normalized from error
             if isinstance(context, ProjectionContext):
                 context.raise_for_status()
         finally:

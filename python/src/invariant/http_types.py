@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 DEFAULT_HTTP_MESSAGE_BYTES = 16 * 1024 * 1024
 
@@ -14,8 +14,8 @@ class OutboundHTTPRequest:
 
     method_path: str
     method: str
-    url: str
-    body: bytes
+    url: str = field(repr=False)
+    body: bytes = field(repr=False)
 
 
 HTTPHeaderProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
@@ -24,7 +24,7 @@ HTTPQueryProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
 
 @dataclass
 class OutboundHTTPResponse:
-    """Raw response metadata; ``url`` is the final response URL.
+    """Response observation with credential-free URLs and normalized protocol metadata.
 
     ``request.url`` retains the original outbound request URL. An empty
     ``url`` means a caller constructed metadata without a response URL.
@@ -32,12 +32,13 @@ class OutboundHTTPResponse:
 
     method_path: str
     status_code: int
-    headers: dict[str, str]
-    body: bytes
+    headers: dict[str, str] = field(repr=False)
+    body: bytes = field(repr=False)
     duration_ms: float
     success: bool
     request: OutboundHTTPRequest
-    url: str = ""
+    url: str = field(default="", repr=False)
+    metadata: dict[str, str] = field(default_factory=dict, repr=False)
 
 
 HTTPResponseObserver = Callable[[OutboundHTTPResponse], None]
@@ -65,7 +66,10 @@ class ChannelOptions:
 
     ``follow_redirects=None`` follows redirects for ``google.api.HttpBody``
     responses and refuses them for other response types. An explicit boolean
-    overrides that policy for every method on the connection.
+    overrides that policy for every method on the connection. Off-origin
+    hops also require ``allow_cross_origin_redirects=True`` and are only
+    supported for GET/HEAD. They retain the destination query except for echoed
+    source-auth parameters, and omit client auth, hooks and cookies.
     """
 
     max_receive_message_size: int = DEFAULT_HTTP_MESSAGE_BYTES
@@ -97,6 +101,9 @@ class ChannelOptions:
     send without an intervening await.
     """
     follow_redirects: bool | None = None
+    # A cross-origin GET/HEAD hop is rebuilt without source headers,
+    # userinfo, cookies or echoed source-auth query parameters.
+    allow_cross_origin_redirects: bool = False
 
 
 HTTPMetadataMapper = Callable[[Mapping[str, str]], Sequence[tuple[str, str | bytes]]]
