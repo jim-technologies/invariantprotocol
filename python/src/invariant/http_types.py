@@ -104,6 +104,19 @@ class ChannelOptions:
     # A cross-origin GET/HEAD hop is rebuilt without source headers,
     # userinfo, cookies or echoed source-auth query parameters.
     allow_cross_origin_redirects: bool = False
+    connect_error_reasons: frozenset[tuple[str, str]] = frozenset()
+    """Exact (domain, reason) pairs to preserve from Connect ErrorInfo.
+
+    Only pairs configured by the application are returned. Remote metadata
+    and human-readable messages are always omitted.
+    """
+    classify_response_refusal: Callable[[str, int, bytes], bool] | None = None
+    """Recognize a terminal provider refusal using method path, status and body.
+
+    Runs only for complete HTTP error bodies up to 4096 bytes. True prevents
+    retries and adds the fixed HTTP_PROVIDER_REFUSAL ErrorInfo reason. The
+    body is never included in the error or response observer.
+    """
 
 
 HTTPMetadataMapper = Callable[[Mapping[str, str]], Sequence[tuple[str, str | bytes]]]

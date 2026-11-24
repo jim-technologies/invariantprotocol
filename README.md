@@ -562,8 +562,25 @@ Python callers can set `ChannelOptions(follow_redirects=False)` when a request
 must stay at its approved URL. The default `None` preserves the existing
 policy: `google.api.HttpBody` responses follow redirects, while other response
 types do not. Explicit `True` follows redirects for either response type.
-Outbound response observers expose the actual final URL as `response.url` and
-the original outbound URL as `response.request.url`.
+Outbound response observers expose sanitized final and original outbound
+URLs as `response.url` and `response.request.url`. On successful HTTP
+responses, an RFC entity tag is available as `response.metadata["etag"]`
+and `response.headers["etag"]`. Successful `google.api.HttpBody` responses
+also pack the generated `invariant.v1.HttpEntityTag` message into
+`HttpBody.extensions`. The entity tag preserves its quotes and weak prefix
+for reuse in `If-None-Match`. A 304 has an empty body and is visible through
+the response observer.
+
+For providers that signal a terminal application refusal through a small
+HTTP error body, configure `ChannelOptions(classify_response_refusal=...)`.
+The synchronous callback receives the canonical method path, HTTP status
+and complete body up to 4096 bytes. Returning `True` suppresses retries and
+adds the fixed `HTTP_PROVIDER_REFUSAL` ErrorInfo reason. The error and
+observer never contain those bytes. Scope the predicate to the specific
+method, status and payload shape. Connect clients may opt into exact
+`(domain, reason)` pairs through `ChannelOptions(connect_error_reasons=...)`
+for structured recovery decisions. The transport omits remote ErrorInfo
+metadata and messages.
 
 ## Protobuf-derived data schemas
 

@@ -697,8 +697,8 @@ async def test_connect_http_uses_connect_http_status_fallbacks_for_malformed_err
         418: grpc.StatusCode.UNKNOWN,
         409: grpc.StatusCode.UNKNOWN,
         499: grpc.StatusCode.UNKNOWN,
-        500: grpc.StatusCode.UNAVAILABLE,
-        501: grpc.StatusCode.UNAVAILABLE,
+        500: grpc.StatusCode.UNKNOWN,
+        501: grpc.StatusCode.UNKNOWN,
         **dict.fromkeys(range(520, 525), grpc.StatusCode.UNAVAILABLE),
     }
 
@@ -1871,6 +1871,10 @@ async def test_connect_http_only_forwards_allowlisted_retry_details():
 
 
 async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_observer():
+    from invariant.gen.invariant.v1.types_pb2 import HttpEntityTag
+
+    etag = 'W/"world,42"'
+    conditional = {}
     payload = b"symbol,price\nINV,42\n"
     huge = b"x" * 32
     seen: list = []
@@ -1884,7 +1888,13 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
                 self.end_headers()
                 return
             if self.path == "/download/world.csv":
+                if self.headers.get("If-None-Match") == etag:
+                    self.send_response(304)
+                    self.send_header("ETag", etag)
+                    self.end_headers()
+                    return
                 self.send_response(200)
+                self.send_header("ETag", etag)
                 self.send_header("Content-Type", "text/csv")
                 self.send_header("X-Archive-Id", "raw-1")
                 self.send_header("Content-Length", str(len(payload)))
@@ -1916,15 +1926,26 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
             f"http://localhost:{port}",
             options=ChannelOptions(max_receive_message_size=24),
             observer=observer,
+            auth=HTTPAuth(header_provider=lambda _: conditional),
         )
         try:
             resp = await srv.invoke("greet.v1.GreetService.RawBody", greet_pb2.GreetRequest(name="World"))
             assert resp.data == payload
             assert resp.content_type == "text/csv"
             assert seen[-1].success is True
-            assert seen[-1].headers == {"content-type": "text/csv"}
+            assert seen[-1].headers == {"content-type": "text/csv", "etag": etag}
+            assert seen[-1].metadata["etag"] == etag
+            validator = HttpEntityTag()
+            assert resp.extensions[0].Unpack(validator)
+            assert validator.etag == etag
             assert seen[-1].request.url == f"http://localhost:{port}/raw/World"
             assert seen[-1].url == f"http://localhost:{port}/download/world.csv"
+
+            conditional["If-None-Match"] = validator.etag
+            unchanged = await srv.invoke("greet.v1.GreetService.RawBody", greet_pb2.GreetRequest(name="World"))
+            assert not unchanged.data
+            assert seen[-1].status_code == 304
+            assert seen[-1].headers["etag"] == etag
 
             with pytest.raises(InvariantError) as exc:
                 await srv.invoke("greet.v1.GreetService.RawBody", greet_pb2.GreetRequest(name="Huge"))
@@ -2649,3 +2670,81 @@ async def test_signed_cross_origin_download_and_destination_cookies_are_isolated
         assert requests[2].url.params["signature"] == "source-key"
     finally:
         await srv.stop()
+
+
+async def test_http_error_classifier_marks_a_bounded_refusal_without_exposing_bytes():
+    raw = b'{"state":"closed","private":"secret-value"}'
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(503)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *_args):
+            pass
+
+    calls = []
+    observed = []
+
+    def classify(method, status, body):
+        calls.append((method, status))
+        return json.loads(body)["state"] == "closed"
+
+    with ThreadingHTTPServer(("localhost", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        srv = Server.from_bytes(_descriptor_with_raw_httpbody())
+        srv.connect_http(
+            f"http://localhost:{server.server_port}",
+            observer=observed.append,
+            options=ChannelOptions(classify_response_refusal=classify),
+            service_config=_retry_service_config(),
+        )
+        try:
+            with pytest.raises(InvariantError) as caught:
+                await srv.invoke("greet.v1.GreetService.RawBody", greet_pb2.GreetRequest(name="World"))
+            assert calls == [("/greet.v1.GreetService/RawBody", 503)]
+            assert caught.value.details[0]["reason"] == "HTTP_PROVIDER_REFUSAL"
+            assert "secret-value" not in repr(caught.value.details)
+            assert len(observed) == 1
+            assert not observed[0].body
+        finally:
+            await srv.stop()
+            server.shutdown()
+            thread.join()
+
+
+@pytest.mark.parametrize("binary", [False, True])
+def test_connect_http_only_exposes_selected_error_info(binary):
+    import httpx
+    from google.rpc import error_details_pb2
+
+    from invariant.http_client import _http_error
+
+    info = error_details_pb2.ErrorInfo(domain="demo", reason="ALREADY_COMMITTED", metadata={"private": "never-forward"})
+    selected = (
+        {"type": "google.rpc.ErrorInfo", "value": base64.b64encode(info.SerializeToString()).decode()}
+        if binary
+        else {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "domain": info.domain,
+            "reason": info.reason,
+            "metadata": {"private": "never-forward"},
+        }
+    )
+    raw = json.dumps({"code": "already_exists", "message": "never-forward", "details": [selected]}).encode()
+    error, _ = _http_error(
+        409,
+        raw,
+        httpx.Headers(),
+        host="example.test",
+        connect_error_reasons=frozenset({("demo", "ALREADY_COMMITTED")}),
+    )
+    assert error.code is grpc.StatusCode.ALREADY_EXISTS
+    assert error.details[0]["domain"] == "demo"
+    assert error.details[0]["reason"] == "ALREADY_COMMITTED"
+    assert "never-forward" not in str(error) + repr(error.details)
+    unconfigured, _ = _http_error(409, raw, httpx.Headers(), host="example.test")
+    assert all(detail.get("domain") != "demo" for detail in unconfigured.details)

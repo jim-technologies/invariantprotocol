@@ -11,6 +11,7 @@ from invariant.data_schema import (
     validate_schema_bundle,
 )
 from invariant.errors import InvariantError
+from invariant.http_client import validate_http_base_url
 from invariant.http_types import (
     ChannelOptions,
     HTTPAuth,
@@ -52,6 +53,7 @@ __all__ = [
     "migrate_schema_bundle",
     "parse_schema_bundle",
     "serialize_schema_bundle",
+    "validate_http_base_url",
     "validate_schema_bundle",
     "validation",
 ]

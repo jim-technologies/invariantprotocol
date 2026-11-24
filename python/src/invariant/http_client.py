@@ -29,6 +29,7 @@ from google.protobuf.message import DecodeError
 from google.rpc import error_details_pb2
 
 from invariant.errors import InvariantError, invalid_argument
+from invariant.gen.invariant.v1.types_pb2 import HttpEntityTag
 from invariant.http_types import (
     ChannelOptions,
     HTTPAuth,
@@ -459,8 +460,22 @@ class HTTPDynamicHandler:
                     read_result.body,
                     response.headers,
                     host=effective_host,
+                    connect_error_reasons=self._connection.options.connect_error_reasons,
                 )
-                if self._should_retry(attempt, response_error.code):
+                refused = self._is_response_refusal(response, read_result)
+                if refused:
+                    response_error = InvariantError(
+                        response_error.code,
+                        str(response_error),
+                        [
+                            _error_info(
+                                "HTTP_PROVIDER_REFUSAL",
+                                effective_host,
+                                http_status=str(response.status_code),
+                            )
+                        ],
+                    )
+                if not refused and self._should_retry(attempt, response_error.code):
                     retry_delay = _retry_delay_seconds(
                         self._retry_policy,
                         retry_backoff,
@@ -494,6 +509,9 @@ class HTTPDynamicHandler:
                 content_type = response.headers.get("content-type")
                 if content_type:
                     http_body.content_type = content_type
+                etag = _response_etag(response.headers)
+                if etag is not None:
+                    http_body.extensions.add().Pack(HttpEntityTag(etag=etag))
                 self._observe_response(response, raw, duration_ms, target, body_bytes, success=True)
                 return out
 
@@ -509,6 +527,14 @@ class HTTPDynamicHandler:
                 raise _decode_error(effective_host) from None
             self._observe_response(response, raw, duration_ms, target, body_bytes, success=True)
             return out
+
+    def _is_response_refusal(self, response: httpx.Response, result: _ReadResult) -> bool:
+        classify = self._connection.options.classify_response_refusal
+        if classify is None or response.status_code < 400 or result.exceeded or len(result.body) > 4096:
+            return False
+        with contextlib.suppress(Exception):
+            return classify(self._method_path, response.status_code, result.body) is True
+        return False
 
     def _follow_redirects(self) -> bool:
         """Resolve the connection redirect policy for this method's response type."""
@@ -1235,9 +1261,27 @@ def _redirect_query(query: bytes, source_query_auth: set[tuple[str, str]]) -> by
     return b"&".join(fields) or None
 
 
+def _response_etag(headers: httpx.Headers) -> str | None:
+    values = headers.get_list("etag", split_commas=False)
+    if len(values) != 1:
+        return None
+    value = values[0]
+    opaque = value.removeprefix("W/")
+    if (
+        len(opaque) >= 2
+        and opaque[0] == opaque[-1] == '"'
+        and all(char == "!" or "#" <= char <= "~" or "\x80" <= char <= "\xff" for char in opaque[1:-1])
+    ):
+        return value
+    return None
+
+
 def _observer_metadata(headers: httpx.Headers) -> dict[str, str]:
     # Typed protocol data needed by existing archival and pagination clients.
     metadata = {}
+    etag = _response_etag(headers)
+    if etag is not None:
+        metadata["etag"] = etag
     for name in (
         "record-total",
         "record-offset",
@@ -1354,7 +1398,12 @@ def _response_too_large(max_bytes: int, *, host: str) -> InvariantError:
 
 
 def _http_error(
-    status_code: int, body: bytes, headers: httpx.Headers, *, host: str
+    status_code: int,
+    body: bytes,
+    headers: httpx.Headers,
+    *,
+    host: str,
+    connect_error_reasons: frozenset[tuple[str, str]] = frozenset(),
 ) -> tuple[InvariantError, float | None]:
     try:
         payload = json.loads(body)
@@ -1377,8 +1426,37 @@ def _http_error(
         # Preserve the quota signal without forwarding provider-supplied
         # violation subjects or descriptions, which can contain credentials.
         details.append(error_details_pb2.QuotaFailure())
+    if connect_code is not None and connect_error_reasons:
+        details.extend(_connect_error_info(payload, connect_error_reasons))
     details.append(_error_info(f"HTTP_STATUS_{status_code}", host, **metadata))
     return InvariantError(code, f"HTTP {status_code}", details), delay
+
+
+def _connect_error_info(payload: dict, allowed: frozenset[tuple[str, str]]) -> list[error_details_pb2.ErrorInfo]:
+    details = payload.get("details")
+    if not isinstance(details, list):
+        return []
+    matched = set()
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        if detail.get("type") == "google.rpc.ErrorInfo":
+            encoded = detail.get("value")
+            if not isinstance(encoded, str) or len(encoded) > 4096:
+                continue
+            try:
+                wire = base64.b64decode(encoded + "=" * (-len(encoded) % 4), validate=True)
+                info = error_details_pb2.ErrorInfo.FromString(wire)
+            except ValueError, binascii.Error, DecodeError:
+                continue
+            domain, reason = info.domain, info.reason
+        elif detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo":
+            domain, reason = detail.get("domain"), detail.get("reason")
+        else:
+            continue
+        if isinstance(domain, str) and isinstance(reason, str) and (domain, reason) in allowed:
+            matched.add((domain, reason))
+    return [error_details_pb2.ErrorInfo(domain=domain, reason=reason) for domain, reason in sorted(matched)]
 
 
 def _connect_has_quota(payload: dict) -> bool:
@@ -1446,7 +1524,7 @@ def _error_info(reason: str, host: str, **metadata: str) -> error_details_pb2.Er
 
 
 def _grpc_code_from_http_status(status_code: int) -> grpc.StatusCode:
-    if 500 <= status_code <= 599:
+    if status_code in {502, 503, 504, 520, 521, 522, 523, 524}:
         return grpc.StatusCode.UNAVAILABLE
     mapping = {
         400: grpc.StatusCode.INTERNAL,
@@ -1553,6 +1631,11 @@ def _parse_retry_after_seconds(value: str | None) -> float | None:
 
 def _is_safe_retry_method(method: str) -> bool:
     return method.upper() in {"GET", "HEAD"}
+
+
+def validate_http_base_url(base_url: str) -> None:
+    """Validate an outbound HTTP origin without constructing a connection."""
+    _validated_base_url(base_url)
 
 
 def _validated_base_url(base_url: str) -> tuple[str, str]:

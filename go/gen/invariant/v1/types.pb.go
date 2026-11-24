@@ -662,6 +662,53 @@ func (x *EnumValueInfo) GetComment() string {
 	return ""
 }
 
+// Entity tag on a successful HTTP file response. Packed as an extension in
+// google.api.HttpBody by the Python outbound HTTP transport.
+type HttpEntityTag struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The origin's entity tag, including its quotes and optional weak prefix.
+	Etag          string `protobuf:"bytes,1,opt,name=etag,proto3" json:"etag,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HttpEntityTag) Reset() {
+	*x = HttpEntityTag{}
+	mi := &file_invariant_v1_types_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HttpEntityTag) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HttpEntityTag) ProtoMessage() {}
+
+func (x *HttpEntityTag) ProtoReflect() protoreflect.Message {
+	mi := &file_invariant_v1_types_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HttpEntityTag.ProtoReflect.Descriptor instead.
+func (*HttpEntityTag) Descriptor() ([]byte, []int) {
+	return file_invariant_v1_types_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *HttpEntityTag) GetEtag() string {
+	if x != nil {
+		return x.Etag
+	}
+	return ""
+}
+
 var File_invariant_v1_types_proto protoreflect.FileDescriptor
 
 const file_invariant_v1_types_proto_rawDesc = "" +
@@ -732,7 +779,9 @@ const file_invariant_v1_types_proto_rawDesc = "" +
 	"\rEnumValueInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06number\x18\x02 \x01(\x05R\x06number\x12\x18\n" +
-	"\acomment\x18\x03 \x01(\tR\acommentBOZMgithub.com/jim-technologies/invariantprotocol/go/gen/invariant/v1;invariantpbb\x06proto3"
+	"\acomment\x18\x03 \x01(\tR\acomment\"#\n" +
+	"\rHttpEntityTag\x12\x12\n" +
+	"\x04etag\x18\x01 \x01(\tR\x04etagBOZMgithub.com/jim-technologies/invariantprotocol/go/gen/invariant/v1;invariantpbb\x06proto3"
 
 var (
 	file_invariant_v1_types_proto_rawDescOnce sync.Once
@@ -746,7 +795,7 @@ func file_invariant_v1_types_proto_rawDescGZIP() []byte {
 	return file_invariant_v1_types_proto_rawDescData
 }
 
-var file_invariant_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_invariant_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_invariant_v1_types_proto_goTypes = []any{
 	(*ParsedDescriptor)(nil), // 0: invariant.v1.ParsedDescriptor
 	(*ServiceInfo)(nil),      // 1: invariant.v1.ServiceInfo
@@ -756,16 +805,17 @@ var file_invariant_v1_types_proto_goTypes = []any{
 	(*OneofInfo)(nil),        // 5: invariant.v1.OneofInfo
 	(*EnumInfo)(nil),         // 6: invariant.v1.EnumInfo
 	(*EnumValueInfo)(nil),    // 7: invariant.v1.EnumValueInfo
-	nil,                      // 8: invariant.v1.ParsedDescriptor.ServicesEntry
-	nil,                      // 9: invariant.v1.ParsedDescriptor.MessagesEntry
-	nil,                      // 10: invariant.v1.ParsedDescriptor.EnumsEntry
-	nil,                      // 11: invariant.v1.ServiceInfo.MethodsEntry
+	(*HttpEntityTag)(nil),    // 8: invariant.v1.HttpEntityTag
+	nil,                      // 9: invariant.v1.ParsedDescriptor.ServicesEntry
+	nil,                      // 10: invariant.v1.ParsedDescriptor.MessagesEntry
+	nil,                      // 11: invariant.v1.ParsedDescriptor.EnumsEntry
+	nil,                      // 12: invariant.v1.ServiceInfo.MethodsEntry
 }
 var file_invariant_v1_types_proto_depIdxs = []int32{
-	8,  // 0: invariant.v1.ParsedDescriptor.services:type_name -> invariant.v1.ParsedDescriptor.ServicesEntry
-	9,  // 1: invariant.v1.ParsedDescriptor.messages:type_name -> invariant.v1.ParsedDescriptor.MessagesEntry
-	10, // 2: invariant.v1.ParsedDescriptor.enums:type_name -> invariant.v1.ParsedDescriptor.EnumsEntry
-	11, // 3: invariant.v1.ServiceInfo.methods:type_name -> invariant.v1.ServiceInfo.MethodsEntry
+	9,  // 0: invariant.v1.ParsedDescriptor.services:type_name -> invariant.v1.ParsedDescriptor.ServicesEntry
+	10, // 1: invariant.v1.ParsedDescriptor.messages:type_name -> invariant.v1.ParsedDescriptor.MessagesEntry
+	11, // 2: invariant.v1.ParsedDescriptor.enums:type_name -> invariant.v1.ParsedDescriptor.EnumsEntry
+	12, // 3: invariant.v1.ServiceInfo.methods:type_name -> invariant.v1.ServiceInfo.MethodsEntry
 	4,  // 4: invariant.v1.MessageInfo.fields:type_name -> invariant.v1.FieldInfo
 	5,  // 5: invariant.v1.MessageInfo.oneofs:type_name -> invariant.v1.OneofInfo
 	7,  // 6: invariant.v1.EnumInfo.values:type_name -> invariant.v1.EnumValueInfo
@@ -792,7 +842,7 @@ func file_invariant_v1_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_invariant_v1_types_proto_rawDesc), len(file_invariant_v1_types_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

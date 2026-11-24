@@ -144,3 +144,10 @@ message EnumValueInfo {
   // Comment extracted from the enum value declaration.
   string comment = 3;
 }
+
+// Entity tag on a successful HTTP file response. Packed as an extension in
+// google.api.HttpBody by the Python outbound HTTP transport.
+message HttpEntityTag {
+  // The origin's entity tag, including its quotes and optional weak prefix.
+  string etag = 1;
+}
