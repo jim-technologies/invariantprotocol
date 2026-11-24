@@ -684,7 +684,8 @@ async def test_connect_http_maps_remote_error():
         httpd.shutdown()
 
 
-async def test_connect_http_uses_connect_http_status_fallbacks_for_malformed_errors():
+@pytest.mark.parametrize("gateway_only", [False, True])
+async def test_connect_http_uses_connect_http_status_fallbacks_for_malformed_errors(gateway_only):
     expected = {
         400: grpc.StatusCode.INTERNAL,
         401: grpc.StatusCode.UNAUTHENTICATED,
@@ -697,8 +698,7 @@ async def test_connect_http_uses_connect_http_status_fallbacks_for_malformed_err
         418: grpc.StatusCode.UNKNOWN,
         409: grpc.StatusCode.UNKNOWN,
         499: grpc.StatusCode.UNKNOWN,
-        500: grpc.StatusCode.UNKNOWN,
-        501: grpc.StatusCode.UNKNOWN,
+        **dict.fromkeys((500, 501, 507), grpc.StatusCode.UNKNOWN if gateway_only else grpc.StatusCode.UNAVAILABLE),
         **dict.fromkeys(range(520, 525), grpc.StatusCode.UNAVAILABLE),
     }
 
@@ -706,7 +706,7 @@ async def test_connect_http_uses_connect_http_status_fallbacks_for_malformed_err
         def do_GET(self):
             parsed = urllib.parse.urlsplit(self.path)
             status = int(parsed.path.removeprefix("/v1/greet/"))
-            body = b"not a Connect error"
+            body = b""
             self.send_response(status)
             self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(len(body)))
@@ -720,7 +720,8 @@ async def test_connect_http_uses_connect_http_status_fallbacks_for_malformed_err
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
-        srv = _connect_http_server(f"http://localhost:{port}")
+        srv = Server.from_descriptor(DESCRIPTOR_PATH)
+        srv.connect_http(f"http://localhost:{port}", options=ChannelOptions(gateway_only_http_fallback=gateway_only))
         try:
             for status, code in expected.items():
                 with pytest.raises(InvariantError) as exc:
@@ -1870,10 +1871,11 @@ async def test_connect_http_only_forwards_allowlisted_retry_details():
         httpd.shutdown()
 
 
-async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_observer():
+@pytest.mark.parametrize("etag", [b'W/"world,42"', bytes.fromhex("22 e2 82 ac 22"), bytes.fromhex("22 ff 22")])
+async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_observer(etag):
     from invariant.gen.invariant.v1.types_pb2 import HttpEntityTag
 
-    etag = 'W/"world,42"'
+    header = etag.decode("latin-1")
     conditional = {}
     payload = b"symbol,price\nINV,42\n"
     huge = b"x" * 32
@@ -1888,13 +1890,13 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
                 self.end_headers()
                 return
             if self.path == "/download/world.csv":
-                if self.headers.get("If-None-Match") == etag:
+                if self.headers.get("If-None-Match") == header:
                     self.send_response(304)
-                    self.send_header("ETag", etag)
+                    self.send_header("ETag", header)
                     self.end_headers()
                     return
                 self.send_response(200)
-                self.send_header("ETag", etag)
+                self.send_header("ETag", header)
                 self.send_header("Content-Type", "text/csv")
                 self.send_header("X-Archive-Id", "raw-1")
                 self.send_header("Content-Length", str(len(payload)))
@@ -1933,8 +1935,8 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
             assert resp.data == payload
             assert resp.content_type == "text/csv"
             assert seen[-1].success is True
-            assert seen[-1].headers == {"content-type": "text/csv", "etag": etag}
-            assert seen[-1].metadata["etag"] == etag
+            assert seen[-1].headers == {"content-type": "text/csv", "etag": header}
+            assert seen[-1].metadata["etag"] == header
             validator = HttpEntityTag()
             assert resp.extensions[0].Unpack(validator)
             assert validator.etag == etag
@@ -1945,7 +1947,7 @@ async def test_connect_http_httpbody_descriptor_redirect_limit_headers_and_obser
             unchanged = await srv.invoke("greet.v1.GreetService.RawBody", greet_pb2.GreetRequest(name="World"))
             assert not unchanged.data
             assert seen[-1].status_code == 304
-            assert seen[-1].headers["etag"] == etag
+            assert seen[-1].headers["etag"] == header
 
             with pytest.raises(InvariantError) as exc:
                 await srv.invoke("greet.v1.GreetService.RawBody", greet_pb2.GreetRequest(name="Huge"))

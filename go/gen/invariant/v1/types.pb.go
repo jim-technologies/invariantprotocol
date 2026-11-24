@@ -667,7 +667,7 @@ func (x *EnumValueInfo) GetComment() string {
 type HttpEntityTag struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The origin's entity tag, including its quotes and optional weak prefix.
-	Etag          string `protobuf:"bytes,1,opt,name=etag,proto3" json:"etag,omitempty"`
+	Etag          []byte `protobuf:"bytes,1,opt,name=etag,proto3" json:"etag,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -702,11 +702,11 @@ func (*HttpEntityTag) Descriptor() ([]byte, []int) {
 	return file_invariant_v1_types_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *HttpEntityTag) GetEtag() string {
+func (x *HttpEntityTag) GetEtag() []byte {
 	if x != nil {
 		return x.Etag
 	}
-	return ""
+	return nil
 }
 
 var File_invariant_v1_types_proto protoreflect.FileDescriptor
@@ -781,7 +781,7 @@ const file_invariant_v1_types_proto_rawDesc = "" +
 	"\x06number\x18\x02 \x01(\x05R\x06number\x12\x18\n" +
 	"\acomment\x18\x03 \x01(\tR\acomment\"#\n" +
 	"\rHttpEntityTag\x12\x12\n" +
-	"\x04etag\x18\x01 \x01(\tR\x04etagBOZMgithub.com/jim-technologies/invariantprotocol/go/gen/invariant/v1;invariantpbb\x06proto3"
+	"\x04etag\x18\x01 \x01(\fR\x04etagBOZMgithub.com/jim-technologies/invariantprotocol/go/gen/invariant/v1;invariantpbb\x06proto3"
 
 var (
 	file_invariant_v1_types_proto_rawDescOnce sync.Once

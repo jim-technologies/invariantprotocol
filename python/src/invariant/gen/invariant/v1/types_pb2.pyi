@@ -145,5 +145,5 @@ class EnumValueInfo(_message.Message):
 class HttpEntityTag(_message.Message):
     __slots__ = ("etag",)
     ETAG_FIELD_NUMBER: _ClassVar[int]
-    etag: str
-    def __init__(self, etag: _Optional[str] = ...) -> None: ...
+    etag: bytes
+    def __init__(self, etag: _Optional[bytes] = ...) -> None: ...

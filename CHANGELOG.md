@@ -8,6 +8,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 the project is pre-1.0 so 0.x minor releases may include deliberate API changes,
 but never silent wire-behavior regressions.
 
+## v0.17.1 — 2026-11-24
+
+- Expose scoped outbound HTTP response metadata and Connect error reasons.
+- Preserve conditional HTTP entity-tag octets and the default bare-5xx fallback.
+
 ## v0.17.0 — 2026-11-19
 
 ### Added

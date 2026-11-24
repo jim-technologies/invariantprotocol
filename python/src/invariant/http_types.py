@@ -18,7 +18,7 @@ class OutboundHTTPRequest:
     body: bytes = field(repr=False)
 
 
-HTTPHeaderProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
+HTTPHeaderProvider = Callable[[OutboundHTTPRequest], Mapping[str, str | bytes] | None]
 HTTPQueryProvider = Callable[[OutboundHTTPRequest], dict[str, str] | None]
 
 
@@ -104,6 +104,8 @@ class ChannelOptions:
     # A cross-origin GET/HEAD hop is rebuilt without source headers,
     # userinfo, cookies or echoed source-auth query parameters.
     allow_cross_origin_redirects: bool = False
+    gateway_only_http_fallback: bool = False
+    """Only gateway overload HTTP statuses map to UNAVAILABLE for bare 5xx."""
     connect_error_reasons: frozenset[tuple[str, str]] = frozenset()
     """Exact (domain, reason) pairs to preserve from Connect ErrorInfo.
 

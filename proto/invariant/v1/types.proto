@@ -149,5 +149,5 @@ message EnumValueInfo {
 // google.api.HttpBody by the Python outbound HTTP transport.
 message HttpEntityTag {
   // The origin's entity tag, including its quotes and optional weak prefix.
-  string etag = 1;
+  bytes etag = 1;
 }

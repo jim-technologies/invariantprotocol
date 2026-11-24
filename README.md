@@ -567,8 +567,10 @@ URLs as `response.url` and `response.request.url`. On successful HTTP
 responses, an RFC entity tag is available as `response.metadata["etag"]`
 and `response.headers["etag"]`. Successful `google.api.HttpBody` responses
 also pack the generated `invariant.v1.HttpEntityTag` message into
-`HttpBody.extensions`. The entity tag preserves its quotes and weak prefix
-for reuse in `If-None-Match`. A 304 has an empty body and is visible through
+`HttpBody.extensions`. The generated field contains the exact header octets, including quotes and any
+weak prefix. The observer's text representation maps octets to Latin-1 and
+can be encoded as Latin-1 to recover the same bytes. Return the bytes as the
+`If-None-Match` value from the header provider to reuse them on the wire. A 304 has an empty body and is visible through
 the response observer.
 
 For providers that signal a terminal application refusal through a small
@@ -580,7 +582,9 @@ observer never contain those bytes. Scope the predicate to the specific
 method, status and payload shape. Connect clients may opt into exact
 `(domain, reason)` pairs through `ChannelOptions(connect_error_reasons=...)`
 for structured recovery decisions. The transport omits remote ErrorInfo
-metadata and messages.
+metadata and messages. The default fallback for bare HTTP 5xx is UNAVAILABLE.
+Set `ChannelOptions(gateway_only_http_fallback=True)` to limit that mapping
+to HTTP 502–504 and 520–524.
 
 ## Protobuf-derived data schemas
 
@@ -774,14 +778,14 @@ evolution rules, the qualified LanceDB lifecycle, and target limitations.
 Invariant-owned packages are distributed only from Git. They are not published
 to PyPI, the npm registry, crates.io, or another language registry. Every
 language package and the Rust codegen crate share `VERSION` and the single root
-tag `v0.17.0`; new releases do not create language-prefixed tags. The project
+tag `v0.17.1`; new releases do not create language-prefixed tags. The project
 follows Semantic Versioning; while it remains below 1.0, minor releases may
 refine the public API without weakening documented wire guarantees.
 
 Go:
 
 ```bash
-go get github.com/jim-technologies/invariantprotocol/go@v0.17.0
+go get github.com/jim-technologies/invariantprotocol/go@v0.17.1
 ```
 
 The repository is one Go module. `/go` is the package directory, so consumers
@@ -791,26 +795,26 @@ records the root module revision.
 Python:
 
 ```bash
-pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.17.0#subdirectory=python"
+pip install "invariant-protocol @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.17.1#subdirectory=python"
 
 # Include the optional PyArrow bridge:
-pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.17.0#subdirectory=python"
+pip install "invariant-protocol[data] @ git+https://github.com/jim-technologies/invariantprotocol.git@v0.17.1#subdirectory=python"
 ```
 
 Rust:
 
 ```toml
 [dependencies]
-invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.17.0" }
+invariant-protocol = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.17.1" }
 
 [build-dependencies]
-invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.17.0" }
+invariant-protocol-codegen = { git = "https://github.com/jim-technologies/invariantprotocol", tag = "v0.17.1" }
 ```
 
 TypeScript:
 
 ```bash
-npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.17.0"
+npm install --allow-git=root "github:jim-technologies/invariantprotocol#v0.17.1"
 ```
 
 For reproducible production builds, replace the tag with a full commit

@@ -33,6 +33,7 @@ from invariant.gen.invariant.v1.types_pb2 import HttpEntityTag
 from invariant.http_types import (
     ChannelOptions,
     HTTPAuth,
+    HTTPHeaderProvider,
     HTTPResponseObserver,
     OutboundHTTPRequest,
     OutboundHTTPResponse,
@@ -149,7 +150,7 @@ class HTTPConnection:
         self,
         *,
         base_url: str,
-        auth: HTTPAuth | Callable[[OutboundHTTPRequest], dict[str, str] | None] | None = None,
+        auth: HTTPAuth | HTTPHeaderProvider | None = None,
         service_config: dict[str, Any] | None = None,
         options: ChannelOptions | None = None,
         observer: HTTPResponseObserver | None = None,
@@ -461,6 +462,7 @@ class HTTPDynamicHandler:
                     response.headers,
                     host=effective_host,
                     connect_error_reasons=self._connection.options.connect_error_reasons,
+                    gateway_only_http_fallback=self._connection.options.gateway_only_http_fallback,
                 )
                 refused = self._is_response_refusal(response, read_result)
                 if refused:
@@ -549,14 +551,18 @@ class HTTPDynamicHandler:
         self,
         target: str,
         body_bytes: bytes | None,
-        headers: dict[str, str],
+        headers: dict[str, str | bytes],
         *,
         base_target: str,
     ) -> tuple[httpx.Response, _ReadResult, float]:
         """Keep redirect reads and each physical admission inside the limits."""
         start = time.perf_counter()
         client = self._connection.client
-        request = client.build_request(self._binding.method, target, content=body_bytes, headers=headers)
+        wire_headers = [
+            (name.encode("ascii"), value if isinstance(value, bytes) else value.encode("ascii"))
+            for name, value in headers.items()
+        ]
+        request = client.build_request(self._binding.method, target, content=body_bytes, headers=wire_headers)
         redirects = 0
         crossed_origin = False
         source_query_auth: set[tuple[str, str]] = set()
@@ -753,15 +759,15 @@ class HTTPDynamicHandler:
             return False
         return code in policy.retryable_status_codes
 
-    def _build_headers(self, target: str, body_bytes: bytes | None) -> dict[str, str]:
-        headers: dict[str, str] = {"Accept": "*/*" if self._httpbody_response else "application/json"}
+    def _build_headers(self, target: str, body_bytes: bytes | None) -> dict[str, str | bytes]:
+        headers: dict[str, str | bytes] = {"Accept": "*/*" if self._httpbody_response else "application/json"}
         if body_bytes is not None and not self._httpbody_request:
             headers["Content-Type"] = "application/json"
         headers.update(self._connection.headers)
         self._add_dynamic_headers(headers, target, body_bytes)
         return headers
 
-    def _add_dynamic_headers(self, headers: dict[str, str], target: str, body_bytes: bytes | None) -> None:
+    def _add_dynamic_headers(self, headers: dict[str, str | bytes], target: str, body_bytes: bytes | None) -> None:
         if self._connection.auth.header_provider is None:
             return
 
@@ -1261,16 +1267,16 @@ def _redirect_query(query: bytes, source_query_auth: set[tuple[str, str]]) -> by
     return b"&".join(fields) or None
 
 
-def _response_etag(headers: httpx.Headers) -> str | None:
-    values = headers.get_list("etag", split_commas=False)
+def _response_etag(headers: httpx.Headers) -> bytes | None:
+    values = [value for name, value in headers.raw if name.lower() == b"etag"]
     if len(values) != 1:
         return None
     value = values[0]
-    opaque = value.removeprefix("W/")
+    opaque = value.removeprefix(b"W/")
     if (
         len(opaque) >= 2
-        and opaque[0] == opaque[-1] == '"'
-        and all(char == "!" or "#" <= char <= "~" or "\x80" <= char <= "\xff" for char in opaque[1:-1])
+        and opaque[0] == opaque[-1] == 0x22
+        and all(octet == 0x21 or 0x23 <= octet <= 0x7E or octet >= 0x80 for octet in opaque[1:-1])
     ):
         return value
     return None
@@ -1281,7 +1287,7 @@ def _observer_metadata(headers: httpx.Headers) -> dict[str, str]:
     metadata = {}
     etag = _response_etag(headers)
     if etag is not None:
-        metadata["etag"] = etag
+        metadata["etag"] = etag.decode("latin-1")
     for name in (
         "record-total",
         "record-offset",
@@ -1404,6 +1410,7 @@ def _http_error(
     *,
     host: str,
     connect_error_reasons: frozenset[tuple[str, str]] = frozenset(),
+    gateway_only_http_fallback: bool = False,
 ) -> tuple[InvariantError, float | None]:
     try:
         payload = json.loads(body)
@@ -1421,7 +1428,7 @@ def _http_error(
         delay = retry_after
     if delay is not None:
         details.append(_retry_info(delay))
-    code = connect_code or _grpc_code_from_http_status(status_code)
+    code = connect_code or _grpc_code_from_http_status(status_code, gateway_only=gateway_only_http_fallback)
     if code == grpc.StatusCode.RESOURCE_EXHAUSTED or (connect_code is not None and _connect_has_quota(payload)):
         # Preserve the quota signal without forwarding provider-supplied
         # violation subjects or descriptions, which can contain credentials.
@@ -1523,8 +1530,8 @@ def _error_info(reason: str, host: str, **metadata: str) -> error_details_pb2.Er
     )
 
 
-def _grpc_code_from_http_status(status_code: int) -> grpc.StatusCode:
-    if status_code in {502, 503, 504, 520, 521, 522, 523, 524}:
+def _grpc_code_from_http_status(status_code: int, *, gateway_only: bool = False) -> grpc.StatusCode:
+    if 500 <= status_code <= 599 and (not gateway_only or status_code in {502, 503, 504, 520, 521, 522, 523, 524}):
         return grpc.StatusCode.UNAVAILABLE
     mapping = {
         400: grpc.StatusCode.INTERNAL,
